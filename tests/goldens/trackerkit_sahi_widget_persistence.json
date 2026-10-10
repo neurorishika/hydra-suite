@@ -1,0 +1,3980 @@
+{
+ "sahi_off-auto_model-nosidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_model-nosidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_model-nosidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_model-sidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_model-sidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_model-sidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_object-nosidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_object-nosidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_object-nosidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_object-sidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_object-sidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-auto_object-sidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-custom-nosidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-custom-nosidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-custom-nosidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_off-custom-sidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-custom-sidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_off-custom-sidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": false,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": false,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": false,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_model-nosidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_model-nosidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_model-nosidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_model-sidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_model-sidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_model-sidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_model",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_model",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_model",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_object-nosidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_object-nosidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_object-nosidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_object-sidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "balanced",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "balanced",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "balanced",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "balanced",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_object-sidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "balanced",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "balanced",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "balanced",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "balanced",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-auto_object-sidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "balanced",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "balanced",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "balanced",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "auto_object",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "auto_object",
+    "slice_profile_id": "balanced",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "auto_object",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-custom-nosidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.125,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.125,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.13,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-custom-nosidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.15,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.15,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.15,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-custom-nosidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": ""
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "slice_memory_budget_mib": 256,
+    "slice_object_tile_fraction": 0.4,
+    "slice_profile_id": "",
+    "slice_tile_batch_size": 16
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "ios",
+    "SLICE_MERGE_POLICY": "greedy_nmm",
+    "SLICE_MERGE_THRESHOLD": 0.5,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.2,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 0.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "",
+    "slice_profile_settings": {
+     "base_profile_name": "Training geometry",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": null,
+     "merge_metric": null,
+     "merge_policy": null,
+     "merge_threshold": null,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.2,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 0.0
+    }
+   }
+  }
+ },
+ "sahi_on-custom-sidecar-f0.125": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-custom-sidecar-f0.15": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ },
+ "sahi_on-custom-sidecar-f0.4": {
+  "fresh": {
+   "advanced": {
+    "slice_height": 0,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  },
+  "loaded": {
+   "advanced": {
+    "_slice_profile_saved_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    },
+    "slice_height": 0,
+    "slice_memory_budget_mib": 256,
+    "slice_merge_backend": "cv2",
+    "slice_merge_metric": "iou",
+    "slice_merge_policy": "nmm",
+    "slice_merge_threshold": 0.6,
+    "slice_object_tile_fraction": 0.4,
+    "slice_overlap": 0.25,
+    "slice_profile_id": "__custom__",
+    "slice_tile_batch_size": 16,
+    "slice_trained_body_px": 75.0,
+    "slice_width": 0
+   },
+   "params": {
+    "SLICE_ENABLED": true,
+    "SLICE_GEOMETRY_MODE": "custom",
+    "SLICE_HEIGHT": 0,
+    "SLICE_MEMORY_BUDGET_MIB": 256,
+    "SLICE_MERGE_BACKEND": "cv2",
+    "SLICE_MERGE_METRIC": "iou",
+    "SLICE_MERGE_POLICY": "nmm",
+    "SLICE_MERGE_THRESHOLD": 0.6,
+    "SLICE_OBJECT_TILE_FRACTION": 0.4,
+    "SLICE_OVERLAP": 0.25,
+    "SLICE_PERFORM_STANDARD_PRED": false,
+    "SLICE_TILE_BATCH_SIZE": 16,
+    "SLICE_TRAINED_BODY_PX": 75.0,
+    "SLICE_WIDTH": 0,
+    "YOLO_CONFIDENCE_THRESHOLD": 0.8
+   },
+   "saved": {
+    "slice_enabled": true,
+    "slice_geometry_mode": "custom",
+    "slice_profile_id": "__custom__",
+    "slice_profile_settings": {
+     "base_profile_name": "Balanced",
+     "confidence_threshold": 0.8,
+     "enabled": true,
+     "geometry_mode": "custom",
+     "memory_budget_mib": 256,
+     "merge_backend": "cv2",
+     "merge_metric": "iou",
+     "merge_policy": "nmm",
+     "merge_threshold": 0.6,
+     "object_tile_fraction": 0.4,
+     "overlap": 0.25,
+     "slice_height": 0,
+     "slice_width": 0,
+     "tile_batch_size": 16,
+     "trained_body_px": 75.0
+    }
+   }
+  }
+ }
+}

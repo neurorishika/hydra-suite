@@ -29,6 +29,7 @@ from .slice_settings_parts import (
     SAM3_TRAIN_OVERLAP_MAX,
     SEAM_MARGIN_MAX_PX,
     SLICE_SIZE_MAX,
+    SOURCE_DESCRIPTIONS,
     TRAIN_ROLES,
     badge_label,
     double_spin,
@@ -104,8 +105,9 @@ def build_controls(w) -> None:
     w.combo_slice_profile.setToolTip(
         "Training geometry stamped on the model, a calibrated profile, or Custom."
     )
-    w.lbl_slice_profile_status = muted_label()
-    w.lbl_slice_profile_status.setWordWrap(True)
+    # No status label here: the profile's status is host prose (TrackerKit
+    # shows it as its own full-width row); a word-wrapped label inside a grid
+    # cell would overlap its neighbours.
     w.combo_slice_geometry = item_combo(
         GEOMETRY_ITEMS,
         "How tile size is chosen: fit to the animal, the model input, or a "
@@ -371,7 +373,7 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
         (
             "profile",
             "Profile",
-            hbox(w.combo_slice_profile, w.lbl_slice_profile_status),
+            hbox(w.combo_slice_profile),
             None,
         ),
         ("mode", "Tile strategy", w.combo_slice_geometry, None),
@@ -439,7 +441,8 @@ def role_keys(w) -> set[str]:
         keys.add("enabled")
     if role == "infer_yolo":
         keys |= {"profile", "object_fraction"}
-        keys.add("merge")
+        if caps.merge_threshold_row:
+            keys.add("merge")
         if caps.advanced_merge:
             keys |= {"merge_policy", "merge_metric"}
         if caps.full_frame_pass:
@@ -480,13 +483,30 @@ def refresh_overlap_minimum(w) -> None:
         label.setText("")
         button.setVisible(False)
         return
+    source = w._sources.get("overlap", "user")
+    if below and source not in ("user", "override", "default"):
+        # A measured/deliberate overlap (profile, stamp, saved session) is
+        # never nudged (decisions 22/22a): info, no Raise.
+        origin = w._source_notes.get("overlap") or SOURCE_DESCRIPTIONS.get(
+            source, source
+        )
+        label.setText(f"below whole-animal minimum ({shown}) — set by {origin}")
+        label.setStyleSheet("color: #8f969e;")
+        label.setToolTip(
+            "This overlap came from a calibration or the model's stamp and is "
+            "kept as measured. An animal at a tile seam may be cut in every "
+            "tile; edit the overlap to take it over."
+        )
+        button.setVisible(False)
+        return
     if below:
         label.setText(f"Below whole-animal minimum ({shown})")
         label.setStyleSheet("color: #e0943a;")
         label.setToolTip(
-            "With less overlap than the largest object scale, an animal at a "
-            "tile seam can be cut in every tile. Your overlap is kept until "
-            "you raise it."
+            "With less overlap than an animal's share of a tile (the largest "
+            "object scale, or body size / tile size), an animal at a tile "
+            "seam can be cut in every tile. Your overlap is kept until you "
+            "raise it."
         )
         button.setText(f"Raise to {minimum:.{decimals}f}")
     else:

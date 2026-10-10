@@ -44,12 +44,25 @@ from hydra_suite.trackerkit.gui.panels.reference_scale_preview import (
 )
 from hydra_suite.utils.batch_policy import is_realtime_workflow
 from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
+from hydra_suite.widgets.slice_settings import (
+    SliceSettingsWidget,
+    SliceWidgetCapabilities,
+)
 from hydra_suite.widgets.workers import BaseWorker
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+#: Badge word for a SAHI value applied from a model sidecar, by the
+#: ``resolve_slice_profile_values`` rung that supplied it.
+SLICE_SOURCE_BY_RESOLUTION = {
+    "training": "stamped",
+    "requested": "profile",
+    "primary": "profile",
+    "saved_settings": "config",
+}
 
 #: Direct-model checkpoint tasks -> combo indices (combo_yolo_direct_task is the
 #: hidden serialized state holder; the visible label is auto-inferred).
@@ -758,89 +771,81 @@ class DetectionPanel(QWidget):
         f_yolo.addWidget(self.row_direct_model, 3, 0, 1, 2)
 
         # ------------------------------------------------------------------
-        # Sliced inference (SAHI) — right column, shown only in direct mode.
+        # Sliced inference (SAHI) -- the shared SAHI widget, full width below
+        # the thresholds/classes rows, shown only in direct mode. The panel
+        # keeps its own attribute names bound to the widget's controls (the
+        # spins ARE the widget's spins) and its own per-spin wiring: it never
+        # calls set_spec, so the profile state machine below is unchanged.
         # ------------------------------------------------------------------
-        self.chk_slice_enabled = QCheckBox("Enable sliced inference (SAHI)")
-        self.chk_slice_enabled.setToolTip(
-            "Tile each frame and detect per tile to recover small-object recall "
-            "and reduce crowding. Off by default; direct mode only."
-        )
-        self.chk_slice_enabled.toggled.connect(self._on_slice_toggled)
-        self.row_slice_toggle = _labeled_row("Sliced inference", self.chk_slice_enabled)
-        f_yolo.addWidget(self.row_slice_toggle, 8, 0)
-
         self._slice_meta = None
         self._applying_slice_profile = False
-        self.combo_slice_profile = QComboBox()
-        self.combo_slice_profile.setFixedHeight(30)
-        self.combo_slice_profile.setToolTip(
-            "Measured SAHI operating profiles stored with the selected model. "
-            "Editing a setting switches this to Custom without changing the model."
-        )
-        self.combo_slice_profile.currentIndexChanged.connect(
-            self._on_slice_profile_changed
-        )
-        self.row_slice_profile = _labeled_row("SAHI profile", self.combo_slice_profile)
-        f_yolo.addWidget(self.row_slice_profile, 7, 1)
-        self._set_widget_visible(self.row_slice_profile, False)
-
         self._slice_meta_model_path = None
         self._slice_profile_requested_id = None
         self._slice_profile_applied_id = None
         self._slice_profile_applied_name = "Training geometry"
         self._slice_profile_resolution = "training"
-        self.lbl_slice_profile_status = QLabel("")
-        self.lbl_slice_profile_status.setWordWrap(True)
-        self.lbl_slice_profile_status.setStyleSheet("color: #b58900;")
-        f_yolo.addWidget(self.lbl_slice_profile_status, 10, 0, 1, 2)
 
-        self.combo_slice_geometry = QComboBox()
-        self.combo_slice_geometry.addItems(["auto_model", "auto_object", "custom"])
-        self.combo_slice_geometry.setFixedHeight(30)
-        self.combo_slice_geometry.setToolTip(
-            "auto_model: tile = model input size (fastest, no resample). "
-            "auto_object: size tiles from expected object size. "
-            "custom: explicit tile size."
+        self.slice_settings = SliceSettingsWidget(
+            role="infer_yolo",
+            capabilities=SliceWidgetCapabilities(
+                body_override=False,
+                body_display_only=True,
+                advanced_merge=False,
+                merge_threshold_row=False,
+                execution_knobs=True,
+            ),
         )
-        self.combo_slice_geometry.currentIndexChanged.connect(
-            self._on_slice_geometry_changed
-        )
-        self.row_slice_geometry = _labeled_row(
-            "Slice geometry", self.combo_slice_geometry
-        )
-        f_yolo.addWidget(self.row_slice_geometry, 8, 1)
+        w = self.slice_settings
+        self.chk_slice_enabled = w.chk_slice_enabled
+        self.combo_slice_profile = w.combo_slice_profile
+        self.combo_slice_geometry = w.combo_slice_geometry
+        self.spin_slice_overlap = w.spin_slice_overlap
+        self.spin_slice_tile_w = w.spin_slice_tile_w
+        self.spin_slice_tile_h = w.spin_slice_tile_h
+        self.spin_slice_object_fraction = w.spin_slice_object_fraction
+        self.spin_slice_tile_batch = w.spin_slice_tile_batch
+        self.spin_slice_memory_budget = w.spin_slice_memory_budget
 
-        # SAHI parameters. `custom` needs an explicit tile size, `auto_object`
-        # a target object fraction; tile overlap applies to every mode. These
-        # bind straight to the advanced_config keys engine_params.py reads
-        # (SLICE_OVERLAP / SLICE_HEIGHT / SLICE_WIDTH / SLICE_OBJECT_TILE_FRACTION).
+        self.chk_slice_enabled.setText("Enable sliced inference (SAHI)")
+        self.chk_slice_enabled.setToolTip(
+            "Tile each frame and detect per tile to recover small-object recall "
+            "and reduce crowding. Off by default; direct mode only."
+        )
+        self.combo_slice_profile.setToolTip(
+            "Measured SAHI operating profiles stored with the selected model. "
+            "Editing a setting switches this to Custom without changing the model."
+        )
+        # TrackerKit's persisted precision and ranges. These are config
+        # contracts (config.py clamps a restored tile batch to 1..128 and the
+        # memory budget to 1..256; the session snapshot records the spins'
+        # values), so the host keeps them rather than the widget's defaults.
+        self.spin_slice_object_fraction.setDecimals(2)
+        self.spin_slice_object_fraction.setSingleStep(0.01)
+        self.spin_slice_tile_batch.setSpecialValueText("")
+        self.spin_slice_tile_batch.setRange(1, 128)
+        self.spin_slice_tile_batch.setToolTip(
+            "Maximum tiles submitted to one model call. The effective batch "
+            "can be lower when the tile memory budget requires it; larger "
+            "batches are not always faster."
+        )
+        self.spin_slice_memory_budget.setSpecialValueText("")
+        self.spin_slice_memory_budget.setRange(1, 256)
+        self.spin_slice_memory_budget.setToolTip(
+            "Maximum memory reserved for the active tile chunk. Lower this "
+            "if tiled inference exhausts available device memory."
+        )
+
+        # SAHI parameters bind straight to the advanced_config keys
+        # engine_params.py reads (SLICE_OVERLAP / SLICE_HEIGHT / SLICE_WIDTH /
+        # SLICE_OBJECT_TILE_FRACTION / SLICE_TILE_BATCH_SIZE /
+        # SLICE_MEMORY_BUDGET_MIB). Values are set BEFORE the sync wiring
+        # below, so constructing the panel never writes a key.
         advanced = self._main_window.advanced_config
-        self.spin_slice_overlap = QDoubleSpinBox()
-        self.spin_slice_overlap.setRange(0.0, 0.9)
-        self.spin_slice_overlap.setSingleStep(0.05)
         self.spin_slice_overlap.setValue(
             float(advanced.get("slice_overlap", DEFAULT_SLICE_OVERLAP))
         )
-        self.spin_slice_overlap.setToolTip(
-            "Fraction of each tile that overlaps its neighbours (0.0–0.9). "
-            "Higher overlap reduces missed detections on tile seams but repeats "
-            "inference on more area."
-        )
-        self.spin_slice_tile_w = QSpinBox()
-        self.spin_slice_tile_w.setRange(0, 8192)
         self.spin_slice_tile_w.setValue(int(advanced.get("slice_width", 0)))
-        self.spin_slice_tile_w.setToolTip(
-            "Custom tile width in original-frame pixels (0 = model input size)."
-        )
-        self.spin_slice_tile_h = QSpinBox()
-        self.spin_slice_tile_h.setRange(0, 8192)
         self.spin_slice_tile_h.setValue(int(advanced.get("slice_height", 0)))
-        self.spin_slice_tile_h.setToolTip(
-            "Custom tile height in original-frame pixels (0 = model input size)."
-        )
-        self.spin_slice_object_fraction = QDoubleSpinBox()
-        self.spin_slice_object_fraction.setRange(0.01, 0.9)
-        self.spin_slice_object_fraction.setSingleStep(0.01)
         self.spin_slice_object_fraction.setValue(
             float(
                 advanced.get(
@@ -848,83 +853,47 @@ class DetectionPanel(QWidget):
                 )
             )
         )
-        self.spin_slice_object_fraction.setToolTip(
-            "Tile size for auto_object: the reference object spans this "
-            "fraction of the tile."
-        )
         # These are execution controls, independent of tile geometry and of
         # calibrated profiles.  The core admission helper may reduce the
         # requested batch to fit this memory budget.
-        self.spin_slice_tile_batch = QSpinBox()
-        self.spin_slice_tile_batch.setRange(1, 128)
         self.spin_slice_tile_batch.setValue(
             int(advanced.get("slice_tile_batch_size", 16))
         )
-        self.spin_slice_tile_batch.setToolTip(
-            "Maximum tiles submitted to one model call. The effective batch "
-            "can be lower when the tile memory budget requires it; larger "
-            "batches are not always faster."
-        )
-        self.spin_slice_memory_budget = QSpinBox()
-        self.spin_slice_memory_budget.setRange(1, 256)
-        self.spin_slice_memory_budget.setSuffix(" MiB")
         self.spin_slice_memory_budget.setValue(
             int(advanced.get("slice_memory_budget_mib", 256))
         )
-        self.spin_slice_memory_budget.setToolTip(
-            "Maximum memory reserved for the active tile chunk. Lower this "
-            "if tiled inference exhausts available device memory."
+        self._show_slice_body(advanced.get("slice_trained_body_px", 0.0), None)
+
+        self.chk_slice_enabled.toggled.connect(self._on_slice_toggled)
+        self.combo_slice_geometry.currentIndexChanged.connect(
+            self._on_slice_geometry_changed
         )
-        self.lbl_slice_tile_batch = _yolo_label("Tiles / call")
-        self.lbl_slice_memory_budget = _yolo_label("Tile memory")
+        self.combo_slice_profile.currentIndexChanged.connect(
+            self._on_slice_profile_changed
+        )
+        w.set_profile_row_visible(False)
+        f_yolo.addWidget(w, 8, 0, 1, 2)
+
+        # Runtime admission of the tiles/call + memory budget (both in the
+        # widget's Advanced section), shown with them.
         self.lbl_slice_batch_admission = QLabel()
         self.lbl_slice_batch_admission.setToolTip(
             "The requested limit is admitted at runtime after tile geometry, "
             "model input size, and memory use are known."
         )
-        self.lbl_slice_overlap = _yolo_label("Tile overlap")
-        self.lbl_slice_tile_w = _yolo_label("Tile W (px)")
-        self.lbl_slice_tile_h = _yolo_label("Tile H (px)")
-        self.lbl_slice_object_fraction = _yolo_label("Object tile fraction")
-        # Two lines, split by what the controls MEAN rather than by width:
-        # tile geometry (what gets cut) above, execution (how those tiles are
-        # submitted, and the memory budget that clamps them) below. One row
-        # carrying both was too wide to read, and it implied the batch size was
-        # a geometry property, which it is not -- the coordinated autotuner
-        # searches it, while geometry is a fixed input to the fingerprint.
-        self.row_slice_params = QWidget()
-        _slice_params_outer = QVBoxLayout(self.row_slice_params)
-        _slice_params_outer.setContentsMargins(0, 0, 0, 0)
-        _slice_params_outer.setSpacing(4)
+        self.lbl_slice_batch_admission.setStyleSheet("color: #8f969e;")
+        f_yolo.addWidget(self.lbl_slice_batch_admission, 9, 0, 1, 2)
+        w.btn_slice_advanced.toggled.connect(
+            lambda _checked: self._refresh_slice_widget()
+        )
 
-        _slice_geometry_lay = QHBoxLayout()
-        _slice_geometry_lay.setContentsMargins(0, 0, 0, 0)
-        _slice_geometry_lay.setSpacing(6)
-        _slice_geometry_lay.addWidget(self.lbl_slice_overlap)
-        _slice_geometry_lay.addWidget(self.spin_slice_overlap)
-        _slice_geometry_lay.addSpacing(10)
-        _slice_geometry_lay.addWidget(self.lbl_slice_tile_w)
-        _slice_geometry_lay.addWidget(self.spin_slice_tile_w)
-        _slice_geometry_lay.addWidget(self.lbl_slice_tile_h)
-        _slice_geometry_lay.addWidget(self.spin_slice_tile_h)
-        _slice_geometry_lay.addWidget(self.lbl_slice_object_fraction)
-        _slice_geometry_lay.addWidget(self.spin_slice_object_fraction)
-        _slice_geometry_lay.addStretch(1)
-        _slice_params_outer.addLayout(_slice_geometry_lay)
-
-        _slice_execution_lay = QHBoxLayout()
-        _slice_execution_lay.setContentsMargins(0, 0, 0, 0)
-        _slice_execution_lay.setSpacing(6)
-        _slice_execution_lay.addWidget(self.lbl_slice_tile_batch)
-        _slice_execution_lay.addWidget(self.spin_slice_tile_batch)
-        _slice_execution_lay.addWidget(self.lbl_slice_memory_budget)
-        _slice_execution_lay.addWidget(self.spin_slice_memory_budget)
-        _slice_execution_lay.addSpacing(10)
-        _slice_execution_lay.addWidget(self.lbl_slice_batch_admission)
-        _slice_execution_lay.addStretch(1)
-        _slice_params_outer.addLayout(_slice_execution_lay)
-
-        f_yolo.addWidget(self.row_slice_params, 9, 0, 1, 2)
+        # Which profile is active and whether to trust it. Panel-owned and
+        # full width: it explains a sidecar even when the profile row is
+        # hidden (training geometry only).
+        self.lbl_slice_profile_status = QLabel("")
+        self.lbl_slice_profile_status.setWordWrap(True)
+        self.lbl_slice_profile_status.setStyleSheet("color: #b58900;")
+        f_yolo.addWidget(self.lbl_slice_profile_status, 10, 0, 1, 2)
 
         for key, spin in (
             ("slice_overlap", self.spin_slice_overlap),
@@ -2407,19 +2376,14 @@ class DetectionPanel(QWidget):
         self._set_widget_visible(
             getattr(self, "row_direct_model", None), not sequential
         )
+        # SAHI is direct-only: the whole widget hides in sequential mode. In
+        # direct mode its fields are DISABLED (never hidden) while SAHI is off
+        # or the geometry does not use them -- the widget owns that.
+        self._set_widget_visible(getattr(self, "slice_settings", None), not sequential)
         self._set_widget_visible(
-            getattr(self, "row_slice_toggle", None), not sequential
+            getattr(self, "lbl_slice_profile_status", None), not sequential
         )
-        self._set_widget_visible(
-            getattr(self, "row_slice_geometry", None),
-            not sequential and self.chk_slice_enabled.isChecked(),
-        )
-        self._set_widget_visible(
-            getattr(self, "row_slice_params", None),
-            not sequential and self.chk_slice_enabled.isChecked(),
-        )
-        if not sequential and self.chk_slice_enabled.isChecked():
-            self._refresh_slice_param_visibility()
+        self._refresh_slice_widget()
 
         # Sequential-mode controls (right column of the YOLO grid).
         self._set_widget_visible(getattr(self, "row_seq_detect", None), sequential)
@@ -2451,51 +2415,91 @@ class DetectionPanel(QWidget):
             self._main_window._dataset_panel.refresh_export_levels()
 
     def _on_slice_toggled(self, checked: bool) -> None:
-        """Show the slice-geometry picker only while sliced inference is on."""
+        """SAHI on/off is a user edit; the widget enables its fields itself."""
         self._mark_slice_profile_custom()
-        if not hasattr(self, "row_slice_geometry"):
-            return
-        visible = self.combo_yolo_obb_mode.currentIndex() == 0 and bool(checked)
-        self._set_widget_visible(self.row_slice_geometry, visible)
-        self._set_widget_visible(self.row_slice_params, visible)
-        if visible:
-            self._refresh_slice_param_visibility()
+        self._refresh_slice_widget()
 
     def _on_slice_geometry_changed(self, _index: object) -> None:
-        """Reveal only the SAHI parameters that apply to the chosen geometry mode.
+        """A geometry change is a user edit.
 
-        custom needs an explicit tile size (W/H); auto_object needs a target
-        object fraction; auto_model derives the tile from the checkpoint and
-        needs nothing. Tile overlap applies to every mode.
+        The widget enables only the fields the mode uses (custom: tile W/H;
+        auto_object: the object scale; overlap always) -- disabled, not hidden.
         """
         self._mark_slice_profile_custom()
-        self._refresh_slice_param_visibility()
+        self._refresh_slice_widget()
 
-    def _refresh_slice_param_visibility(self) -> None:
-        """Show the SAHI parameter widgets the current geometry mode uses.
+    def _refresh_slice_widget(self) -> None:
+        """Re-derive the SAHI widget's labels/enablement (never marks Custom).
 
-        Split out of ``_on_slice_geometry_changed`` so that purely cosmetic
+        Separate from ``_on_slice_geometry_changed`` so that purely cosmetic
         refreshes (a direct/sequential mode switch) do not mark the profile
-        Custom: with the count guard removed that would otherwise claim a
-        user edit that never happened, and "__custom__" resolves merge_* from
-        advanced_config where "__training__" resolves them to defaults -- a
-        real change to what runs.
+        Custom: that would claim a user edit that never happened, and
+        "__custom__" resolves merge_* from advanced_config where
+        "__training__" resolves them to defaults -- a real change to what
+        runs.
         """
-        if not hasattr(self, "combo_slice_geometry"):
+        widget = getattr(self, "slice_settings", None)
+        if widget is None:
             return
-        mode = self.combo_slice_geometry.currentText()
-        is_custom = mode == "custom"
-        is_auto_object = mode == "auto_object"
-        self._set_widget_visible(getattr(self, "lbl_slice_tile_w", None), is_custom)
-        self._set_widget_visible(getattr(self, "spin_slice_tile_w", None), is_custom)
-        self._set_widget_visible(getattr(self, "lbl_slice_tile_h", None), is_custom)
-        self._set_widget_visible(getattr(self, "spin_slice_tile_h", None), is_custom)
-        self._set_widget_visible(
-            getattr(self, "lbl_slice_object_fraction", None), is_auto_object
-        )
-        self._set_widget_visible(
-            getattr(self, "spin_slice_object_fraction", None), is_auto_object
-        )
+        widget.refresh()
+        label = getattr(self, "lbl_slice_batch_admission", None)
+        if label is not None:
+            label.setVisible(
+                self.combo_yolo_obb_mode.currentIndex() == 0
+                and widget.btn_slice_advanced.isChecked()
+            )
+
+    def _show_slice_model_input(self, meta: dict | None) -> None:
+        """Display-only: the stamped model input the object-scale px hint uses."""
+        from hydra_suite.core.inference.slice_meta import training_geometry
+        from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
+
+        imgsz = DEFAULT_YOLO_IMGSZ
+        if meta is not None:
+            try:
+                imgsz = int(training_geometry(meta).get("imgsz") or imgsz)
+            except (TypeError, ValueError):
+                imgsz = DEFAULT_YOLO_IMGSZ
+        self.slice_settings.set_model_input_size(imgsz)
+
+    def _show_slice_body(self, value: object, resolution: str | None) -> None:
+        """Display SLICE_TRAINED_BODY_PX (read-only) with where it came from.
+
+        TrackerKit never edits this value: it is the model's stamped training
+        body size, or the applied profile's. ``resolution`` is the
+        ``resolve_slice_profile_values`` rung (None = no sidecar applied).
+        """
+        try:
+            body = float(value or 0.0)
+        except (TypeError, ValueError):
+            body = 0.0
+        if resolution is None:
+            source = "default" if body <= 0 else "config"
+        else:
+            source = SLICE_SOURCE_BY_RESOLUTION.get(resolution, "profile")
+        self.slice_settings.set_reference_body(body, source)
+
+    def _slice_overlap_origin(self, source: str) -> str:
+        """Who set the applied overlap, in words for the minimum's note."""
+        if source == "stamped":
+            return "the model's training geometry"
+        if source == "config":
+            return "the saved session"
+        name = str(self._slice_profile_applied_name or "").strip()
+        return f"profile '{name}'" if name else "the selected profile"
+
+    def set_slice_preview_frame_size(self, width, height) -> None:
+        """Show the SAHI tile preview on the loaded video's frame size.
+
+        ``None`` (no video) keeps the preview's labelled example frame.
+        """
+        try:
+            size = (int(width), int(height))
+        except (TypeError, ValueError):
+            size = None
+        if size is not None and (size[0] <= 0 or size[1] <= 0):
+            size = None
+        self.slice_settings.set_preview_frame_size(size)
 
     def _update_slice_batch_admission_label(self) -> None:
         """Describe the runtime-admitted SAHI tile batch without guessing it.
@@ -2874,7 +2878,7 @@ class DetectionPanel(QWidget):
         self._applying_slice_profile = True
         try:
             self.chk_slice_enabled.setChecked(bool(values["enabled"]))
-            idx = self.combo_slice_geometry.findText(values["geometry_mode"])
+            idx = self.combo_slice_geometry.findData(values["geometry_mode"])
             if idx >= 0:
                 self.combo_slice_geometry.setCurrentIndex(idx)
             advanced = self._main_window.advanced_config
@@ -2931,6 +2935,20 @@ class DetectionPanel(QWidget):
                 spin.blockSignals(True)
                 spin.setValue(value)
                 spin.blockSignals(False)
+            self._show_slice_body(
+                values["trained_body_px"], self._slice_profile_resolution
+            )
+            # Badge a custom tile size with whatever supplied it (shown only
+            # in Custom; the user's next W/H or mode edit makes it "user").
+            source = SLICE_SOURCE_BY_RESOLUTION.get(
+                self._slice_profile_resolution, "profile"
+            )
+            self.slice_settings.set_source("tile_size", source)
+            # The overlap is the profile's/stamp's measured value: the
+            # whole-animal minimum is shown as info naming it, never a nudge.
+            self.slice_settings.set_source(
+                "overlap", source, note=self._slice_overlap_origin(source)
+            )
             if use_saved_settings:
                 self._select_slice_profile_combo_item("__custom__", label="Custom")
             else:
@@ -2942,6 +2960,7 @@ class DetectionPanel(QWidget):
                     self.combo_slice_profile.blockSignals(False)
         finally:
             self._applying_slice_profile = False
+        self._refresh_slice_widget()
         self._notify_matched_geometry()
         self._update_slice_profile_status_label()
 
@@ -2976,13 +2995,21 @@ class DetectionPanel(QWidget):
         meta = read_slice_meta(model_path)
         if meta is None:
             self._slice_meta = None
+            self._show_slice_model_input(None)
             self.combo_slice_profile.clear()
-            self._set_widget_visible(self.row_slice_profile, False)
+            self.slice_settings.set_profile_row_visible(False)
+            self._show_slice_body(
+                self._main_window.advanced_config.get("slice_trained_body_px", 0.0),
+                None,
+            )
+            # No sidecar: no profile can be claiming the overlap any more.
+            self.slice_settings.set_source("overlap", "user")
             self._main_window.advanced_config["slice_profile_id"] = ""
             self._main_window.advanced_config.pop("_slice_profile_saved_settings", None)
             self._update_slice_profile_status_label()
             return
         self._slice_meta = meta
+        self._show_slice_model_input(meta)
         profiles = available_slice_profiles(meta)
         self.combo_slice_profile.blockSignals(True)
         self.combo_slice_profile.clear()
@@ -2990,7 +3017,7 @@ class DetectionPanel(QWidget):
         for profile in profiles:
             self.combo_slice_profile.addItem(profile["name"], profile["id"])
         self.combo_slice_profile.blockSignals(False)
-        self._set_widget_visible(self.row_slice_profile, bool(profiles))
+        self.slice_settings.set_profile_row_visible(bool(profiles))
         if model_changed:
             self._main_window.advanced_config["slice_profile_id"] = ""
             self._main_window.advanced_config.pop("_slice_profile_saved_settings", None)

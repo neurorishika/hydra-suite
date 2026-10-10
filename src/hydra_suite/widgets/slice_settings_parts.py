@@ -110,6 +110,7 @@ SOURCE_DESCRIPTIONS = {
     "dataset": "measured from the project's labelled objects",
     "derived": "computed from the settings above",
     "default": "the backend default",
+    "config": "the saved session or advanced configuration, not the selected model",
 }
 
 # (tile_px or None, body_px, fraction or None) -> (label text, tooltip)
@@ -143,6 +144,11 @@ class SliceWidgetCapabilities:
     ``fixed_overlap``: overlap is this constant, shown disabled (SAM2).
     ``full_frame_pass`` / ``execution_knobs``: TrackerKit-only Advanced rows
     (extra full-frame pass; tiles per call and memory budget).
+    ``merge_threshold_row``: ``infer_yolo`` shows the merge threshold row
+    (False where merge settings are profile-owned: TrackerKit).
+    ``body_display_only``: the host owns the body elsewhere and only shows it
+    (TrackerKit: the model's stamp/profile); never editable, not even an
+    unknown 0, and the host's source badge is kept as given.
     """
 
     body_override: bool = True
@@ -151,6 +157,8 @@ class SliceWidgetCapabilities:
     fixed_overlap: float | None = None
     full_frame_pass: bool = False
     execution_knobs: bool = False
+    body_display_only: bool = False
+    merge_threshold_row: bool = True
 
 
 def default_capabilities(role: str) -> SliceWidgetCapabilities:

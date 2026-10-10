@@ -89,6 +89,7 @@ class SliceSettingsWidget(QGroupBox):
         self._body_derived = (0.0, "user")
         self._body_source = "user"
         self._sources: dict[str, str] = {}
+        self._source_notes: dict[str, str] = {}
         self._advanced_expanded = False
         self._profile_row_shown = False
         self._loading = False
@@ -347,8 +348,10 @@ class SliceSettingsWidget(QGroupBox):
     def set_reference_body(self, value: float, source: str) -> None:
         """Show a derived body size and its source; read-only until Override."""
         value = max(0.0, float(value or 0.0))
-        # An unknown body is the user's to enter: badged "user".
-        source = source if value > 0 else "user"
+        # An unknown body is the user's to enter: badged "user" (unless the
+        # host only displays a body it owns elsewhere).
+        if value <= 0 and not self._caps.body_display_only:
+            source = "user"
         self._body_derived = (value, source)
         self._body_source = source
         self._set_quietly(self.chk_slice_body_override, False)
@@ -359,16 +362,28 @@ class SliceSettingsWidget(QGroupBox):
         """Recompute derived labels, badges and enablement (no control writes)."""
         self._refresh()
 
-    def set_source(self, field: str, source: str) -> None:
-        """Badge a field's source (e.g. fractions ``stamped``/``profile``)."""
+    def set_source(self, field: str, source: str, *, note: str = "") -> None:
+        """Badge a field's source (e.g. fractions ``stamped``/``profile``).
+
+        ``"tile_size"`` badges a custom tile size the host applied (shown only
+        in Custom; any user edit of W/H or the mode resets it to ``user``).
+        ``"overlap"`` from a profile/stamp is never nudged: the whole-animal
+        minimum shows as muted info naming ``note`` (else the source's
+        description), with no Raise, until the user edits the overlap.
+        """
         self._sources[field] = source
+        self._source_notes[field] = note
         self._refresh()
 
     def source_badge(self, field: str) -> str:
         if field == "reference_body_px":
             return self._body_source
         if field == "tile_size":
-            return "user" if self._mode() == "custom" else "derived"
+            if self._mode() != "custom":
+                return "derived"
+            # A host-applied custom size (a profile, a stamp) keeps its
+            # source until the user edits the size or the mode.
+            return self._sources.get("tile_size", "user")
         return self._sources.get(field, "user")
 
     def set_advanced_expanded(self, expanded: bool) -> None:
@@ -382,7 +397,7 @@ class SliceSettingsWidget(QGroupBox):
     def set_profile_row_visible(self, visible: bool) -> None:
         """The profile row appears only when the host has a model sidecar."""
         self._profile_row_shown = bool(visible)
-        self._apply_visibility()
+        self._refresh()
 
     # -------------------------------------------------------------- internals
 
@@ -507,6 +522,15 @@ class SliceSettingsWidget(QGroupBox):
                 value, source = self._body_derived
                 self._body_source = source
                 self._set_quietly(self.spin_slice_body, value)
+        elif field in ("slice_width", "slice_height", "geometry_mode"):
+            self._sources.pop("tile_size", None)
+            # A profile/stamp overlap was measured for ITS geometry; once the
+            # user changes the geometry the claim no longer applies.
+            self._sources.pop("overlap", None)
+        elif field in ("object_tile_fractions", "object_tile_fraction"):
+            self._sources.pop("overlap", None)
+        elif field == "overlap":
+            self._sources.pop("overlap", None)
         elif field == "merge_policy":
             self._passthrough.pop("merge_policy_raw", None)
         self._refresh()
@@ -517,9 +541,33 @@ class SliceSettingsWidget(QGroupBox):
         if minimum is not None:
             self.spin_slice_overlap.setValue(minimum[0])  # the user path: emits
 
+    def _minimum_fractions(self) -> list[float]:
+        """The animal's share of a tile, per tile size the mode produces.
+
+        auto_object: the object scale(s) themselves (tile = body / scale).
+        custom: body / min(W, H) (a 0 side is the model input); auto_model:
+        body / model input. Outside auto_object the object scale is unused,
+        so without a known body there is no minimum to state.
+        """
+        mode = self._mode()
+        if mode == "auto_object":
+            return self._display_fractions()
+        body = self._body_value()
+        if body <= 0:
+            return []
+        imgsz = self._model_input_size
+        if mode == "custom":
+            side = min(
+                int(self.spin_slice_tile_w.value()) or imgsz,
+                int(self.spin_slice_tile_h.value()) or imgsz,
+            )
+        else:
+            side = imgsz
+        return [body / float(side)] if side > 0 else []
+
     def _whole_animal_minimum(self) -> tuple[float, bool] | None:
         return whole_animal_minimum(
-            self._display_fractions(),
+            self._minimum_fractions(),
             decimals=self.spin_slice_overlap.decimals(),
             ceiling=self.spin_slice_overlap.maximum(),
         )
@@ -532,6 +580,8 @@ class SliceSettingsWidget(QGroupBox):
         self._apply_visibility()
 
     def _body_editable(self) -> bool:
+        if self._caps.body_display_only:
+            return False
         value, _source = self._body_derived
         if self.chk_slice_body_override.isChecked() or value <= 0:
             return True  # I6: an unknown body always stays typeable
@@ -552,7 +602,10 @@ class SliceSettingsWidget(QGroupBox):
         derived_body = self._body_is_derived()
         body_gate = on and (role != "infer_yolo" or auto_object)
         enabled = {
-            self.combo_slice_profile: on,
+            # Profiles own `enabled`: picking one from a SAHI-off state
+            # applies it and turns SAHI on, so the picker is never gated on
+            # the checkbox (only on the row being shown).
+            self.combo_slice_profile: self._profile_row_shown,
             self.combo_slice_geometry: on,
             self.txt_slice_scales: on and auto_object,
             self.spin_slice_object_fraction: on
@@ -636,7 +689,12 @@ class SliceSettingsWidget(QGroupBox):
                 )
             )
         set_badge(self.lbl_slice_tile_badge, self.source_badge("tile_size"))
-        set_badge(self.lbl_slice_body_badge, self._body_source)
+        if body > 0:
+            set_badge(self.lbl_slice_body_badge, self._body_source)
+        else:
+            # Unknown (0): there is no source to claim.
+            self.lbl_slice_body_badge.setText("")
+            self.lbl_slice_body_badge.setToolTip("No body size is known yet.")
         if role in TRAIN_ROLES:
             self._refresh_reference_note(body)
         if self._caps.fixed_overlap is None:
