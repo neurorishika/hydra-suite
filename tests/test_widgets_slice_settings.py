@@ -670,3 +670,14 @@ def test_preview_caption_elides_at_word_boundaries():
             # Only whole words survive: the stem is a word-prefix of the text.
             assert text.startswith(stem)
             assert stem == "" or text[len(stem)] == " "
+
+
+def test_profile_combo_stays_enabled_while_tiling_is_off():
+    """Review MAJOR-1: profiles own `enabled`; picking one from a SAHI-off
+    state applies it and turns SAHI on, so the picker must stay usable."""
+    w = SliceSettingsWidget(role="infer_yolo")
+    w.combo_slice_profile.addItems(["Training geometry", "Fast scan"])
+    w.set_profile_row_visible(True)
+    w.chk_slice_enabled.setChecked(False)
+    assert w.combo_slice_profile.isEnabled()
+    assert not w.combo_slice_geometry.isEnabled()

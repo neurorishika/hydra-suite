@@ -392,7 +392,7 @@ class SliceSettingsWidget(QGroupBox):
     def set_profile_row_visible(self, visible: bool) -> None:
         """The profile row appears only when the host has a model sidecar."""
         self._profile_row_shown = bool(visible)
-        self._apply_visibility()
+        self._refresh()
 
     # -------------------------------------------------------------- internals
 
@@ -590,7 +590,10 @@ class SliceSettingsWidget(QGroupBox):
         derived_body = self._body_is_derived()
         body_gate = on and (role != "infer_yolo" or auto_object)
         enabled = {
-            self.combo_slice_profile: on,
+            # Profiles own `enabled`: picking one from a SAHI-off state
+            # applies it and turns SAHI on, so the picker is never gated on
+            # the checkbox (only on the row being shown).
+            self.combo_slice_profile: self._profile_row_shown,
             self.combo_slice_geometry: on,
             self.txt_slice_scales: on and auto_object,
             self.spin_slice_object_fraction: on

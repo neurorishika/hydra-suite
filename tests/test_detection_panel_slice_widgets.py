@@ -642,3 +642,33 @@ def test_slice_preview_uses_the_loaded_video_frame_size(monkeypatch):
     panel.set_slice_preview_frame_size(None, None)
     assert preview.frame_size == (1920, 1080)
     window.close()
+
+
+def test_picking_a_profile_while_sahi_is_off_applies_it_and_enables_sahi(
+    monkeypatch, tmp_path
+):
+    """Review MAJOR-1 (main behaviour, probe A26 -> A27)."""
+    import json
+
+    from tests.test_trackerkit_sahi_widget_persistence import TWO_PROFILE_SIDECAR
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    model_path = tmp_path / "model.pt"
+    model_path.write_text("stub model", encoding="utf-8")
+    (tmp_path / "model.pt.slice_meta.json").write_text(
+        json.dumps(TWO_PROFILE_SIDECAR), encoding="utf-8"
+    )
+    panel.apply_slice_meta_for_model(str(model_path))
+    panel.chk_slice_enabled.setChecked(False)
+    assert panel.combo_slice_profile.isEnabled() is True
+    assert panel.combo_slice_profile.isVisibleTo(panel) is True
+    panel.combo_slice_profile.setCurrentIndex(
+        panel.combo_slice_profile.findData("fast")
+    )
+    params = window.get_parameters_dict()
+    assert params["SLICE_ENABLED"] is True
+    assert panel.chk_slice_enabled.isChecked() is True
+    assert window.advanced_config["slice_profile_id"] == "fast"
+    assert not panel.slice_profile_status_text().startswith("Custom")
+    window.close()
