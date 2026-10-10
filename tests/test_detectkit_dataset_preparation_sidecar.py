@@ -16,6 +16,7 @@ from hydra_suite.detectkit.jobs.dataset_preparation_sidecar import (
     _bounded_request_payload,
     _decode_result,
     _write_request,
+    assess_preparation_budget,
     decode_request,
     prepare_role_datasets_contained,
 )
@@ -267,3 +268,18 @@ def test_hard_limit_classification_is_preserved_and_output_removed(
         )
     assert raised.value.failure_kind is ExitKind.HOST_HARD_LIMIT
     assert not list((tmp_path / "workspace").glob(".dataset-preparation-*.staging"))
+
+
+def test_preparation_memory_cap_follows_the_host_not_a_fixed_guess(
+    monkeypatch, tmp_path
+):
+    gib = 1 << 30
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.jobs.dataset_preparation_sidecar.psutil.virtual_memory",
+        lambda: SimpleNamespace(total=128 * gib, available=100 * gib),
+    )
+    source = _source(tmp_path / "src")
+    budget = assess_preparation_budget(tmp_path / "ws", _request(source))
+    usable = 100 * gib - int(128 * gib * 0.15)
+    assert budget.hard_host_bytes == int(usable * 0.9)
+    assert budget.hard_host_bytes > 8 * gib
