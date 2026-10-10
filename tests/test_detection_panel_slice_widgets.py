@@ -700,3 +700,21 @@ def test_profile_overlap_below_minimum_is_not_offered_a_raise(monkeypatch, tmp_p
     panel.spin_slice_overlap.setValue(0.05)
     assert widget.btn_slice_overlap_raise.isVisibleTo(panel) is True
     window.close()
+
+
+def test_profile_status_hidden_in_sequential_mode(monkeypatch, tmp_path):
+    """Review MINOR-4: SAHI is direct-only, so is its status line."""
+    from tests.test_trackerkit_slice_meta_prefill import _write_sidecar_with_profile
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    model_path = tmp_path / "model.pt"
+    model_path.write_text("stub model", encoding="utf-8")
+    _write_sidecar_with_profile(model_path)
+    panel.apply_slice_meta_for_model(str(model_path))
+    assert panel.lbl_slice_profile_status.text()
+    panel.combo_yolo_obb_mode.setCurrentIndex(1)
+    assert panel.lbl_slice_profile_status.isVisibleTo(panel) is False
+    panel.combo_yolo_obb_mode.setCurrentIndex(0)
+    assert panel.lbl_slice_profile_status.isVisibleTo(panel) is True
+    window.close()

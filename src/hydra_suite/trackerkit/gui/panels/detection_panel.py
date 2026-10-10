@@ -2380,6 +2380,9 @@ class DetectionPanel(QWidget):
         # direct mode its fields are DISABLED (never hidden) while SAHI is off
         # or the geometry does not use them -- the widget owns that.
         self._set_widget_visible(getattr(self, "slice_settings", None), not sequential)
+        self._set_widget_visible(
+            getattr(self, "lbl_slice_profile_status", None), not sequential
+        )
         self._refresh_slice_widget()
 
         # Sequential-mode controls (right column of the YOLO grid).
