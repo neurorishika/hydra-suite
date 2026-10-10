@@ -14,6 +14,7 @@ from hydra_suite.core.inference.config import (
     SliceConfig,
     build_inference_config_from_params,
 )
+from hydra_suite.core.inference.limits import EXTRACTION_CONFIDENCE_FLOOR
 
 
 def _minimal_cpu_config() -> InferenceConfig:
@@ -114,7 +115,9 @@ def test_tracker_sequential_raw_stage_uses_floor_not_final_confidence_filter():
 
     assert cfg.obb is not None
     assert cfg.obb.sequential is not None
-    assert cfg.obb.sequential.obb_confidence_threshold == pytest.approx(1e-3)
+    assert cfg.obb.sequential.obb_confidence_threshold == pytest.approx(
+        EXTRACTION_CONFIDENCE_FLOOR
+    )
     assert cfg.obb.confidence_threshold == pytest.approx(0.72)
 
 

@@ -140,7 +140,6 @@ def get_tracking_cache_model_ids(
     common_detection_keys = (
         "DETECTION_METHOD",
         "RESIZE_FACTOR",
-        "MAX_TARGETS",
         "COMPUTE_RUNTIME",
     )
 

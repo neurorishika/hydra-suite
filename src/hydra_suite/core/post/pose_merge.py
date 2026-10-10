@@ -122,6 +122,7 @@ def merge_pose_sources_into_df(
         with_pose_df = augment_trajectories_with_detected_properties_cache(
             with_pose_df,
             _detected_props_path,
+            max_targets=params.get("MAX_TARGETS"),
         )
 
     _tag_cache_path = resolve_current_tag_cache_path(params, state.detection_cache_path)
@@ -155,6 +156,7 @@ def merge_pose_sources_into_df(
             ignore_keypoints=ignore_keypoints,
             min_valid_conf=min_valid_conf,
             coordinate_scale=_coord_scale,
+            max_targets=params.get("MAX_TARGETS"),
         )
     if interp_available:
         interp_pose_df = pd.read_csv(interp_pose_path)

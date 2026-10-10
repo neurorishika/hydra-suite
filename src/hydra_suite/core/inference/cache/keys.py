@@ -27,6 +27,7 @@ from ..config import (
 # autotune/session.py) depends on this being the content-based one.
 from ..content_id import model_content_id
 from ..content_id import video_signature as video_signature  # noqa: F401
+from ..limits import MAX_DETECTIONS_PER_FRAME
 from .base import CACHE_SCHEMA_VERSION, CacheKey
 
 
@@ -136,16 +137,18 @@ def _direct_raw_config_hash(config: OBBConfig) -> str:
     """Hash the complete direct-mode raw-extraction contract.
 
     The cache stores results before the replay-time confidence/IoU filters, but
-    it is *not* a model-agnostic bag of boxes. Classes, raw cap, direct-task
-    conversion, segment geometry, and sliced prediction settings all change
-    which raw OBBs are materialized and must invalidate it.
+    it is *not* a model-agnostic bag of boxes. Classes, the explicit raw cap,
+    the extraction limit, direct-task conversion, segment geometry, and sliced
+    prediction settings all change which raw OBBs are materialized and must
+    invalidate it; N (``max_detections``) is NOT part of the key -- it is
+    applied at replay.
     """
 
     assert config.direct is not None
     direct = config.direct
     task = str(direct.model_task)
     payload = (
-        "direct-raw-v4",
+        "direct-raw-v5",
         _model_signature(direct.model_path),
         direct.confidence_floor,
         direct.auto_export,
@@ -156,8 +159,8 @@ def _direct_raw_config_hash(config: OBBConfig) -> str:
         direct.seg_pad_ratio if task == "segment" else None,
         direct.seg_mask_threshold if task == "segment" else None,
         tuple(config.target_classes),
-        config.max_detections,
         config.raw_detection_cap,
+        MAX_DETECTIONS_PER_FRAME,
         # OBBResult cache serialization intentionally omits native polygons.
         # Export therefore needs a geometry-producing live extraction rather
         # than a false cache hit from an ordinary tracking replay.
@@ -179,7 +182,7 @@ def _sequential_config_hash(config: OBBConfig) -> str:
     assert config.sequential is not None
     seq = config.sequential
     payload = (
-        "sequential-raw-v4",
+        "sequential-raw-v5",
         _model_signature(seq.detect_model_path),
         _model_signature(seq.obb_model_path),
         seq.auto_export,
@@ -198,8 +201,8 @@ def _sequential_config_hash(config: OBBConfig) -> str:
         seq.seg_mask_threshold,
         _slice_config_hash(seq.stage1_slice),
         tuple(config.target_classes),
-        config.max_detections,
         config.raw_detection_cap,
+        MAX_DETECTIONS_PER_FRAME,
         # See the corresponding direct-mode raw contract above.
         config.emit_native_geometry,
     )
@@ -276,8 +279,6 @@ _BGSUB_KEY_PARAMS = (
     "CONSERVATIVE_ERODE_ITER",
     "REFERENCE_BODY_SIZE",
     "MIN_CONTOUR_AREA",
-    "MAX_TARGETS",
-    "MAX_CONTOUR_MULTIPLIER",
     "START_FRAME",
     "END_FRAME",
     "RESIZE_FACTOR",
@@ -412,3 +413,46 @@ def _model_signature(path: str) -> str:
     after ``model_id`` itself became content-based.
     """
     return model_content_id(path)
+
+
+def replay_filter_hash(config, roi_mask) -> str:
+    """Hash of the N-free replay filters that decide the per-animal superset.
+
+    Per-animal caches hold results for every detection surviving these
+    filters (``filter_for_source(..., apply_max_detections=False)``), so they
+    must invalidate when a filter changes -- and must NOT depend on N.
+    bg-sub has no N-free filters beyond extraction (already in its detection
+    key), so it returns ``""`` and its downstream keys are unchanged.
+    """
+    if getattr(config, "detection_source", "obb") != "obb" or config.obb is None:
+        return ""
+    o = config.obb
+    return _sha(
+        "|".join(
+            map(
+                str,
+                (
+                    "replay-filters-v1",
+                    o.confidence_threshold,
+                    o.min_object_size,
+                    o.max_object_size,
+                    o.min_aspect_ratio,
+                    o.max_aspect_ratio,
+                    o.iou_threshold,
+                    tuple(o.target_classes),
+                    _param_repr(roi_mask) if roi_mask is not None else "",
+                ),
+            )
+        )
+    )
+
+
+def with_replay_filters(key: CacheKey, filter_hash: str) -> CacheKey:
+    """Bind a per-animal (downstream) cache key to the replay-filter hash.
+
+    A no-op for an empty hash. Never applied to the detection cache key: the
+    detection cache holds raw, pre-filter results.
+    """
+    if not filter_hash:
+        return key
+    return replace(key, config_hash=_sha(f"{key.config_hash}|filters={filter_hash}"))

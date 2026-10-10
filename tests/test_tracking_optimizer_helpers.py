@@ -806,4 +806,7 @@ def test_cached_filters_preserve_bgsub_nan_confidence_detections() -> None:
     }
 
     expected = _assert_cached_filters_match_production(params, raw)
-    assert expected.detection_ids.tolist() == [700, 701]
+    # NaN confidences survive the replay gates; N=1 now applies at replay and keeps
+    # the largest contour (id 701, size 30).
+    assert expected.detection_ids.tolist() == [701]
+    assert np.isnan(expected.confidences).all()

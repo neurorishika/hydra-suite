@@ -723,7 +723,14 @@ class ConfigOrchestrator:
         self._mw._on_runtime_context_changed()
 
     def _load_config_core_tracking(self, get_cfg, get_cfg_time):
-        self._panels.setup.spin_max_targets.setValue(get_cfg("max_targets", default=4))
+        from hydra_suite.trackerkit.gui.limit_guard import loaded_target_count_or_report
+
+        # setValue would silently clamp an N above the per-frame limit to it.
+        n_targets = loaded_target_count_or_report(
+            self._mw, get_cfg("max_targets", default=4)
+        )
+        if n_targets is not None:
+            self._panels.setup.spin_max_targets.setValue(n_targets)
         self._panels.tracking.spin_max_dist.setValue(
             get_cfg(
                 "max_assignment_distance_multiplier",
@@ -3329,7 +3336,13 @@ class ConfigOrchestrator:
             )
             return
 
-        params = self.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(
+            self._mw, "Optimizer", getter=self.get_parameters_dict
+        )
+        if params is None:
+            return
 
         cache_path, already_valid = self._find_or_plan_optimizer_cache_path(
             video_path, params, start_frame, end_frame
@@ -3382,7 +3395,13 @@ class ConfigOrchestrator:
             QMessageBox.warning(self._mw, "No Video", "Please load a video first.")
             return
 
-        params = self.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(
+            self._mw, "Background helper", getter=self.get_parameters_dict
+        )
+        if params is None:
+            return
 
         dialog = BgParameterHelperDialog(video_path, params, self._mw)
         if dialog.exec() == QDialog.Accepted:

@@ -15,6 +15,7 @@ from hydra_suite.utils.profiling import span
 
 from ....utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
 from ..config import OBBConfig
+from ..limits import MAX_DETECTIONS_PER_FRAME
 from ..result import OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
 
@@ -29,21 +30,24 @@ logger = logging.getLogger(__name__)
 
 _FALLBACK_IMGSZ = 1024
 
-# Production inference must retain only a finite compact candidate set before
-# downstream crop or mask expansion. Normal configs use ``2 * MAX_TARGETS``;
-# this ceiling also protects legacy/hand-built configs where zero meant
-# "unlimited".
-MAX_RAW_CANDIDATES_PER_FRAME = 1024
-
 
 def effective_raw_detection_cap(config: Any) -> int:
-    """Resolve a finite per-frame compact-candidate cap."""
+    """Per-frame extraction cap. N-independent.
 
+    An explicit positive ``raw_detection_cap`` (DetectKit preview, AL export)
+    is honoured up to the limit; 0 -- what tracking always uses -- means the
+    limit itself. N (``max_detections``) is deliberately NOT consulted: it is
+    applied at replay (``filtering.filter_with_indices``).
+
+    With no explicit cap, extraction collects ``MAX_DETECTIONS_PER_FRAME + 1``
+    candidates (model ``max_det`` included): the one extra row is a probe, so
+    ``rank_and_bound`` can tell a genuinely truncated frame (> limit) from one
+    with exactly the limit, and record it LOUDLY.
+    """
     requested = int(getattr(config, "raw_detection_cap", 0) or 0)
     if requested <= 0:
-        final_cap = max(1, int(getattr(config, "max_detections", 20) or 20))
-        requested = 2 * final_cap
-    return min(requested, MAX_RAW_CANDIDATES_PER_FRAME)
+        return MAX_DETECTIONS_PER_FRAME + 1
+    return min(requested, MAX_DETECTIONS_PER_FRAME)
 
 
 def _resolve_imgsz(model: Any) -> int:
@@ -252,7 +256,7 @@ def _valid_detection_mask(
 
 
 class _RawOBBTensors(NamedTuple):
-    """CUDA tensors from OBB model — no .cpu() call until filter_from_tensors()."""
+    """CUDA tensors from OBB model — no .cpu() call until materialize_tensors()."""
 
     frame_idx: int
     xywhr: torch.Tensor  # (N, 5): cx, cy, w, h, angle_rad on device
@@ -261,7 +265,7 @@ class _RawOBBTensors(NamedTuple):
     # (N,): model class id on device. Optional (defaults to None) so existing
     # call sites/tests that pre-date the class-id feature keep constructing
     # this NamedTuple without a `cls=` kwarg; treated as "all class 0"
-    # everywhere it is consumed (materialize_tensors, filter_from_tensors).
+    # everywhere it is consumed (materialize_tensors).
     cls: torch.Tensor | None = None
     # Export-only native contours, one (P, 2) float32 array per row, in the
     # SAME row order as `xywhr`. Deliberately host-side and ragged: polygons
@@ -1576,6 +1580,21 @@ def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
     if len(order) > cap:
         order = order[:cap]
     return _select_obb_rows(r, order)
+
+
+def rank_and_bound(r: OBBResult) -> tuple[OBBResult, int]:
+    """Confidence-rank a frame and bound it to MAX_DETECTIONS_PER_FRAME.
+
+    Every frame written to the detection cache passes through here, so cached
+    frames are always confidence-sorted (descending) with ids in rank order --
+    the invariant the replay window (``filtering``) relies on. Returns the
+    bounded result and the pre-bound candidate count so the caller can record
+    a limit hit (``count > MAX_DETECTIONS_PER_FRAME``).
+    """
+    count = int(r.num_detections)
+    if count == 0:
+        return r, 0
+    return _apply_raw_detection_cap(r, MAX_DETECTIONS_PER_FRAME), count
 
 
 def _empty_obb_result(frame_idx: int) -> OBBResult:

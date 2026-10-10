@@ -497,6 +497,7 @@ def augment_trajectories_with_pose_cache(
     ignore_keypoints: Any = None,
     min_valid_conf: float = 0.2,
     coordinate_scale: float = 1.0,
+    max_targets: int | None = None,
 ) -> pd.DataFrame:
     """Load properties cache and merge wide pose columns into trajectory rows.
 
@@ -508,10 +509,12 @@ def augment_trajectories_with_pose_cache(
         coordinate_scale: Scale factor applied to PoseKpt_*_X / _Y columns.
             Set to ``1.0 / RESIZE_FACTOR`` when the cache was built on
             down-scaled frames.
+        max_targets: the run's N; when given, a cache written at another N
+            (a final-N tracking artifact) is rejected.
     """
     cache = IndividualPropertiesCache(cache_path, mode="r")
     try:
-        if not cache.is_compatible():
+        if not cache.is_compatible(max_targets=max_targets):
             raise RuntimeError(
                 f"Incompatible individual-properties cache: {cache_path}"
             )
@@ -640,11 +643,16 @@ def augment_trajectories_with_detected_properties_df(
 def augment_trajectories_with_detected_properties_cache(
     trajectories_df: pd.DataFrame,
     cache_path: str,
+    max_targets: int | None = None,
 ) -> pd.DataFrame:
-    """Load detected-properties cache and merge its canonical heading columns."""
+    """Load detected-properties cache and merge its canonical heading columns.
+
+    ``max_targets`` (the run's N), when given, rejects a cache written at
+    another N.
+    """
     cache = DetectedPropertiesCache(cache_path, mode="r")
     try:
-        if not cache.is_compatible():
+        if not cache.is_compatible(max_targets=max_targets):
             raise RuntimeError(f"Incompatible detected-properties cache: {cache_path}")
         lookup = build_detected_properties_lookup_dataframe(cache)
     finally:

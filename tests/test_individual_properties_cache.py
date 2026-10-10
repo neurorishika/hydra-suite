@@ -185,3 +185,60 @@ def test_live_pose_store_flush_feeds_rich_export(tmp_path: Path) -> None:
     row = out[(out.FrameID == 0) & (out.DetectionID == 100)].iloc[0]
     assert abs(float(row["PoseKpt_head_X"]) - 10.0) < 1e-5
     assert abs(float(row["PoseKpt_thorax_Y"]) - 21.0) < 1e-5
+
+
+# --- M3: props caches are final-N tracking artifacts --------------------------
+
+
+def test_detection_hash_folds_in_n(tmp_path):
+    from hydra_suite.core.individual.properties import cache as mod
+
+    video = tmp_path / "v.mp4"
+    video.write_bytes(b"x")
+    h10 = mod.compute_detection_hash("abc", str(video), 0, 99, max_targets=10)
+    h20 = mod.compute_detection_hash("abc", str(video), 0, 99, max_targets=20)
+    assert h10 != h20
+    assert h10 == mod.compute_detection_hash("abc", str(video), 0, 99, max_targets=10)
+
+
+def _write_props(path, max_targets):
+    from hydra_suite.core.individual.properties import cache as mod
+
+    w = mod.IndividualPropertiesCache(str(path), mode="w")
+    w.add_frame(0, [1.0], pose_keypoints=[np.zeros((2, 3), np.float32)])
+    w.save(metadata=None if max_targets is None else {"max_targets": max_targets})
+
+
+def test_props_cache_written_at_one_n_is_not_opened_at_another(tmp_path):
+    from hydra_suite.core.individual.properties import cache as mod
+
+    path = tmp_path / "props.npz"
+    _write_props(path, 10)
+    r = mod.IndividualPropertiesCache(str(path), mode="r")
+    assert r.is_compatible(max_targets=10)
+    assert not r.is_compatible(max_targets=20)
+    assert r.is_compatible()  # N-agnostic callers (same-run export) unchanged
+    r.close()
+    legacy = tmp_path / "legacy.npz"
+    _write_props(legacy, None)  # pre-fix file: N unknown -> never reused
+    r = mod.IndividualPropertiesCache(str(legacy), mode="r")
+    assert not r.is_compatible(max_targets=10)
+    r.close()
+
+
+def test_pose_context_loader_rejects_a_props_cache_from_another_n(tmp_path):
+    from hydra_suite.core.individual.pose.features import load_pose_context_from_params
+
+    path = tmp_path / "props.npz"
+    _write_props(path, 10)
+    params = {
+        "ENABLE_POSE_EXTRACTOR": True,
+        "INDIVIDUAL_PROPERTIES_CACHE_PATH": str(path),
+        "POSE_DIRECTION_ANTERIOR_KEYPOINTS": [0],
+        "POSE_DIRECTION_POSTERIOR_KEYPOINTS": [1],
+    }
+    cache, *_ = load_pose_context_from_params(dict(params, MAX_TARGETS=20))
+    assert cache is None
+    cache, *_ = load_pose_context_from_params(dict(params, MAX_TARGETS=10))
+    assert cache is not None
+    cache.close()

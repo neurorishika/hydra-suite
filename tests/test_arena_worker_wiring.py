@@ -958,6 +958,11 @@ class _FakeYoloRunner:
     def load_frame(self, frame_idx):
         return _make_mismatch_frame_result(frame_idx)
 
+    def identity_evidence_sidecar_path(self, _source_name):
+        # No identity-evidence sidecar: the worker's reuse-path rebuild and
+        # sidecar open both treat None as "nothing to load".
+        return None
+
     def close(self):
         pass
 

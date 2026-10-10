@@ -221,7 +221,7 @@ def test_overlay_equals_a_fresh_production_rescore_when_the_raw_cap_binds(tmp_pa
 
 
 def test_overlay_equals_production_above_the_downstream_crop_clamp(tmp_path):
-    """max_targets > 64, where ``_effective_max_detections`` clamps at 128.
+    """max_targets > 64, (formerly clamped at 128 by a silent cap; the limit is now 1024).
 
     100 high-confidence SMALL detections the row keeps, plus 100 BELOW-gate
     detections that are the largest in the frame. The row emits 100; a

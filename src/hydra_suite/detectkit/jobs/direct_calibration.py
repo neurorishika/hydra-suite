@@ -1055,7 +1055,7 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
         # polygons exist at all; the confidence gate is post-merge, but
         # recovering a row from a permissive preview needs an UNCAPPED
         # post-filter set, and that cap is clamped at
-        # MAX_DOWNSTREAM_CROPS_PER_FRAME -- so no superset exists above it.
+        # MAX_DETECTIONS_PER_FRAME -- so no superset exists above it.
         for merge in request.merge_settings:
             for confidence in request.confidences:
                 outcome.previews.append(

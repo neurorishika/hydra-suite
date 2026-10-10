@@ -36,6 +36,7 @@ from hydra_suite.core.inference.config import (
     DEFAULT_SLICE_OBJECT_TILE_FRACTION,
     DEFAULT_SLICE_OVERLAP,
 )
+from hydra_suite.core.inference.limits import DetectionLimitError
 from hydra_suite.core.inference.model_paths import get_models_root_directory
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.trackerkit.engine_params import SLICE_MERGE_DEFAULTS
@@ -2016,6 +2017,9 @@ class DetectionPanel(QWidget):
         # non-sliced while the run sliced (spurious detections diverged).
         try:
             context["tracking_params"] = self._main_window.get_parameters_dict()
+        except DetectionLimitError as exc:
+            QMessageBox.warning(self, "Detection limit exceeded", str(exc))
+            return
         except Exception:
             logger.warning(
                 "Could not capture tracking params for preview; falling back "
