@@ -60,7 +60,13 @@ def _video_scale_arg(value: str) -> float:
     from hydra_suite.core.post.video_output_scale import validate_video_output_scale
 
     try:
-        return validate_video_output_scale(value)
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"--video-scale must be a number, got {value!r}"
+        ) from None
+    try:
+        return validate_video_output_scale(number)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
 

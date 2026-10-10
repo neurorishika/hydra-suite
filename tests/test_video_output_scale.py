@@ -22,10 +22,12 @@ def test_missing_key_resolves_to_default():
 def test_valid_values_pass_through():
     assert resolve_video_output_scale({"video_output_scale": 1.0}) == 1.0
     assert resolve_video_output_scale({"video_output_scale": 0.1}) == 0.1
-    assert resolve_video_output_scale({"video_output_scale": "0.25"}) == 0.25
+    assert resolve_video_output_scale({"video_output_scale": 1}) == 1.0
 
 
-@pytest.mark.parametrize("bad", [0.0, 0.05, 1.01, 2.0, -0.5, float("nan"), "x"])
+@pytest.mark.parametrize(
+    "bad", [0.0, 0.05, 1.01, 2.0, -0.5, float("nan"), "x", "0.5", True, False]
+)
 def test_out_of_range_is_a_loud_error_not_a_clamp(bad):
     with pytest.raises(ValueError, match="video_output_scale"):
         validate_video_output_scale(bad)

@@ -18,7 +18,16 @@ MAX_VIDEO_OUTPUT_SCALE = 1.0
 
 
 def validate_video_output_scale(value: Any) -> float:
-    """Return ``value`` as a float in [0.1, 1.0] or raise ``ValueError``."""
+    """Return ``value`` as a float in [0.1, 1.0] or raise ``ValueError``.
+
+    Only real numbers are accepted: a ``bool`` (``true`` in a hand-edited
+    config would silently mean 1.0) or a string is an error, not a coercion.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{VIDEO_OUTPUT_SCALE_KEY} must be a number in "
+            f"[{MIN_VIDEO_OUTPUT_SCALE}, {MAX_VIDEO_OUTPUT_SCALE}], got {value!r}"
+        )
     try:
         scale = float(value)
     except (TypeError, ValueError):
