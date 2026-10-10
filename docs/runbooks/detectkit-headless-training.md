@@ -41,7 +41,7 @@ Save a JSON file like the following. Plain Ultralytics model names such as
     "slicing": {
       "enabled": false,
       "geometry_mode": "auto_object",
-      "overlap": 0.2,
+      "overlap": 0.25,
       "min_area_ratio": 0.25,
       "negative_tile_fraction": 0.15,
       "target_size_fractions": [0.05, 0.10, 0.15, 0.20],

@@ -213,7 +213,10 @@ and one set of rules. The user-facing description is
   - `BACKEND_DEFAULTS` is the one per-backend defaults table (`yolo_train`
     `(0.05, 0.10, 0.15, 0.20)`, `yolo_infer` `(0.15,)`, `sam3` `(0.055,)`,
     `sam2` `()` = full frame until calibrated), plus `DEFAULT_OVERLAP`
-    (0.2), `OVERLAP_MARGIN` (0.05), `OVERLAP_MAX` (0.9) and
+    (0.2, the serving default TrackerKit uses), `DEFAULT_TRAIN_OVERLAP`
+    (0.25 = max of the `yolo_train` set + margin; the default of
+    `SliceTrainingSettings`/`SliceTrainingConfig`/`SliceBuildParams` only),
+    `OVERLAP_MARGIN` (0.05), `OVERLAP_MAX` (0.9) and
     `FRACTION_MIN`/`FRACTION_MAX` (0.01/0.9). Widget ranges come from
     these constants. The SAM3 *escalation* seed
     (`semantic.tiling.SEMANTIC_TILE_FRACTION_SEED = 0.05`, on the
