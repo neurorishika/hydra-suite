@@ -280,10 +280,7 @@ class _TileLayoutPreview(QWidget):
             tile_count = self._plan_tile_count(tile_w, tile_h)
         width, height = self._frame_wh
         if self._uses_fallback_frame:
-            title = (
-                f"Tile layout on an example {width} × {height} frame "
-                "(no source frame size known)"
-            )
+            title = f"Tile layout on an example {width} × {height} frame"
             frame_note = "example frame"
         else:
             title = f"Tile layout on a {width} × {height} image"
