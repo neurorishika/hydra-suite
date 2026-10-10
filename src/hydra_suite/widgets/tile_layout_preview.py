@@ -40,10 +40,14 @@ class _TileLayoutPreview(QWidget):
     MIN_BOTTOM_HEIGHT = 200
     MAX_BOTTOM_HEIGHT = 380
     MIN_BOTTOM_WIDTH = 240
+    # Compact hosts (layout="compact"): shorter, two caption lines.
+    MAX_COMPACT_HEIGHT = 260
+    _COMPACT_CAPTIONS = 56
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._bottom = False
+        self._compact = False
         self.setMinimumSize(290, 180)
         self.setToolTip(
             "A live schematic of the tile grid over a representative labelled source "
@@ -71,9 +75,14 @@ class _TileLayoutPreview(QWidget):
         self._measured_note = "uses last label measurement"
         self._unmeasured_note = "illustrative until labels are measured"
 
-    def set_bottom_layout(self, bottom: bool) -> None:
-        """Below the controls: full host width, height from the frame aspect."""
+    def set_bottom_layout(self, bottom: bool, *, compact: bool = False) -> None:
+        """Below the controls: full host width, height from the frame aspect.
+
+        ``compact`` (a ``layout="compact"`` host) caps the height lower and
+        paints the captions on two lines instead of three.
+        """
         self._bottom = bool(bottom)
+        self._compact = bool(bottom and compact)
         if self._bottom:
             policy = QSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -96,8 +105,14 @@ class _TileLayoutPreview(QWidget):
             return super().heightForWidth(width)
         frame_w, frame_h = self._frame_wh
         drawable = max(1, width - 2 * self._MARGIN)
-        height = self._TOP + self._CAPTIONS + round(drawable * frame_h / frame_w)
-        return max(self.MIN_BOTTOM_HEIGHT, min(height, self.MAX_BOTTOM_HEIGHT))
+        height = (
+            self._TOP + self._captions_height() + round(drawable * frame_h / frame_w)
+        )
+        ceiling = self.MAX_COMPACT_HEIGHT if self._compact else self.MAX_BOTTOM_HEIGHT
+        return max(self.MIN_BOTTOM_HEIGHT, min(height, ceiling))
+
+    def _captions_height(self) -> int:
+        return self._COMPACT_CAPTIONS if self._compact else self._CAPTIONS
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
         if not self._bottom:
@@ -250,7 +265,7 @@ class _TileLayoutPreview(QWidget):
 
         margin, top = self._MARGIN, self._TOP
         available_w = max(1, self.width() - 2 * margin)
-        available_h = max(1, self.height() - top - self._CAPTIONS)
+        available_h = max(1, self.height() - top - self._captions_height())
         scale = min(available_w / self._frame_wh[0], available_h / self._frame_wh[1])
         draw_w, draw_h = int(self._frame_wh[0] * scale), int(self._frame_wh[1] * scale)
         x = (self.width() - draw_w) // 2
@@ -299,19 +314,30 @@ class _TileLayoutPreview(QWidget):
                 max(1, round(other_h * scale)),
             )
 
-        title, tile_line, note_line, scales_line = self.caption_texts(len(tiles))
+        title = self.caption_texts(len(tiles))[0]
         metrics = QFontMetrics(painter.font())
         text_w = self.width() - 2 * margin
         painter.setPen(QColor("#f0f0f0"))
         painter.drawText(margin, 17, elide_at_word(title, metrics, text_w))
         painter.setPen(QColor("#c0c0c0"))
-        lines = [line for line in (tile_line, note_line, scales_line) if line]
+        lines = self.caption_lines(len(tiles))
         for offset, line in enumerate(reversed(lines)):
             painter.drawText(
                 margin,
                 self.height() - 17 * (offset + 1),
                 elide_at_word(line, metrics, text_w),
             )
+
+    def caption_lines(self, tile_count: int | None = None) -> list[str]:
+        """The caption lines painted below the frame (two when compact)."""
+        _title, tile_line, note_line, scales_line = self.caption_texts(tile_count)
+        if self._compact:
+            # Fold the body note onto the tile line: two lines, not three.
+            return [
+                " · ".join(line for line in (tile_line, note_line) if line),
+                scales_line,
+            ]
+        return [line for line in (tile_line, note_line, scales_line) if line]
 
     def _plan_tile_count(self, tile_w: int, tile_h: int) -> int:
         try:
