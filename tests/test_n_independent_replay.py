@@ -703,3 +703,34 @@ def test_worker_reuse_at_new_n_rebuilds_identity_sidecar_without_cnn(
     nonempty = [f for f in range(_NUM_FRAMES) if f not in _EMPTY_FRAMES]
     assert all(len(got[f]) == 3 for f in nonempty)  # final N=3 set has evidence
     assert all(got[f] == [] for f in _EMPTY_FRAMES)
+
+
+def test_worker_cnn_evidence_belongs_to_its_own_detection(monkeypatch, tmp_path, video):
+    """Regression for the CNN index-base bug (spec section 4): end to end
+    through TrackingEngineCore, on frames where filtering drops an EARLIER raw
+    row (``_SMALL``), every identity-evidence row in the sidecar must carry the
+    CNN prediction of its own detection (payload = f(centroid x), x = 20 + 50 *
+    raw slot), not that of the row one position over."""
+    from hydra_suite.core.inference.result import DETECTION_ID_STRIDE
+
+    ok, fwd = _run_worker(monkeypatch, tmp_path, video, tmp_path / "c", 10, reuse=False)
+    assert ok is True
+    evidence = _sidecar_evidence(
+        fwd["runners"][0].identity_evidence_sidecar_path("batch")
+    )
+    checked = 0
+    for frame in range(_NUM_FRAMES):
+        raws = [did % DETECTION_ID_STRIDE for did, _src, _lp in evidence[frame]]
+        if frame in _EMPTY_FRAMES:
+            assert raws == []
+            continue
+        assert raws == _expected_final(10)
+        assert _SMALL not in raws and raws[_SMALL] > _SMALL  # shifted row exists
+        for did, _src, log_probs in evidence[frame]:
+            raw = did % DETECTION_ID_STRIDE
+            p = np.exp(np.asarray(log_probs))[1:]  # drop the unknown slot
+            np.testing.assert_allclose(
+                p / p.sum(), _probs(20.0 + 50.0 * raw), atol=1e-4
+            )
+            checked += 1
+    assert checked == 4 * 10
