@@ -300,6 +300,21 @@ class TrackingEngineCore:
         if self._on_stats is not None:
             self._on_stats(stats)
 
+    def _report_inference_run_summaries(self, runners) -> None:
+        """Log and surface the run-scoped clipping and detection-limit summaries."""
+        for _runner in runners:
+            if _runner is None:
+                continue
+            _msg = _runner.clipping_stats.summary()
+            if _msg:
+                logger.warning("Canonicalization clipping summary: %s", _msg)
+        for _runner in runners:
+            stats = getattr(_runner, "detection_limit_stats", None) if _runner else None
+            msg = stats.summary() if stats is not None else None
+            if msg:
+                logger.warning("Detection limit summary: %s", msg)
+                self._emit_warning("Detection limit reached", msg)
+
     def _emit_warning(self, title, msg):
         if self._on_warning is not None:
             self._on_warning(title, msg)
@@ -4906,14 +4921,7 @@ class TrackingEngineCore:
         # InferenceRunner(s) actually ran this pass (yolo_obb -> inference_runner,
         # bgsub -> bgsub_runner) carry a run-scoped ClippingStats; combine both
         # since a config could in principle exercise either path.
-        _clip_msgs = []
-        for _runner in (inference_runner, bgsub_runner):
-            if _runner is not None:
-                _msg = _runner.clipping_stats.summary()
-                if _msg:
-                    _clip_msgs.append(_msg)
-        for _msg in _clip_msgs:
-            logger.warning("Canonicalization clipping summary: %s", _msg)
+        self._report_inference_run_summaries((inference_runner, bgsub_runner))
 
         # --- Profiling: final summary and JSON export ---
         profiler.phase_end("cleanup")

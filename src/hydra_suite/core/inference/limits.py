@@ -44,15 +44,18 @@ class DetectionLimitStats:
 
     frames: list[tuple[int, int]] = field(default_factory=list)
 
-    def record(self, frame_idx: int, candidate_count: int) -> None:
+    def record(
+        self, frame_idx: int, candidate_count: int, criterion: str = "confidence"
+    ) -> None:
         self.frames.append((int(frame_idx), int(candidate_count)))
         logger.warning(
             "Frame %d produced %d detection candidates; the hard limit is %d "
-            "per frame -- kept the top %d by confidence, dropped the rest.",
+            "per frame -- kept the top %d by %s, dropped the rest.",
             frame_idx,
             candidate_count,
             MAX_DETECTIONS_PER_FRAME,
             MAX_DETECTIONS_PER_FRAME,
+            criterion,
         )
 
     def summary(self) -> str | None:

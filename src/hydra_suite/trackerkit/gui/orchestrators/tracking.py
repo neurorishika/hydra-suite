@@ -107,6 +107,21 @@ class TrackingOrchestrator:
             self._calibration_dialog = None
             return False
 
+    def _params_or_report_limit(self, context: str):
+        """``get_parameters_dict()``, or ``None`` after telling the user why not.
+
+        N above MAX_DETECTIONS_PER_FRAME is rejected while the engine params are
+        built; surface it as a readable message box, not an unhandled exception.
+        """
+        from hydra_suite.core.inference.limits import DetectionLimitError
+
+        try:
+            return self._mw.get_parameters_dict()
+        except DetectionLimitError as exc:
+            logger.error("%s blocked: %s", context, exc)
+            QMessageBox.warning(self._mw, "Detection limit exceeded", str(exc))
+            return None
+
     def open_calibration_dialog(self) -> None:
         """Open the one-click Calibrate dialog.
 
@@ -155,7 +170,9 @@ class TrackingOrchestrator:
         from hydra_suite.trackerkit.calibrate_cli import derive_context_inputs
         from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
 
-        params = self._mw.get_parameters_dict()
+        params = self._params_or_report_limit("Calibration")
+        if params is None:
+            return
         inference_config = build_inference_config_from_params(params)
 
         class _FrameCountProbe:
@@ -1498,7 +1515,9 @@ class TrackingOrchestrator:
         self._mw._tracking_first_frame = True
         self._mw.csv_writer_thread = None
 
-        params = self._mw.get_parameters_dict()
+        params = self._params_or_report_limit("Tracking preview")
+        if params is None:
+            return
         if not self._validate_yolo_model_requirements(
             params, mode_label="tracking preview"
         ):
@@ -1617,6 +1636,8 @@ class TrackingOrchestrator:
                 "Please set an output CSV path before starting tracking.\n\n"
                 "A default path is set automatically when you load a video.",
             )
+            return
+        if self._params_or_report_limit("Tracking") is None:
             return
         if not backward_mode:
             self._mw._stop_all_requested = False

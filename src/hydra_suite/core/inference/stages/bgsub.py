@@ -203,7 +203,7 @@ def run_bgsub(
     order = np.argsort(-np.asarray(sizes, dtype=np.float64), kind="stable")
     if len(order) > MAX_DETECTIONS_PER_FRAME:
         if limit_stats is not None:
-            limit_stats.record(frame_idx, len(order))
+            limit_stats.record(frame_idx, len(order), criterion="area")
         else:
             logger.warning(
                 "Frame %d: %d background-subtraction contours exceed the hard "

@@ -225,7 +225,7 @@ class SetupPanel(QWidget):
         self.spin_max_targets.setFixedHeight(30)
         self.spin_max_targets.setMinimumWidth(84)
         self.spin_max_targets.setToolTip(
-            "Number of animals PER ARENA (1-200) -- with a single arena this\n"
+            f"Number of animals PER ARENA (1-{MAX_DETECTIONS_PER_FRAME}) -- with a single arena this\n"
             "is the total. The overall slot count (MAX_TARGETS) is derived as\n"
             "n_arenas * this value once more than one arena is drawn.\n"
             "Higher values use more memory and may slow down processing."
