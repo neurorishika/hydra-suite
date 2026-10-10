@@ -36,7 +36,12 @@ class DetectKitDialog(BaseDialog):
             current = current.parent()
         return False
 
-    def fit_to_content(self, base_minimum: QSize | None = None) -> None:
+    def fit_to_content(
+        self,
+        base_minimum: QSize | None = None,
+        *,
+        follow_content_height: bool | None = None,
+    ) -> None:
         """Keep an explicit minimum size from clipping the layout's content.
 
         An explicit ``setMinimumSize`` disables the layout's own minimum, so
@@ -46,7 +51,13 @@ class DetectKitDialog(BaseDialog):
         the window returns to its preferred size unless the user resized it.
         Re-run on every show. The first call records ``base_minimum`` and the
         current size as the preferred size.
+
+        ``follow_content_height``: until the user resizes the window, the
+        preferred HEIGHT is the layout's own size hint, so a section that
+        collapses (SAHI off) shrinks the dialog and grows it back on expand.
         """
+        if follow_content_height is not None:
+            self._fit_follow = bool(follow_content_height)
         if base_minimum is not None and not hasattr(self, "_fit_base"):
             self._fit_base = QSize(base_minimum)
             self._fit_preferred = self.size()
@@ -58,10 +69,6 @@ class DetectKitDialog(BaseDialog):
         # Read the size BEFORE activating the layout: activation can grow the
         # window itself, which must not be mistaken for a user resize.
         current = self.size()
-        if self._fit_last is not None and current != self._fit_last:
-            # The user's size becomes the preferred one, so it survives
-            # repeated content changes and hide + show.
-            self._fit_preferred = current
         # Nested layouts cache their minimums; hiding rows deep inside does
         # not always reach the top, so drop every cache before measuring.
         child_layouts = self.findChildren(QLayout)
@@ -77,8 +84,32 @@ class DetectKitDialog(BaseDialog):
             layout.invalidate()
             layout.activate()
         minimum = self._fit_base.expandedTo(self.minimumSizeHint())
+        if self._fit_last is not None and current != self._fit_last:
+            # A change that is exactly the layout enforcing its NEW minimum
+            # (Advanced opened wider rows) is layout-driven, not the user.
+            if current != self._fit_last.expandedTo(minimum):
+                # The user's size becomes the preferred one, so it survives
+                # repeated content changes and hide + show.
+                self._fit_preferred = current
+                self._fit_user_sized = True
         self.setMinimumSize(minimum)
-        target = self._fit_preferred.expandedTo(minimum)
+        preferred = self._fit_preferred
+        if getattr(self, "_fit_follow", False) and not getattr(
+            self, "_fit_user_sized", False
+        ):
+            # Keep the current width (no wobble on collapse) and measure the
+            # height AT that width: sizeHint() measures word-wrapped notes at
+            # its own narrower width and over-estimates (a dead gap).
+            width = max(preferred.width(), current.width())
+            if layout is not None and layout.hasHeightForWidth():
+                margins = self.contentsMargins()
+                height = layout.totalHeightForWidth(
+                    width - margins.left() - margins.right()
+                )
+            else:
+                height = self.sizeHint().height()
+            preferred = QSize(width, height)
+        target = preferred.expandedTo(minimum)
         self.resize(target)
         self._fit_last = QSize(target)
 

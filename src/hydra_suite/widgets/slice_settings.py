@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -47,6 +48,7 @@ from .slice_settings_controls import (
 )
 from .slice_settings_parts import (
     ESCALATE_ROLES,
+    PREVIEW_POSITIONS,
     ROLE_BACKEND,
     ROLES,
     SOURCE_DESCRIPTIONS,
@@ -83,6 +85,10 @@ class SliceSettingsWidget(QGroupBox):
         super().__init__(title or "", parent)
         self._role = role
         self._caps = capabilities or default_capabilities(role)
+        if self._caps.preview_position not in PREVIEW_POSITIONS:
+            raise ValueError(
+                f"unknown preview position: {self._caps.preview_position!r}"
+            )
         self._base = TilingSpec.defaults(ROLE_BACKEND[role])
         self._passthrough: dict[str, Any] = {}
         self._model_input_size = DEFAULT_YOLO_IMGSZ
@@ -132,13 +138,15 @@ class SliceSettingsWidget(QGroupBox):
     # ------------------------------------------------------------------ build
 
     def _build_layout(self, *, bare: bool) -> None:
-        outer = QHBoxLayout(self)
+        bottom = self._caps.preview_position == "bottom"
+        outer = QVBoxLayout(self) if bottom else QHBoxLayout(self)
         if bare:
             outer.setContentsMargins(0, 0, 0, 0)
         else:
             outer.setContentsMargins(14, 16, 14, 12)
-        outer.setSpacing(18)
+        outer.setSpacing(10 if bottom else 18)
         controls = QWidget()
+        self._controls = controls
         grid = QGridLayout(controls)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
@@ -156,12 +164,22 @@ class SliceSettingsWidget(QGroupBox):
             else:
                 label = QLabel(text)
                 label.setToolTip(self._label_tooltip(control))
-                grid.addWidget(label, row, 0)
+                if key in self._stacked_rows:
+                    # Level with the control line, not centred on the note.
+                    top = control.layout().itemAt(0).widget()
+                    label.setMinimumHeight(top.sizeHint().height())
+                    grid.addWidget(label, row, 0, Qt.AlignmentFlag.AlignTop)
+                else:
+                    grid.addWidget(label, row, 0)
                 grid.addWidget(control, row, 1)
                 self._rows[key] = (label, control)
                 widgets.append(label)
             if badge is not None:
-                grid.addWidget(badge, row, 2)
+                if key in self._stacked_rows:
+                    badge.setMinimumHeight(label.minimumHeight())
+                    grid.addWidget(badge, row, 2, Qt.AlignmentFlag.AlignTop)
+                else:
+                    grid.addWidget(badge, row, 2)
                 widgets.append(badge)
             self._row_widgets[key] = widgets
         grid.setRowStretch(len(self._row_widgets), 1)
@@ -169,7 +187,7 @@ class SliceSettingsWidget(QGroupBox):
         if self._role in ESCALATE_ROLES:
             self.preview.hide()
         else:
-            outer.addWidget(self.preview, 1)
+            outer.addWidget(self.preview, 0 if bottom else 1)
 
     @staticmethod
     def _label_tooltip(control: QWidget) -> str:
@@ -602,9 +620,9 @@ class SliceSettingsWidget(QGroupBox):
         derived_body = self._body_is_derived()
         body_gate = on and (role != "infer_yolo" or auto_object)
         enabled = {
-            # Profiles own `enabled`: picking one from a SAHI-off state
-            # applies it and turns SAHI on, so the picker is never gated on
-            # the checkbox (only on the row being shown).
+            # Profiles own `enabled`: the picker is never gated on the
+            # checkbox (only on the row being shown -- and the whole row
+            # hides while SAHI is off, S6), so a host can still drive it.
             self.combo_slice_profile: self._profile_row_shown,
             self.combo_slice_geometry: on,
             self.txt_slice_scales: on and auto_object,
@@ -732,10 +750,27 @@ class SliceSettingsWidget(QGroupBox):
         if row is not None:
             row[0].setToolTip(self.txt_slice_scales.toolTip())
 
+    def tiling_shown(self) -> bool:
+        """False while a role with the Enable checkbox has it unchecked.
+
+        S6: SAHI off collapses the block to that checkbox (every other row,
+        Advanced, the profile row and the preview hide; values are kept).
+        Within SAHI on, constrained fields stay visible-but-disabled.
+        """
+        if "enabled" not in self._role_rows:
+            return True
+        return self.chk_slice_enabled.isChecked()
+
     def _apply_visibility(self) -> None:
+        # The WINDOW's focus widget before hiding: only a control of ours that
+        # the collapse hides may hand focus to the checkbox; focus elsewhere
+        # in the window (another panel's field) is never touched. Read before
+        # the loop because Qt's own hide handling may already move it.
+        before = self.window().focusWidget()
         mode = self._mode()
+        shown = self.tiling_shown()
         for key, widgets in self._row_widgets.items():
-            visible = key in self._role_rows
+            visible = key in self._role_rows and (shown or key == "enabled")
             if key in ADVANCED:
                 visible = visible and self._advanced_expanded
             if key == "profile":
@@ -745,4 +780,15 @@ class SliceSettingsWidget(QGroupBox):
                 visible = visible and mode == "auto_object"
             for widget in widgets:
                 widget.setHidden(not visible)
+        if self._role not in ESCALATE_ROLES:
+            self.preview.setHidden(not shown)
+        # Qt moves focus only off an explicitly hidden widget, not off one
+        # inside a hidden row holder: keyboard input must not reach a hidden
+        # control (Down on the hidden profile combo would switch profiles).
+        if (
+            before is not None
+            and self.isAncestorOf(before)
+            and not before.isVisibleTo(self)
+        ):
+            self.chk_slice_enabled.setFocus()
         self.updateGeometry()  # let host layouts re-measure (rows came/went)

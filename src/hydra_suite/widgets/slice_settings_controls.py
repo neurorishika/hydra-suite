@@ -31,12 +31,14 @@ from .slice_settings_parts import (
     SLICE_SIZE_MAX,
     SOURCE_DESCRIPTIONS,
     TRAIN_ROLES,
+    ElidingLabel,
     badge_label,
     double_spin,
     hbox,
     int_spin,
     item_combo,
     muted_label,
+    stacked,
 )
 from .tile_layout_preview import TileLayoutPreview
 
@@ -90,6 +92,9 @@ ROLE_EXTRAS = {
 
 def build_controls(w) -> None:
     role = w._role
+    # Bottom preview = a narrow host: derived notes go under their controls
+    # and elide rather than widen the block.
+    compact = w._caps.preview_position == "bottom"
     w.chk_slice_enabled = QCheckBox(
         "Enable sliced training + preview"
         if role == "train_yolo"
@@ -148,7 +153,7 @@ def build_controls(w) -> None:
             "fractions use smaller tiles and can make high-resolution "
             "inference much slower. Used with 'Fit to animal size'.",
         )
-    w.lbl_slice_scale_px = muted_label()
+    w.lbl_slice_scale_px = muted_label(eliding=compact)
 
     w.spin_slice_body = double_spin(
         0.0,
@@ -183,7 +188,7 @@ def build_controls(w) -> None:
     w.spin_slice_tile_h = int_spin(
         0, SLICE_SIZE_MAX, tile_tip.format("height"), "model input"
     )
-    w.lbl_slice_tile_size = QLabel()
+    w.lbl_slice_tile_size = ElidingLabel() if compact else QLabel()
     # Never word-wrapped: a wrapped label's height-for-width is not part of
     # the grid's minimum, so it would overlap its neighbours. Hosts keep the
     # visible text short (explicit newlines are fine) and put prose in the
@@ -201,7 +206,7 @@ def build_controls(w) -> None:
         "Fraction shared by neighbouring tiles. More overlap protects objects "
         "at tile edges but creates more inference work.",
     )
-    w.lbl_slice_overlap_minimum = muted_label()
+    w.lbl_slice_overlap_minimum = muted_label(eliding=compact)
     w.btn_slice_overlap_raise = QToolButton()
     w.btn_slice_overlap_raise.setText("Raise")
     w.btn_slice_overlap_raise.setObjectName("sliceOverlapRaise")
@@ -348,6 +353,7 @@ def build_controls(w) -> None:
         spin.setMinimumWidth(112)
         spin.setMaximumWidth(140)
     w.preview = TileLayoutPreview()
+    w.preview.set_bottom_layout(compact)
     if role == "infer_yolo":
         w.preview.set_body_notes(
             "uses the body size", "illustrative until a body size is known"
@@ -360,7 +366,24 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
     role = w._role
     times = muted_label("×")
     w._tile_spins = hbox(w.spin_slice_tile_w, times, w.spin_slice_tile_h, stretch=False)
-    tile_cell = hbox(w._tile_spins, w.lbl_slice_tile_size)
+    if w._caps.preview_position == "bottom":
+        # Each derived note on its own line under its control (S6).
+        w._stacked_rows = {"object_fraction", "tile", "overlap"}
+        tile_cell = stacked(hbox(w._tile_spins), w.lbl_slice_tile_size)
+        object_cell = stacked(hbox(w.spin_slice_object_fraction), w.lbl_slice_scale_px)
+        overlap_cell = stacked(
+            hbox(w.spin_slice_overlap, w.btn_slice_overlap_raise),
+            w.lbl_slice_overlap_minimum,
+        )
+    else:
+        w._stacked_rows = set()
+        tile_cell = hbox(w._tile_spins, w.lbl_slice_tile_size)
+        object_cell = hbox(w.spin_slice_object_fraction, w.lbl_slice_scale_px)
+        overlap_cell = hbox(
+            w.spin_slice_overlap,
+            w.lbl_slice_overlap_minimum,
+            w.btn_slice_overlap_raise,
+        )
     if role in TRAIN_ROLES:
         body_cell = hbox(w.auto_reference_note, stretch=False)
     else:
@@ -378,12 +401,7 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
         ),
         ("mode", "Tile strategy", w.combo_slice_geometry, None),
         ("targets", "Object scales", w.txt_slice_scales, None),
-        (
-            "object_fraction",
-            object_label,
-            hbox(w.spin_slice_object_fraction, w.lbl_slice_scale_px),
-            None,
-        ),
+        ("object_fraction", object_label, object_cell, None),
         ("body", "Body size", body_cell, w.lbl_slice_body_badge),
         (
             "tile",
@@ -391,16 +409,7 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
             tile_cell,
             w.lbl_slice_tile_badge,
         ),
-        (
-            "overlap",
-            "Tile overlap",
-            hbox(
-                w.spin_slice_overlap,
-                w.lbl_slice_overlap_minimum,
-                w.btn_slice_overlap_raise,
-            ),
-            None,
-        ),
+        ("overlap", "Tile overlap", overlap_cell, None),
         ("advanced", None, w.btn_slice_advanced, None),
         ("merge_policy", "Merge policy", w.combo_slice_merge_policy, None),
         ("merge_metric", "Merge metric", w.combo_slice_merge_metric, None),

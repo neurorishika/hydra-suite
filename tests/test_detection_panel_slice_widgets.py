@@ -38,6 +38,20 @@ def test_slice_widgets_exist_with_defaults(monkeypatch):
     window.close()
 
 
+def test_fresh_panel_starts_collapsed_with_sahi_off(monkeypatch):
+    """S6: a new window (SAHI off, no toggle fired) shows only the Enable
+    checkbox -- no SAHI rows and no panel-owned SAHI labels."""
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    _app.processEvents()
+    assert panel.chk_slice_enabled.isChecked() is False
+    assert panel.combo_slice_geometry.isVisibleTo(panel) is False
+    assert panel.slice_settings.preview.isVisibleTo(panel) is False
+    assert panel.lbl_slice_profile_status.isVisibleTo(panel) is False
+    assert panel.lbl_slice_batch_admission.isVisibleTo(panel) is False
+    window.close()
+
+
 def test_slice_widgets_hidden_in_sequential_mode(monkeypatch):
     window = _make_main_window(monkeypatch)
     panel = window._detection_panel
@@ -49,17 +63,17 @@ def test_slice_widgets_hidden_in_sequential_mode(monkeypatch):
     window.close()
 
 
-def test_slice_geometry_disabled_while_sahi_off_in_direct_mode(monkeypatch):
-    """SAHI inputs are pointless while sliced inference is off: the geometry
-    picker is DISABLED (shared widget: constrained = disabled, never hidden)
-    until the SAHI checkbox is checked."""
+def test_slice_geometry_hidden_while_sahi_off_in_direct_mode(monkeypatch):
+    """SAHI inputs are pointless while sliced inference is off: S6 hides
+    every SAHI row but the Enable checkbox (was: visible but DISABLED) until
+    the SAHI checkbox is checked."""
     window = _make_main_window(monkeypatch)
     panel = window._detection_panel
     assert panel.combo_yolo_obb_mode.currentIndex() == 0  # Direct
     panel.chk_slice_enabled.setChecked(False)
     panel._on_yolo_mode_changed(0)
-    assert panel.combo_slice_geometry.isVisibleTo(panel) is True
-    assert panel.combo_slice_geometry.isEnabled() is False
+    assert panel.combo_slice_geometry.isVisibleTo(panel) is False
+    assert panel.lbl_slice_profile_status.isVisibleTo(panel) is False
     # The checkbox itself stays usable so the user can turn SAHI on.
     assert panel.chk_slice_enabled.isVisibleTo(panel) is True
     assert panel.chk_slice_enabled.isEnabled() is True
@@ -647,7 +661,10 @@ def test_slice_preview_uses_the_loaded_video_frame_size(monkeypatch):
 def test_picking_a_profile_while_sahi_is_off_applies_it_and_enables_sahi(
     monkeypatch, tmp_path
 ):
-    """Review MAJOR-1 (main behaviour, probe A26 -> A27)."""
+    """Review MAJOR-1 (main behaviour, probe A26 -> A27). S6: the profile
+    row now HIDES while SAHI is off (the user path is "tick Enable, then
+    pick"), but a programmatic pick on the hidden combo -- a restore, the
+    sequence golden -- still applies the profile and turns SAHI on."""
     import json
 
     from tests.test_trackerkit_sahi_widget_persistence import TWO_PROFILE_SIDECAR
@@ -662,13 +679,14 @@ def test_picking_a_profile_while_sahi_is_off_applies_it_and_enables_sahi(
     panel.apply_slice_meta_for_model(str(model_path))
     panel.chk_slice_enabled.setChecked(False)
     assert panel.combo_slice_profile.isEnabled() is True
-    assert panel.combo_slice_profile.isVisibleTo(panel) is True
+    assert panel.combo_slice_profile.isVisibleTo(panel) is False
     panel.combo_slice_profile.setCurrentIndex(
         panel.combo_slice_profile.findData("fast")
     )
     params = window.get_parameters_dict()
     assert params["SLICE_ENABLED"] is True
     assert panel.chk_slice_enabled.isChecked() is True
+    assert panel.combo_slice_profile.isVisibleTo(panel) is True
     assert window.advanced_config["slice_profile_id"] == "fast"
     assert not panel.slice_profile_status_text().startswith("Custom")
     window.close()

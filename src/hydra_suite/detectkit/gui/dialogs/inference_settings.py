@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from statistics import median
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialogButtonBox,
@@ -94,6 +94,13 @@ class InferenceSettingsDialog(DetectKitDialog):
         self.resize(920, 600)
         self._build_content()
         self.load_from(settings)
+        # SAHI off collapses the slice widget to its checkbox: the dialog
+        # shrinks with it, and grows back when SAHI (or Advanced) opens.
+        self.fit_to_content(QSize(640, 300), follow_content_height=True)
+        self.chk_sliced.toggled.connect(lambda _on: self.schedule_fit())
+        self.slice_widget.btn_slice_advanced.toggled.connect(
+            lambda _on: self.schedule_fit()
+        )
         self._buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(
             self.accept
         )
@@ -210,6 +217,10 @@ class InferenceSettingsDialog(DetectKitDialog):
         self.slice_widget.set_spec(
             spec, extras={"merge_threshold": spec.merge_threshold}
         )
+        if hasattr(self, "_fit_base"):
+            # set_spec writes the checkbox with signals blocked, so the
+            # toggled -> schedule_fit wiring never sees "Use Project Defaults".
+            self.schedule_fit()
 
     def settings(self) -> InferenceRunSettings:
         """Return a fresh runtime configuration from the current dialog state."""
