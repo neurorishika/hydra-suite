@@ -1,6 +1,6 @@
 """Unified v3 tiling sidecar: geometry builders and one reader for every family.
 
-Spec: docs/superpowers/specs/2026-10-09-sahi-unification-design.md (§4).
+Spec: docs/superpowers/specs/done/2026-10-09-sahi-unification-design.md (§4).
 The file is still ``<model>.<ext>.slice_meta.json`` (slice_meta.sidecar_path).
 YOLO v3 geometry is ADDITIVE over v2 (every v2 key verbatim) so the v2
 reader, the baseline drift guard and the calibration grid are unchanged

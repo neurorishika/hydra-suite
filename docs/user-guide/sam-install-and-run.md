@@ -121,6 +121,7 @@ project in DetectKit afterwards to accept or reject the staged frames.
 
 ```text
 detectkit escalate sam2 --project DIR [--source NAME]... [--variant VARIANT]
+                        [--tile-fraction F] [--reference-body-px PX]
                         [--device auto|cuda|mps|cpu] [--overwrite]
 
 detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
@@ -141,8 +142,13 @@ detectkit escalate sam3 --project DIR --prompt TEXT [--class-name CLASS]
 | `--class-name` | SAM3 only: project class the staged instances are labelled as (default: the prompt). |
 | `--confidence` | SAM3 only: score threshold (default `0.35`). It can be changed later in review without re-running. |
 | `--max-instances` | SAM3 only: cap per image; `0` means unlimited. |
-| `--tile-fraction` | Tile size = body size / this fraction; `0` means full frame. Default: what the DetectKit dialog would open with for this variant (saved settings, then the calibration, then the model's stamped scale, then the starting guess at the project's body size). |
-| `--reference-body-px` | Typical longest animal side in pixels. Default: the dialog's value, then the project's sliced-training reference, then the median of your labels. |
+| `--tile-fraction` | The dialog's **Object scale**: tile size = body size / this fraction; `0` means full frame. Default: what the DetectKit dialog would open with for this variant. SAM3: saved settings, then the calibration, then the model's stamped scale, then the starting guess at the project's body size. SAM2: saved settings, then the calibration, else full frame. |
+| `--reference-body-px` | The dialog's **Body size**: typical longest animal side in pixels. Default: the dialog's value, then the project's sliced-training reference, then the median of your labels. |
+
+The two tiling flags map onto the dialogs' shared SAHI rows, described in
+[SAHI Settings](sahi-settings.md). The command prints the tiling it
+resolved (`Tiling: fraction F of a B px body ...` or `Tiling: full
+frame`) before it starts.
 
 Examples:
 

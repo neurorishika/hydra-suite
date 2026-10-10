@@ -1,6 +1,6 @@
 """Canonical SAHI tiling contract shared by every kit.
 
-Spec: docs/superpowers/specs/2026-10-09-sahi-unification-design.md (§3).
+Spec: docs/superpowers/specs/done/2026-10-09-sahi-unification-design.md (§3).
 TrackerKit's vocabulary is canonical. This module is pure (numpy only) so
 core, training, data and every kit can import it; ``slice_geometry`` stays
 the grid module and is not modified.
@@ -133,6 +133,15 @@ BACKEND_DEFAULTS: dict[str, BackendDefaults] = {
         DEFAULT_MIN_AREA_RATIO,
     ),
 }
+
+# YOLO TRAINING overlap default (user decision 2026-10-10): the whole-animal
+# minimum of the default scale set, max(set) + OVERLAP_MARGIN = 0.25, so a new
+# project never opens below its own minimum. Training only -- TrackerKit's
+# serving default stays DEFAULT_OVERLAP (0.2), which keeps tracking output
+# byte-identical. Saved projects/plans keep their stored overlap.
+DEFAULT_TRAIN_OVERLAP = round(
+    max(BACKEND_DEFAULTS["yolo_train"].object_tile_fractions) + OVERLAP_MARGIN, 6
+)
 
 
 def _clamp_fraction(value: float) -> float:

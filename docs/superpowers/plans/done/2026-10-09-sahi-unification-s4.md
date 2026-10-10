@@ -96,7 +96,7 @@ export PYTHONPATH=$PWD/src KMP_DUPLICATE_LIB_OK=TRUE QT_QPA_PLATFORM=offscreen
 | Advanced: tiles per call / memory | ✓ | – | – | – | – |
 | Advanced: negative fraction, loss balance | – | ✓ | keep empty tiles | – | – |
 
-- [ ] **Step 1: Failing tests** (excerpt — write all of these):
+- [x] **Step 1: Failing tests** (excerpt — write all of these):
 
 ```python
 # tests/test_widgets_slice_settings.py
@@ -211,10 +211,10 @@ def test_widgets_import_no_app_layer():
 
 Adapt `test_tile_size_editable_only_in_custom`'s visibility assertion to the widget's real layout (rows are shown for the role; the point is *disabled*, not hidden). Use the realized tile from `tile_size_for_mode` (body 50 / 0.1 = 500 px).
 
-- [ ] **Step 2:** Run → FAIL (module missing).
-- [ ] **Step 3:** Implement. Move `_TileLayoutPreview` verbatim (plus `model_input_size` from `set_model_input_size`, no literal 640). Build rows from the table; constrained → `setEnabled(False)` + tooltip "Derived from <source>; check Override to edit" (or "Editable in Custom tile size"). Badges: a small `QLabel` per derived row with the source word, styled muted. Advanced fields in a collapsible `QToolButton`-toggled frame, collapsed by default. All programmatic setters block signals; user edits emit `changed`.
-- [ ] **Step 4:** Run both new files → PASS.
-- [ ] **Step 5:** Commit `feat(widgets): shared SAHI settings widget with roles, badges, contract ranges`.
+- [x] **Step 2:** Run → FAIL (module missing).
+- [x] **Step 3:** Implement. Move `_TileLayoutPreview` verbatim (plus `model_input_size` from `set_model_input_size`, no literal 640). Build rows from the table; constrained → `setEnabled(False)` + tooltip "Derived from <source>; check Override to edit" (or "Editable in Custom tile size"). Badges: a small `QLabel` per derived row with the source word, styled muted. Advanced fields in a collapsible `QToolButton`-toggled frame, collapsed by default. All programmatic setters block signals; user edits emit `changed`.
+- [x] **Step 4:** Run both new files → PASS.
+- [x] **Step 5:** Commit `feat(widgets): shared SAHI settings widget with roles, badges, contract ranges`.
 
 ### Task 16: DetectKit training + inference hosts adopt the widget
 
@@ -224,11 +224,11 @@ Adapt `test_tile_size_editable_only_in_custom`'s visibility assertion to the wid
 - Modify: `src/hydra_suite/detectkit/gui/dialogs/inference_settings.py` — its SAHI group becomes `SliceSettingsWidget(role="infer_yolo")`; `settings()`/`load_from()` contracts unchanged
 - Update tests that reference old attribute names: `tests/test_detectkit_slice_ui.py`, `tests/test_sam3_slice_settings_shared.py`, `tests/test_detectkit_inference_settings.py`, `tests/test_detectkit_training_dialog.py` (only name changes `cmb_mode`→`combo_slice_geometry` via `findData`, `txt_targets`→`txt_slice_scales`, `spin_w/h`→`spin_slice_tile_w/h`, `spin_overlap`→`spin_slice_overlap`, `spin_object_fraction`→`spin_slice_object_fraction`, `_rows` label lookups → widget accessors; and the `QHBoxLayout` assertion if the outer layout changes). Behavioral assertions stay.
 
-- [ ] **Step 1:** Write `tests/test_detectkit_slice_adapter.py`: round-trip every `SliceTrainingSettings` field and every `to_sam3_tiling` key through the adapter (property-style over a few hand cases incl. legacy pixel-only settings and multi-scale sets); `spec_to_sam3_tiling` emits exactly `set(Sam3LoraParams fields) ∩ tiling keys` as today; F5: `spin_slice_overlap` max 0.9 in the SAM3 panel and `to_sam3_tiling()["tile_overlap"] < 1`.
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement adapter + host swaps.
-- [ ] **Step 4:** Run the new test + the four updated files + `tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_dialog_wiring.py tests/test_detectkit_fraction_only_settings.py tests/test_detectkit_preview_tiling.py` → PASS.
-- [ ] **Step 5:** Commit `refactor(detectkit): training and inference hosts use the shared SAHI widget`.
+- [x] **Step 1:** Write `tests/test_detectkit_slice_adapter.py`: round-trip every `SliceTrainingSettings` field and every `to_sam3_tiling` key through the adapter (property-style over a few hand cases incl. legacy pixel-only settings and multi-scale sets); `spec_to_sam3_tiling` emits exactly `set(Sam3LoraParams fields) ∩ tiling keys` as today; F5: `spin_slice_overlap` max 0.9 in the SAM3 panel and `to_sam3_tiling()["tile_overlap"] < 1`.
+- [x] **Step 2:** Run → FAIL.
+- [x] **Step 3:** Implement adapter + host swaps.
+- [x] **Step 4:** Run the new test + the four updated files + `tests/test_sam3_gui_cli_training_parity.py tests/test_sam3_dialog_wiring.py tests/test_detectkit_fraction_only_settings.py tests/test_detectkit_preview_tiling.py` → PASS.
+- [x] **Step 5:** Commit `refactor(detectkit): training and inference hosts use the shared SAHI widget`.
 
 ### Task 17: Escalation dialogs adopt the widget's tiling rows
 
@@ -237,11 +237,11 @@ Adapt `test_tile_size_editable_only_in_custom`'s visibility assertion to the wid
 - Modify: `src/hydra_suite/detectkit/gui/dialogs/escalate_sam2_dialog.py` — same with `role="escalate_sam2"`; `tiling_parameters()` unchanged
 - Update only grid-position assertions in `tests/test_semantic_escalation_dialog_persistence.py:201-230` if the layout moves; text/value assertions stay
 
-- [ ] **Step 1:** Write `tests/test_escalation_dialogs_use_shared_widget.py`: each dialog contains exactly one `SliceSettingsWidget` with the right role; `parameters()` key set equals `SemanticEscalationRequest` tiling+run fields used today (compare to the set captured from main before the change — paste it as a literal); `tiling_parameters()` keys == `{"reference_body_px", "tile_fraction", "overlap"}`; the body row shows a source badge (`dataset` when seeded from the project, `stamped` after `prefill_from_sidecar`).
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the new test + `tests/test_semantic_escalation_dialog_persistence.py tests/test_detectkit_sam2_escalation_wiring.py tests/test_sam3_model_selection.py tests/test_geometry_review_fixes.py tests/test_escalate_sam2_dialog.py tests/test_semantic_default_tiling.py` → PASS.
-- [ ] **Step 5:** Commit `refactor(detectkit): escalation dialogs use the shared SAHI widget rows`.
+- [x] **Step 1:** Write `tests/test_escalation_dialogs_use_shared_widget.py`: each dialog contains exactly one `SliceSettingsWidget` with the right role; `parameters()` key set equals `SemanticEscalationRequest` tiling+run fields used today (compare to the set captured from main before the change — paste it as a literal); `tiling_parameters()` keys == `{"reference_body_px", "tile_fraction", "overlap"}`; the body row shows a source badge (`dataset` when seeded from the project, `stamped` after `prefill_from_sidecar`).
+- [x] **Step 2:** Run → FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Run the new test + `tests/test_semantic_escalation_dialog_persistence.py tests/test_detectkit_sam2_escalation_wiring.py tests/test_sam3_model_selection.py tests/test_geometry_review_fixes.py tests/test_escalate_sam2_dialog.py tests/test_semantic_default_tiling.py` → PASS.
+- [x] **Step 5:** Commit `refactor(detectkit): escalation dialogs use the shared SAHI widget rows`.
 
 ### Task 18: TrackerKit detection panel adopts the widget
 
@@ -250,11 +250,11 @@ Adapt `test_tile_size_editable_only_in_custom`'s visibility assertion to the wid
 - Modify: `src/hydra_suite/trackerkit/gui/orchestrators/config.py:455,501,1771` — `combo_slice_geometry.currentText()`/`setCurrentText()` → `currentData()`/`setCurrentIndex(findData(...))`; grep `combo_slice_geometry` across `src/` and fix every reader
 - Update: `tests/test_detection_panel_slice_widgets.py:21-27` (items now asserted via `itemData`), visibility tests (`isHidden` → `isEnabled` where the field is now constrained-but-visible), `tests/test_trackerkit_profile_session.py:214` and any `currentText()` geometry assertion → `currentData()`
 
-- [ ] **Step 1:** Write `tests/test_trackerkit_sahi_widget_persistence.py`: build a main window via `tests/test_main_window_config_persistence._make_main_window`; set each geometry mode; save the config dict; assert `slice_geometry_mode` is the enum; reload a config with each enum and assert the combo's `currentData()`; assert `get_parameters_dict()` SLICE_* keys equal those from main for the same config (capture main's values as literals first, on the unmodified tree).
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement. Execution knobs (tiles per call, memory, admission label) live in the widget's Advanced section for `infer_yolo`; the panel keeps `_update_slice_batch_admission_label` wired to them.
-- [ ] **Step 4:** Run the new test + `tests/test_detection_panel_slice_widgets.py tests/test_trackerkit_slice_meta_prefill.py tests/test_trackerkit_profile_session.py tests/test_gui_cli_profile_parity.py tests/test_main_window_config_persistence.py tests/test_engine_params_slice_profile.py tests/test_get_parameters_dict_characterization.py tests/test_trackerkit_preview_worker.py` → PASS (the characterization golden fails on main for DATASET_* keys only — confirm no SLICE_* key differs).
-- [ ] **Step 5:** Commit `refactor(trackerkit): detection panel uses the shared SAHI widget`.
+- [x] **Step 1:** Write `tests/test_trackerkit_sahi_widget_persistence.py`: build a main window via `tests/test_main_window_config_persistence._make_main_window`; set each geometry mode; save the config dict; assert `slice_geometry_mode` is the enum; reload a config with each enum and assert the combo's `currentData()`; assert `get_parameters_dict()` SLICE_* keys equal those from main for the same config (capture main's values as literals first, on the unmodified tree).
+- [x] **Step 2:** Run → FAIL.
+- [x] **Step 3:** Implement. Execution knobs (tiles per call, memory, admission label) live in the widget's Advanced section for `infer_yolo`; the panel keeps `_update_slice_batch_admission_label` wired to them.
+- [x] **Step 4:** Run the new test + `tests/test_detection_panel_slice_widgets.py tests/test_trackerkit_slice_meta_prefill.py tests/test_trackerkit_profile_session.py tests/test_gui_cli_profile_parity.py tests/test_main_window_config_persistence.py tests/test_engine_params_slice_profile.py tests/test_get_parameters_dict_characterization.py tests/test_trackerkit_preview_worker.py` → PASS (the characterization golden fails on main for DATASET_* keys only — confirm no SLICE_* key differs).
+- [x] **Step 5:** Commit `refactor(trackerkit): detection panel uses the shared SAHI widget`.
 
 ### Task 19: Visual gallery
 
@@ -262,13 +262,13 @@ Adapt `test_tile_size_editable_only_in_custom`'s visibility assertion to the wid
 - Create: `tools/sahi_widget_gallery.py` — renders, offscreen, PNGs into an output dir: (a) the bare widget for every role with representative state (derived badges visible, Advanced collapsed and expanded); (b) the REAL hosts at their natural size: TrackerKit main window on the "Find Animals" tab, YOLO direct mode, SAHI on, with a model sidecar carrying two profiles (recipe: `tests/test_main_window_config_persistence._make_main_window`, `_show_workspace()`, `tabs.setCurrentWidget(_detection_panel)`, `combo_detection_method.setCurrentIndex(1)`, `combo_yolo_obb_mode.setCurrentIndex(0)`, `chk_slice_enabled.setChecked(True)`, `apply_slice_meta_for_model(path)`), DetectKit `TrainingDialog` (overview page), `Sam3TrainingPanel`, `InferenceSettingsDialog`, `SemanticEscalationDialog`, `EscalateSam2Dialog` (constructors per `tests/` fixtures; hermetic `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` in a temp dir).
 - Test: `tests/test_sahi_widget_gallery.py` — runs the tool into `tmp_path` and asserts one non-empty PNG per expected name.
 
-- [ ] **Step 1:** Write the test (expects files `role_<role>.png`, `role_<role>_advanced.png`, `host_trackerkit.png`, `host_detectkit_training.png`, `host_sam3_training.png`, `host_inference_settings.png`, `host_sam3_escalation.png`, `host_sam2_escalation.png`).
-- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement with `widget.grab().save(path)`; `QApplication.processEvents()` before grabbing; set a fixed window size per host. **Step 4:** PASS.
-- [ ] **Step 5:** Generate the gallery into `docs/superpowers/assets/sahi-unification/` and LOOK at every PNG (Read tool). Fix clipped/overlapping layout, missing badges, wrong enablement; regenerate. Commit tool + test + PNGs: `docs(sahi): visual gallery of the shared widget in every host`.
+- [x] **Step 1:** Write the test (expects files `role_<role>.png`, `role_<role>_advanced.png`, `host_trackerkit.png`, `host_detectkit_training.png`, `host_sam3_training.png`, `host_inference_settings.png`, `host_sam3_escalation.png`, `host_sam2_escalation.png`).
+- [x] **Step 2:** Run → FAIL. **Step 3:** Implement with `widget.grab().save(path)`; `QApplication.processEvents()` before grabbing; set a fixed window size per host. **Step 4:** PASS.
+- [x] **Step 5:** Generate the gallery into `docs/superpowers/assets/sahi-unification/` and LOOK at every PNG (Read tool). Fix clipped/overlapping layout, missing badges, wrong enablement; regenerate. Commit tool + test + PNGs: `docs(sahi): visual gallery of the shared widget in every host`.
 
 ### Task 20: S4 gate
 
-- [ ] **Step 1:** Regression: every test file named in Tasks 15–19 + `tests/test_tiling_*.py tests/test_slice_*.py tests/test_detectkit_*.py tests/test_sam3_*.py tests/test_trackerkit_*.py tests/test_core_import_is_light.py`; `make lint`; compare failure sets to main.
-- [ ] **Step 2:** Equivalence MPS full matrix (`WT=$PWD` main checkout for harness+fixtures, `WT_SRC` = worktree src) — TrackerKit persistence changed, so all clips. CUDA on diptera per S3 deviation 20 (or mehek if back online).
-- [ ] **Step 3:** Adversarial review (Fable): execute the gallery and the hosts; try to break round-trips (save/reload in both kits, profile switching to Custom, derived→override→back, role-hidden fields leaking values), widget layering, and GUI/CLI parity (`tests/test_gui_cli_profile_parity.py` semantics). Plus a normal reviewer. Fix wave; re-review if the fix exceeds the reported lines.
-- [ ] **Step 4:** Present the gallery PNGs to the user for visual confirmation (SendUserFile), then merge `--no-ff`.
+- [x] **Step 1:** Regression: every test file named in Tasks 15–19 + `tests/test_tiling_*.py tests/test_slice_*.py tests/test_detectkit_*.py tests/test_sam3_*.py tests/test_trackerkit_*.py tests/test_core_import_is_light.py`; `make lint`; compare failure sets to main.
+- [x] **Step 2:** Equivalence MPS full matrix (`WT=$PWD` main checkout for harness+fixtures, `WT_SRC` = worktree src) — TrackerKit persistence changed, so all clips. CUDA on diptera per S3 deviation 20 (or mehek if back online).
+- [x] **Step 3:** Adversarial review (Fable): execute the gallery and the hosts; try to break round-trips (save/reload in both kits, profile switching to Custom, derived→override→back, role-hidden fields leaking values), widget layering, and GUI/CLI parity (`tests/test_gui_cli_profile_parity.py` semantics). Plus a normal reviewer. Fix wave; re-review if the fix exceeds the reported lines.
+- [x] **Step 4:** Present the gallery PNGs to the user for visual confirmation (SendUserFile), then merge `--no-ff`.

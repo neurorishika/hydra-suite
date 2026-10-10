@@ -24,7 +24,9 @@ trackerkit track --video-list batch.txt --keystone-override
 Keystone rules: the first video's config is the baseline. Later videos use
 their own `<stem>_config.json` when present, otherwise the baseline.
 `--keystone-override` (or an explicit `--config` on a multi-video batch)
-forces the baseline onto every video. `--sahi-profile` applies to all.
+forces the baseline onto every video. `--sahi-profile` applies to all (see
+[SAHI calibration profiles](detectkit-sahi-calibration.md) and
+[SAHI Settings](sahi-settings.md)).
 
 Side-output retargeting: a video's own `<stem>_config.json` is used verbatim,
 including whatever `video_output_path` it names. A video that inherits the

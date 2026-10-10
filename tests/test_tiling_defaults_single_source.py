@@ -52,13 +52,31 @@ def test_training_scalar_overlap_and_imgsz_defaults_are_named_constants():
     from hydra_suite.training.sliced_dataset import SliceBuildParams
     from hydra_suite.utils.tiling_spec import (
         DEFAULT_TRAIN_OBJECT_TILE_FRACTION,
+        DEFAULT_TRAIN_OVERLAP,
         DEFAULT_YOLO_IMGSZ,
     )
 
     assert DEFAULT_TRAIN_OBJECT_TILE_FRACTION == 0.10 and DEFAULT_YOLO_IMGSZ == 640
     for cls in (SliceTrainingSettings, SliceTrainingConfig, SliceBuildParams):
         assert cls().object_tile_fraction == DEFAULT_TRAIN_OBJECT_TILE_FRACTION
-        assert cls().overlap == DEFAULT_OVERLAP
+        assert cls().overlap == DEFAULT_TRAIN_OVERLAP
     params = SliceBuildParams()
     assert params.imgsz == DEFAULT_YOLO_IMGSZ
     assert list(params.target_sizes) == [32.0, 64.0, 96.0, 128.0]
+
+
+def test_training_overlap_default_is_the_default_sets_whole_animal_minimum():
+    """User decision 2026-10-10: new YOLO training projects start at the
+    whole-animal minimum of the default scale set (0.20 + margin = 0.25);
+    TrackerKit's serving overlap default stays 0.2 (byte-identical tracking)."""
+    from hydra_suite.utils.tiling_resolve import resolve_overlap
+    from hydra_suite.utils.tiling_spec import DEFAULT_TRAIN_OVERLAP
+
+    assert DEFAULT_TRAIN_OVERLAP == 0.25
+    expected = resolve_overlap(
+        fractions=BACKEND_DEFAULTS["yolo_train"].object_tile_fractions
+    )
+    assert expected.value == DEFAULT_TRAIN_OVERLAP
+    assert SliceConfig().overlap_width_ratio == DEFAULT_OVERLAP == 0.2
+    # Saved projects keep their stored overlap.
+    assert SliceTrainingSettings.from_dict({"overlap": 0.2}).overlap == 0.2

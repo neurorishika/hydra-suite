@@ -39,7 +39,7 @@ def test_runtime_inference_settings_snapshot_does_not_mutate_project(tmp_path):
     runtime.slice_settings.overlap = 0.35
 
     assert project.slice_settings.target_sizes == [200.0, 300.0, 400.0]
-    assert project.slice_settings.overlap == 0.2
+    assert project.slice_settings.overlap == SliceTrainingSettings().overlap
     assert runtime.device == "mps"
     assert runtime.confidence_threshold == 0.72
 
