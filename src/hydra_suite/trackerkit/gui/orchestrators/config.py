@@ -44,6 +44,10 @@ from hydra_suite.core.inference.model_paths import (
     remove_model_from_repository,
 )
 from hydra_suite.core.inference.slice_meta import profile_summary, read_slice_meta
+from hydra_suite.core.post.video_output_scale import (
+    DEFAULT_VIDEO_OUTPUT_SCALE,
+    validate_video_output_scale,
+)
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.engine_params import (
     RuntimeContext,
@@ -1111,6 +1115,14 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_arrow_length.setValue(
             get_cfg("video_arrow_length", default=0.7)
         )
+        raw_scale = get_cfg("video_output_scale", default=DEFAULT_VIDEO_OUTPUT_SCALE)
+        try:
+            scale = validate_video_output_scale(raw_scale)
+        except ValueError as exc:
+            # Never let the spinbox clamp it quietly; keep the default and say so.
+            logger.error("%s -- keeping %.2f", exc, DEFAULT_VIDEO_OUTPUT_SCALE)
+            scale = DEFAULT_VIDEO_OUTPUT_SCALE
+        self._panels.postprocess.spin_video_output_scale.setValue(scale)
         self._panels.postprocess.check_video_show_pose.setChecked(
             get_cfg(
                 "video_show_pose",
@@ -1982,6 +1994,7 @@ class ConfigOrchestrator:
                 "video_marker_size": self._panels.postprocess.spin_marker_size.value(),
                 "video_text_scale": self._panels.postprocess.spin_text_scale.value(),
                 "video_arrow_length": self._panels.postprocess.spin_arrow_length.value(),
+                "video_output_scale": self._panels.postprocess.spin_video_output_scale.value(),
                 "video_show_pose": self._panels.postprocess.check_video_show_pose.isChecked(),
                 "video_pose_color_mode": (
                     "track"

@@ -27,6 +27,8 @@ EXPECTED = (
         "host_sam2_escalation.png",
         "host_trackerkit.png",
         "host_trackerkit_custom.png",
+        "host_trackerkit_auto_model.png",
+        "host_trackerkit_off.png",
     ]
 )
 

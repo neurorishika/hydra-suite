@@ -195,6 +195,7 @@ def _cmd_pack(args) -> int:
         explicit_config_path=args.config,
         keystone_override=bool(args.keystone_override),
         sahi_profile=args.sahi_profile,
+        video_scale=getattr(args, "video_scale", None),
         apply_tuned_inference=args.apply_tuned_inference,
         inference_autotune_manual=list(args.inference_autotune_manual or []),
     )

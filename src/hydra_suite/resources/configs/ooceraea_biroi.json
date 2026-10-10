@@ -138,6 +138,7 @@
   "video_marker_size": 0.1,
   "video_text_scale": 3.0,
   "video_arrow_length": 0.5,
+  "video_output_scale": 0.5,
   "video_show_pose": true,
   "video_pose_color_mode": "track",
   "video_pose_color": [

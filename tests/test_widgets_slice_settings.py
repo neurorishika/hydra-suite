@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+from dataclasses import replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -151,13 +153,18 @@ def test_tile_size_editable_only_in_custom():
     assert w.source_badge("tile_size") == "user"
 
 
-def test_disabling_tiling_disables_the_rest():
+def test_disabling_tiling_hides_the_rest():
+    """S6: SAHI off collapses the block to its Enable checkbox (was: the
+    rows stayed visible but disabled)."""
     w = SliceSettingsWidget(role="infer_yolo")
     w.set_spec(TilingSpec(enabled=False))
-    assert not w.combo_slice_geometry.isEnabled()
-    assert not w.spin_slice_overlap.isEnabled()
+    assert not w.combo_slice_geometry.isVisibleTo(w)
+    assert not w.spin_slice_overlap.isVisibleTo(w)
+    assert w.chk_slice_enabled.isVisibleTo(w)
     w.chk_slice_enabled.setChecked(True)
+    assert w.combo_slice_geometry.isVisibleTo(w)
     assert w.combo_slice_geometry.isEnabled()
+    assert w.spin_slice_overlap.isVisibleTo(w)
     assert w.spin_slice_overlap.isEnabled()
 
 
@@ -237,6 +244,7 @@ def test_merge_threshold_row_can_be_left_to_the_profile():
         advanced_merge=False, merge_threshold_row=False, execution_knobs=True
     )
     w = SliceSettingsWidget(role="infer_yolo", capabilities=caps)
+    w.chk_slice_enabled.setChecked(True)  # S6: SAHI off hides every row
     w.set_advanced_expanded(True)
     assert w.spin_slice_merge.isHidden()
     assert "merge_threshold" not in w.extras()
@@ -244,6 +252,7 @@ def test_merge_threshold_row_can_be_left_to_the_profile():
     default = SliceSettingsWidget(
         role="infer_yolo", capabilities=SliceWidgetCapabilities(advanced_merge=False)
     )
+    default.chk_slice_enabled.setChecked(True)
     default.set_advanced_expanded(True)
     assert not default.spin_slice_merge.isHidden()
     assert "merge_threshold" in default.extras()
@@ -385,6 +394,7 @@ def test_saved_nmm_shows_greedy_nmm_and_keeps_the_raw_value():
 
 def test_advanced_is_collapsed_by_default():
     w = SliceSettingsWidget(role="train_yolo")
+    w.chk_slice_enabled.setChecked(True)  # S6: SAHI off hides every row
     w.show()
     QApplication.processEvents()
     assert not w.btn_slice_advanced.isChecked()
@@ -672,15 +682,24 @@ def test_preview_caption_elides_at_word_boundaries():
             assert stem == "" or text[len(stem)] == " "
 
 
-def test_profile_combo_stays_enabled_while_tiling_is_off():
-    """Review MAJOR-1: profiles own `enabled`; picking one from a SAHI-off
-    state applies it and turns SAHI on, so the picker must stay usable."""
+def test_profile_row_hides_while_tiling_is_off_but_stays_programmable():
+    """S6 (was review MAJOR-1's "picker stays enabled while off"): the
+    profile row hides with the rest while SAHI is off -- the user path is
+    now "tick Enable, then pick" -- but the combo itself stays enabled, so a
+    host (or a restore) can still drive it programmatically."""
     w = SliceSettingsWidget(role="infer_yolo")
     w.combo_slice_profile.addItems(["Training geometry", "Fast scan"])
     w.set_profile_row_visible(True)
     w.chk_slice_enabled.setChecked(False)
+    assert not w.combo_slice_profile.isVisibleTo(w)
     assert w.combo_slice_profile.isEnabled()
-    assert not w.combo_slice_geometry.isEnabled()
+    seen = []
+    w.combo_slice_profile.currentIndexChanged.connect(seen.append)
+    w.combo_slice_profile.setCurrentIndex(1)
+    assert seen == [1]
+    w.chk_slice_enabled.setChecked(True)
+    assert w.combo_slice_profile.isVisibleTo(w)
+    assert w.combo_slice_profile.currentIndex() == 1
 
 
 def test_measured_overlap_below_the_minimum_is_info_not_a_warning():
@@ -753,3 +772,487 @@ def test_profile_overlap_claim_cleared_by_geometry_or_scale_edits():
             w.spin_slice_object_fraction.setValue(0.33)
         assert w.source_badge("overlap") == "user", edit
         assert "set by profile" not in w.lbl_slice_overlap_minimum.text(), edit
+
+
+# ------------------------------------------------- S6: preview position
+
+
+def _settle(widget) -> None:
+    """Drop every cached layout minimum, then re-measure leaf-first."""
+    from PySide6.QtWidgets import QLayout
+
+    app = QApplication.instance()
+    for _ in range(3):
+        app.processEvents()
+    layouts = widget.findChildren(QLayout)
+    for layout in layouts:
+        layout.invalidate()
+    for layout in reversed(layouts):
+        layout.activate()
+    if widget.layout() is not None:
+        widget.layout().invalidate()
+        widget.layout().activate()
+
+
+def _bottom_widget(**caps):
+    return SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(preview_position="bottom", **caps),
+    )
+
+
+def test_preview_position_defaults_to_side():
+    w = SliceSettingsWidget(role="infer_yolo")
+    assert w.capabilities.preview_position == "side"
+    w.set_spec(TilingSpec(enabled=True))
+    w.resize(900, 500)
+    w.show()
+    _settle(w)
+    assert w.preview.isVisibleTo(w)
+    assert w.preview.geometry().left() > w._controls.geometry().right()
+    w.hide()
+
+
+def test_unknown_preview_position_is_rejected():
+    with pytest.raises(ValueError):
+        SliceSettingsWidget(
+            role="infer_yolo",
+            capabilities=SliceWidgetCapabilities(preview_position="left"),
+        )
+
+
+def test_bottom_preview_sits_below_the_controls_and_spans_them():
+    w = _bottom_widget()
+    w.set_spec(TilingSpec(enabled=True))
+    w.resize(520, 900)
+    w.show()
+    _settle(w)
+    assert w.preview.isVisibleTo(w)
+    assert w.preview.geometry().top() > w._controls.geometry().bottom()
+    # Scales to the available width (not a fixed 290 px box).
+    assert w.preview.width() >= w.width() - 40
+    w.hide()
+
+
+def test_bottom_preview_height_follows_width_and_frame_aspect():
+    w = _bottom_widget()
+    preview = w.preview
+    assert preview.hasHeightForWidth()
+    preview.set_frame_size((2000, 1000))
+    narrow, wide = preview.heightForWidth(300), preview.heightForWidth(500)
+    assert narrow < wide
+    preview.set_frame_size((1000, 2000))  # portrait: taller, but capped
+    assert preview.heightForWidth(500) > wide
+    assert preview.heightForWidth(5000) <= preview.MAX_BOTTOM_HEIGHT
+    assert preview.heightForWidth(10) >= preview.MIN_BOTTOM_HEIGHT
+
+
+def test_side_preview_keeps_its_fixed_box():
+    w = SliceSettingsWidget(role="train_yolo")
+    assert not w.preview.hasHeightForWidth()
+    assert w.preview.minimumWidth() == 290
+
+
+def test_bottom_layout_is_much_narrower_than_side_in_every_mode():
+    """The SAHI block must not force its host wide: the bottom layout's
+    minimum width stays compact in every geometry mode with Advanced open and
+    the longest derived texts showing (a profile-set overlap below the
+    minimum, a derived tile size)."""
+    side = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(execution_knobs=True),
+    )
+    bottom = _bottom_widget(execution_knobs=True)
+    for w in (side, bottom):
+        w.set_model_input_size(1024)
+        w.set_advanced_expanded(True)
+    widths = {}
+    for mode in ("auto_model", "auto_object", "custom"):
+        for w, name in ((side, "side"), (bottom, "bottom")):
+            w.set_spec(
+                TilingSpec(
+                    enabled=True,
+                    geometry_mode=mode,
+                    object_tile_fractions=(0.1,),
+                    slice_width=1024,
+                    slice_height=800,
+                    overlap=0.05,
+                )
+            )
+            w.set_reference_body(48.0, "stamped")
+            w.set_source("overlap", "profile", note="profile 'Balanced scan'")
+            w.show()
+            _settle(w)
+            widths[(name, mode)] = w.minimumSizeHint().width()
+            w.hide()
+        assert widths[("bottom", mode)] <= 460, widths
+        assert widths[("bottom", mode)] < widths[("side", mode)] - 250, widths
+
+
+def test_bottom_derived_labels_keep_full_text_and_elide_when_narrow():
+    w = _bottom_widget()
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="custom",
+            slice_width=1024,
+            slice_height=800,
+            overlap=0.05,
+        )
+    )
+    w.set_reference_body(48.0, "stamped")
+    w.set_source("overlap", "profile", note="profile 'Balanced scan'")
+    label = w.lbl_slice_overlap_minimum
+    assert label.text().startswith("below whole-animal minimum")
+    assert "profile 'Balanced scan'" in label.text()
+    # A short minimum: the full sentence never sets the host's width.
+    assert label.minimumSizeHint().width() < 120
+
+
+# ------------------------------------------------- S6: hide when off
+
+
+def _shown_rows(w) -> set[str]:
+    return {key for key, widgets in w._row_widgets.items() if not widgets[0].isHidden()}
+
+
+@pytest.mark.parametrize("role", ["infer_yolo", "train_yolo"])
+@pytest.mark.parametrize("position", ["side", "bottom"])
+def test_sahi_off_leaves_only_the_enable_checkbox(role, position):
+    w = SliceSettingsWidget(
+        role=role,
+        capabilities=SliceWidgetCapabilities(
+            preview_position=position, execution_knobs=True, full_frame_pass=True
+        ),
+    )
+    w.set_profile_row_visible(True)
+    w.set_advanced_expanded(True)
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    on_rows = _shown_rows(w)
+    assert {"enabled", "overlap", "advanced"} <= on_rows
+    assert not w.preview.isHidden()
+    w.chk_slice_enabled.setChecked(False)  # the user path
+    assert _shown_rows(w) == {"enabled"}
+    assert w.preview.isHidden()
+    assert w.btn_slice_advanced.isHidden()
+    w.chk_slice_enabled.setChecked(True)
+    assert _shown_rows(w) == on_rows
+    assert not w.preview.isHidden()
+    assert w.btn_slice_advanced.isChecked()  # Advanced stays expanded
+
+
+def test_sahi_off_via_set_spec_also_collapses():
+    w = SliceSettingsWidget(role="infer_yolo")
+    w.set_spec(TilingSpec(enabled=False))
+    assert _shown_rows(w) == {"enabled"}
+    assert w.preview.isHidden()
+
+
+@pytest.mark.parametrize("role", ["train_sam3", "escalate_sam3", "escalate_sam2"])
+def test_roles_without_the_checkbox_never_collapse(role):
+    w = SliceSettingsWidget(role=role)
+    rows = _shown_rows(w)
+    assert "enabled" not in rows
+    assert {"tile", "overlap"} <= rows
+
+
+@pytest.mark.parametrize("role", ["infer_yolo", "train_yolo"])
+def test_hide_show_round_trip_preserves_every_value_and_emits_only_enabled(role):
+    w = SliceSettingsWidget(
+        role=role,
+        capabilities=SliceWidgetCapabilities(
+            preview_position="bottom", execution_knobs=True, full_frame_pass=True
+        ),
+    )
+    w.set_model_input_size(1024)
+    spec = TilingSpec(
+        enabled=True,
+        geometry_mode="custom",
+        object_tile_fractions=(0.1, 0.2) if role == "train_yolo" else (0.1,),
+        reference_body_px=48.0,
+        slice_width=1024,
+        slice_height=800,
+        overlap=0.3,
+        merge_threshold=0.45,
+    )
+    w.set_spec(spec, extras={"tile_batch_size": 7, "memory_budget_mib": 99})
+    w.set_advanced_expanded(True)
+    before_spec, before_extras = w.spec(), w.extras()
+    emitted = []
+    w.field_changed.connect(emitted.append)
+    w.chk_slice_enabled.setChecked(False)
+    off_spec, off_extras = w.spec(), w.extras()
+    assert off_spec == replace(before_spec, enabled=False)
+    assert off_extras == before_extras
+    w.chk_slice_enabled.setChecked(True)
+    assert emitted == ["enabled", "enabled"]
+    assert w.spec() == before_spec
+    assert w.extras() == before_extras
+
+
+# ------------------------------------------- S7: compact (paired) layout
+
+
+def _compact_widget(**caps):
+    caps.setdefault("execution_knobs", True)
+    return SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            preview_position="bottom", layout="compact", **caps
+        ),
+    )
+
+
+def _grid_cell(w, widget):
+    """(row, column, row span, column span) of ``widget`` in the controls grid."""
+    index = w._grid.indexOf(widget)
+    assert index >= 0, widget  # getItemPosition(-1) returns garbage
+    return w._grid.getItemPosition(index)
+
+
+def _row_label(w, key):
+    return w._rows[key][0]
+
+
+def test_layout_defaults_to_rows_and_rejects_unknown():
+    assert SliceSettingsWidget(role="infer_yolo").capabilities.layout == "rows"
+    with pytest.raises(ValueError):
+        SliceSettingsWidget(
+            role="infer_yolo",
+            capabilities=SliceWidgetCapabilities(layout="grid"),
+        )
+
+
+def test_compact_layout_pairs_controls_on_one_grid_row():
+    w = _compact_widget()
+    w.set_profile_row_visible(True)
+    w.set_advanced_expanded(True)
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    for left, right in (
+        ("profile", "mode"),
+        ("object_fraction", "body"),
+        ("tile", "overlap"),
+        ("tile_batch", "memory"),
+    ):
+        left_row, left_col, *_ = _grid_cell(w, _row_label(w, left))
+        right_row, right_col, *_ = _grid_cell(w, _row_label(w, right))
+        assert left_row == right_row, (left, right)
+        assert left_col == 0 and right_col == 3, (left, right)
+    # Distinct pairs sit on distinct rows, in reading order.
+    rows = [
+        _grid_cell(w, _row_label(w, key))[0]
+        for key in ("profile", "object_fraction", "tile", "tile_batch")
+    ]
+    assert rows == sorted(set(rows))
+
+
+def test_compact_layout_moves_a_lone_partner_to_the_left():
+    """No profile row: the tile strategy stands alone at the left edge."""
+    w = _compact_widget()
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.set_profile_row_visible(False)
+    row, col, _rs, _cs = _grid_cell(w, _row_label(w, "mode"))
+    assert col == 0
+    assert _grid_cell(w, w.combo_slice_geometry)[1] == 1
+    assert _grid_cell(w, _row_label(w, "object_fraction"))[0] > row
+    w.set_profile_row_visible(True)
+    assert _grid_cell(w, _row_label(w, "mode"))[1] == 3
+    assert _grid_cell(w, _row_label(w, "profile"))[1] == 0
+
+
+def test_compact_layout_keeps_constrained_fields_visible_but_disabled():
+    w = _compact_widget()
+    w.set_reference_body(48.0, "stamped")
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_model"))
+    for control in (w.spin_slice_object_fraction, w.spin_slice_tile_w):
+        assert not control.isHidden() and control.isVisibleTo(w)
+        assert not control.isEnabled()
+    w.chk_slice_enabled.setChecked(False)
+    assert _shown_rows(w) == {"enabled"}
+    assert not w.lbl_slice_summary.isVisibleTo(w)
+
+
+def _summary(w) -> str:
+    return w.lbl_slice_summary.text()
+
+
+def test_compact_summary_line_per_mode():
+    w = _compact_widget()
+    w.set_model_input_size(1024)
+    w.set_reference_body(48.0, "stamped")
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.1,),
+            reference_body_px=48.0,
+            overlap=0.2,
+        )
+    )
+    w.set_reference_body(48.0, "stamped")
+    text = _summary(w)
+    assert text.startswith("→ 480 × 480 px (derived)")
+    assert "≈102 px at 1024" in text
+    # The overlap note is its own label on the same line (its colour kept).
+    assert w.lbl_slice_overlap_minimum.text() == "≥ whole-animal minimum (0.15)"
+    assert _grid_cell(w, w._summary_row)[3] == 5
+    assert w.lbl_slice_overlap_minimum.parentWidget() is w._summary_row
+    assert w.btn_slice_overlap_raise.parentWidget() is w._summary_row
+    full = w.lbl_slice_summary.toolTip()
+    assert "480 × 480 px" in full and "whole-animal minimum" in full
+
+    w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
+    w.spin_slice_tile_w.setValue(1024)
+    w.spin_slice_tile_h.setValue(800)
+    assert _summary(w).startswith("→ 1024 × 800 px")
+    assert "px at 1024" not in _summary(w)  # object scale unused
+
+    w.combo_slice_geometry.setCurrentIndex(
+        w.combo_slice_geometry.findData("auto_model")
+    )
+    assert _summary(w).startswith("→ 1024 × 1024 px (model input, derived)")
+
+
+def test_compact_below_minimum_warning_keeps_colour_and_raise_on_the_line():
+    w = _compact_widget()
+    w.set_model_input_size(1024)
+    w.set_spec(
+        TilingSpec(
+            enabled=True,
+            geometry_mode="auto_object",
+            object_tile_fractions=(0.1,),
+            overlap=0.05,
+        )
+    )
+    w.set_reference_body(48.0, "stamped")
+    label = w.lbl_slice_overlap_minimum
+    assert label.text().startswith("Below whole-animal minimum")
+    assert "#e0943a" in label.styleSheet()
+    assert not w.btn_slice_overlap_raise.isHidden()
+    # The warning never elides: the muted summary gives way first.
+    assert label.minimumWidth() >= label.fontMetrics().horizontalAdvance(label.text())
+    # A profile-set overlap stays muted info, no Raise.
+    w.set_source("overlap", "profile", note="profile 'Fast scan'")
+    assert "set by profile 'Fast scan'" in label.text()
+    assert "#8f969e" in label.styleSheet()
+    assert w.btn_slice_overlap_raise.isHidden()
+
+
+def test_compact_badges_stay_with_their_fields():
+    w = _compact_widget()
+    w.set_reference_body(48.0, "profile")
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.set_reference_body(48.0, "profile")
+    assert w.source_badge("reference_body_px") == "profile"
+    assert w.lbl_slice_body_badge.text() == "profile"
+    assert w.lbl_slice_tile_badge.text() == "derived"
+    # Body: inline after its field. Tile: its source is attached to the
+    # resolved tile size on the summary line (the half-width tile cell has
+    # no room left for a badge), never as a prefix of the whole line.
+    assert w.lbl_slice_body_badge.parentWidget() is w._rows["body"][1]
+    assert not w.lbl_slice_tile_badge.isVisibleTo(w)
+    assert re.match(r"→ \d+ × \d+ px \(derived\) ·", _summary(w)), _summary(w)
+    w.combo_slice_geometry.setCurrentIndex(w.combo_slice_geometry.findData("custom"))
+    w.set_source("tile_size", "profile")
+    assert w.lbl_slice_tile_badge.text() == "profile"
+    assert "px (profile)" in _summary(w)
+
+
+def test_compact_combos_tooltip_lead_with_the_current_item():
+    from hydra_suite.widgets.slice_settings_compact import combo_tooltip
+
+    w = _compact_widget()
+    combo = w.combo_slice_geometry
+    combo.setCurrentIndex(combo.findData("auto_model"))
+    tip = combo_tooltip(combo)
+    assert tip.startswith("Use model input size\n\n")
+    assert combo.toolTip() in tip
+    w.combo_slice_profile.addItem("A very long calibration profile name", "p")
+    assert combo_tooltip(w.combo_slice_profile).startswith(
+        "A very long calibration profile name"
+    )
+
+
+def test_compact_advanced_note_sits_under_the_advanced_pair():
+    from PySide6.QtWidgets import QLabel
+
+    w = _compact_widget()
+    note = QLabel("Up to 16 tiles/call")
+    w.set_advanced_note(note)
+    w.set_spec(TilingSpec(enabled=True))
+    w.set_advanced_expanded(True)
+    note_row, note_col, _rs, note_span = _grid_cell(w, note)
+    assert note_row > _grid_cell(w, _row_label(w, "tile_batch"))[0]
+    assert (note_col, note_span) == (0, 5)
+
+
+def test_compact_values_and_signals_match_the_rows_layout():
+    spec = TilingSpec(
+        enabled=True,
+        geometry_mode="custom",
+        object_tile_fractions=(0.1,),
+        reference_body_px=48.0,
+        slice_width=1024,
+        slice_height=800,
+        overlap=0.3,
+    )
+    extras = {"tile_batch_size": 7, "memory_budget_mib": 99}
+    rows = _bottom_widget(execution_knobs=True)
+    compact = _compact_widget()
+    for w in (rows, compact):
+        w.set_spec(spec, extras=extras)
+    assert compact.spec() == rows.spec()
+    assert compact.extras() == rows.extras()
+    emitted = []
+    compact.field_changed.connect(emitted.append)
+    compact.spin_slice_overlap.setValue(0.4)
+    compact.spin_slice_memory_budget.setValue(64)
+    assert emitted == ["overlap", "memory_budget_mib"]
+
+
+@pytest.mark.parametrize("mode", ["auto_model", "auto_object", "custom"])
+def test_compact_preview_is_shorter_with_two_caption_lines(mode):
+    w = _compact_widget()
+    w.set_spec(TilingSpec(enabled=True, geometry_mode=mode))
+    preview = w.preview
+    preview.set_frame_size((2448, 2048))
+    # One fixed, shorter height (no height-for-width to be squeezed).
+    assert not preview.hasHeightForWidth()
+    assert preview.sizeHint().height() <= 260
+    assert preview.minimumHeight() == preview.maximumHeight()
+    assert len(preview.caption_lines()) <= 2
+    # The rows layout keeps its three lines (body note on its own line).
+    rows = _bottom_widget()
+    rows.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    rows.preview.set_frame_size((2448, 2048))
+    assert len(rows.preview.caption_lines()) == 3
+
+
+@pytest.mark.parametrize("layout", ["rows", "compact"])
+def test_unplaced_notes_never_become_stray_windows(layout):
+    """Notes a layout does not place stay children of the widget and hidden
+    (a parentless label shown by the role defaults would float as its own
+    window on a real display)."""
+    w = SliceSettingsWidget(
+        role="infer_yolo",
+        capabilities=SliceWidgetCapabilities(
+            preview_position="bottom", layout=layout, execution_knobs=True
+        ),
+    )
+    w.set_spec(TilingSpec(enabled=True, geometry_mode="auto_object"))
+    w.show()
+    for label in (w.lbl_slice_scale_px, w.lbl_slice_tile_size, w.lbl_slice_summary):
+        assert w.isAncestorOf(label), label
+    if layout == "compact":
+        assert not w.lbl_slice_scale_px.isVisible()
+        assert not w.lbl_slice_tile_size.isVisible()
+    else:
+        assert not w.lbl_slice_summary.isVisible()
+    # No visible parentless widget at all besides the widget itself.
+    strays = [
+        top
+        for top in QApplication.topLevelWidgets()
+        if top.isVisible() and top is not w and top.parentWidget() is None
+    ]
+    assert strays == [], strays
+    w.hide()

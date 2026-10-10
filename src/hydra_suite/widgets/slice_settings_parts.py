@@ -10,13 +10,16 @@ import math
 from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QSpinBox,
+    QToolTip,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -27,6 +30,8 @@ from hydra_suite.utils.tiling_spec import (
     OVERLAP_MARGIN,
     OVERLAP_MAX,
 )
+
+from .tile_layout_preview import elide_at_word
 
 ROLES = ("infer_yolo", "train_yolo", "train_sam3", "escalate_sam3", "escalate_sam2")
 
@@ -149,6 +154,15 @@ class SliceWidgetCapabilities:
     ``body_display_only``: the host owns the body elsewhere and only shows it
     (TrackerKit: the model's stamp/profile); never editable, not even an
     unknown 0, and the host's source badge is kept as given.
+    ``preview_position``: ``"side"`` (default) puts the tile-layout preview
+    beside the controls; ``"bottom"`` stacks it below them, scaled to the
+    width, and puts each derived note under its control (eliding when
+    narrow) so the block never forces a narrow host panel wider (TrackerKit).
+    ``layout``: ``"rows"`` (default) gives every field its own row;
+    ``"compact"`` pairs related fields on one grid row (Profile | Tile
+    strategy, Object scale | Body size, Tile size | Overlap, Tiles per call |
+    Memory budget), folds the derived notes into one summary line under the
+    grid and shortens the bottom preview (TrackerKit).
     """
 
     body_override: bool = True
@@ -159,6 +173,8 @@ class SliceWidgetCapabilities:
     execution_knobs: bool = False
     body_display_only: bool = False
     merge_threshold_row: bool = True
+    preview_position: str = "side"
+    layout: str = "rows"
 
 
 def default_capabilities(role: str) -> SliceWidgetCapabilities:
@@ -210,8 +226,69 @@ def badge_label() -> QLabel:
     return label
 
 
-def muted_label(text: str = "") -> QLabel:
-    label = QLabel(text)
+PREVIEW_POSITIONS = ("side", "bottom")
+LAYOUTS = ("rows", "compact")
+
+# Compact layout: (left key, right key) share one grid row. A pair whose
+# left half is hidden puts the right one at the left edge.
+COMPACT_PAIRS = (
+    ("profile", "mode"),
+    ("object_fraction", "body"),
+    ("tile", "overlap"),
+    ("tile_batch", "memory"),
+)
+# Shorter labels where the compact grid's half-width columns are tight.
+COMPACT_LABELS = {
+    "overlap": "Overlap",
+    "memory": "Memory",
+}
+
+# The width an eliding note may shrink to before it stops giving way.
+ELIDING_MIN_WIDTH = 60
+
+
+class ElidingLabel(QLabel):
+    """A one-line label that elides at a word boundary instead of widening.
+
+    ``text()`` stays the full text; only the painting is shortened, and the
+    full text is prepended to the tooltip while it is elided. Its minimum
+    width is small, so a long derived note never sets the host's width.
+    """
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), ELIDING_MIN_WIDTH), hint.height())
+
+    def _shown_text(self) -> str:
+        return elide_at_word(
+            self.text(), self.fontMetrics(), self.contentsRect().width()
+        )
+
+    def is_elided(self) -> bool:
+        return self._shown_text() != self.text()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
+        painter = QPainter(self)
+        self.style().drawItemText(
+            painter,
+            self.contentsRect(),
+            int(self.alignment()),
+            self.palette(),
+            self.isEnabled(),
+            self._shown_text(),
+            self.foregroundRole(),
+        )
+
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.ToolTip and self.is_elided():
+            tip = self.text() + (f"\n\n{self.toolTip()}" if self.toolTip() else "")
+            QToolTip.showText(event.globalPos(), tip, self)
+            return True
+        return super().event(event)
+
+
+def muted_label(text: str = "", *, eliding: bool = False) -> QLabel:
+    label = (ElidingLabel if eliding else QLabel)(text)
     label.setStyleSheet("color: #8f969e;")
     return label
 
@@ -229,12 +306,25 @@ def hbox(*widgets, stretch: bool = True) -> QWidget:
     return holder
 
 
+def stacked(top: QWidget, note: QWidget) -> QWidget:
+    """A control line with its derived note on a second line beneath it."""
+    holder = QWidget()
+    layout = QVBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(2)
+    layout.addWidget(top)
+    layout.addWidget(note)
+    return holder
+
+
 def set_badge(label: QLabel, source: str) -> None:
     label.setText(source)
     label.setToolTip(f"Source: {SOURCE_DESCRIPTIONS.get(source, source)}.")
 
 
-def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
+def widget_stylesheet(
+    text_color: str | None, *, bare: bool, compact: bool = False
+) -> str:
     """Widget-scoped styling that reads correctly under any host theme.
 
     Constrained controls must LOOK disabled even where the host theme styles
@@ -251,6 +341,10 @@ def widget_stylesheet(text_color: str | None, *, bare: bool) -> str:
     )
     if bare:
         style += " QGroupBox { border: 0; margin-top: 0; padding: 0; }"
+    if compact:
+        # Two fields share a row: a host theme's input min-width (TrackerKit
+        # sets 100 px) must not force the paired grid wider than its panel.
+        style += " QAbstractSpinBox, QComboBox { min-width: 54px; }"
     return style
 
 

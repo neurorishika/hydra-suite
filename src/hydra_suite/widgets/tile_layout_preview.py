@@ -5,9 +5,9 @@ Shared-layer module: imports only Qt and ``utils``; never an app layer.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_YOLO_IMGSZ
@@ -33,9 +33,21 @@ class _TileLayoutPreview(QWidget):
 
     _FALLBACK_FRAME_WH = (1920, 1080)
     _SCALE_COLORS = ("#00a6d6", "#d16dff", "#f2a900", "#65c466", "#ff6b6b")
+    # Painted chrome: title band above the frame, three caption lines below.
+    _MARGIN, _TOP, _CAPTIONS = 12, 26, 73
+    # Below the controls (preview_position="bottom") the preview follows the
+    # host's width at the frame's aspect, within these heights.
+    MIN_BOTTOM_HEIGHT = 200
+    MAX_BOTTOM_HEIGHT = 380
+    MIN_BOTTOM_WIDTH = 240
+    # Compact hosts (layout="compact"): shorter, two caption lines.
+    MAX_COMPACT_HEIGHT = 260
+    _COMPACT_CAPTIONS = 56
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._bottom = False
+        self._compact = False
         self.setMinimumSize(290, 180)
         self.setToolTip(
             "A live schematic of the tile grid over a representative labelled source "
@@ -62,6 +74,71 @@ class _TileLayoutPreview(QWidget):
         # measured from labels (inference) replace it via set_body_notes.
         self._measured_note = "uses last label measurement"
         self._unmeasured_note = "illustrative until labels are measured"
+
+    def set_bottom_layout(self, bottom: bool, *, compact: bool = False) -> None:
+        """Below the controls: full host width, height from the frame aspect.
+
+        ``compact`` (a ``layout="compact"`` host) uses one fixed, lower
+        height (no height-for-width: at a side panel's width the aspect
+        height always exceeds the cap, and a fixed height cannot be squeezed
+        by hosts that size scroll pages from minimum heights) and paints the
+        captions on two lines instead of three.
+        """
+        self._bottom = bool(bottom)
+        self._compact = bool(bottom and compact)
+        if self._compact:
+            self.setSizePolicy(
+                QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            )
+            self.setMinimumWidth(self.MIN_BOTTOM_WIDTH)
+            self.setFixedHeight(self.MAX_COMPACT_HEIGHT)
+        elif self._bottom:
+            policy = QSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            policy.setHeightForWidth(True)
+            self.setSizePolicy(policy)
+            self.setMinimumSize(self.MIN_BOTTOM_WIDTH, self.MIN_BOTTOM_HEIGHT)
+        else:
+            self.setSizePolicy(
+                QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            )
+            self.setMinimumSize(290, 180)
+        self.updateGeometry()
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt override
+        return self._bottom and not self._compact
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt override
+        if not self._bottom:
+            return super().heightForWidth(width)
+        frame_w, frame_h = self._frame_wh
+        drawable = max(1, width - 2 * self._MARGIN)
+        height = (
+            self._TOP + self._captions_height() + round(drawable * frame_h / frame_w)
+        )
+        ceiling = self.MAX_COMPACT_HEIGHT if self._compact else self.MAX_BOTTOM_HEIGHT
+        return max(self.MIN_BOTTOM_HEIGHT, min(height, ceiling))
+
+    def _captions_height(self) -> int:
+        return self._COMPACT_CAPTIONS if self._compact else self._CAPTIONS
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt override
+        if not self._bottom:
+            return super().sizeHint()
+        if self._compact:
+            return QSize(480, self.MAX_COMPACT_HEIGHT)
+        return QSize(480, self.heightForWidth(480))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        # Fallback for host layouts that do not propagate height-for-width
+        # (stacked pages in a scroll area): pin the minimum height to the
+        # width-derived one. Stable: the height depends only on the width.
+        super().resizeEvent(event)
+        if self._bottom and not self._compact:
+            wanted = self.heightForWidth(self.width())
+            if self.minimumHeight() != wanted:
+                self.setMinimumHeight(wanted)
 
     def set_body_notes(self, measured: str, unmeasured: str) -> None:
         """Set the caption shown with a known / unknown reference body size."""
@@ -118,13 +195,20 @@ class _TileLayoutPreview(QWidget):
             )
             width, height, _count = self._frame_options[self._frame_index]
             self._frame_wh = (width, height)
+        self._aspect_changed()
         self.update()
+
+    def _aspect_changed(self) -> None:
+        if self._bottom and not self._compact:
+            self.setMinimumHeight(self.heightForWidth(max(1, self.width())))
+            self.updateGeometry()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt override
         if event.button() == Qt.MouseButton.LeftButton and len(self._frame_options) > 1:
             self._frame_index = (self._frame_index + 1) % len(self._frame_options)
             width, height, _count = self._frame_options[self._frame_index]
             self._frame_wh = (width, height)
+            self._aspect_changed()
             self.update()
             event.accept()
             return
@@ -190,9 +274,9 @@ class _TileLayoutPreview(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor("#202020"))
 
-        margin, top = 12, 26
+        margin, top = self._MARGIN, self._TOP
         available_w = max(1, self.width() - 2 * margin)
-        available_h = max(1, self.height() - top - 73)  # 3 caption lines
+        available_h = max(1, self.height() - top - self._captions_height())
         scale = min(available_w / self._frame_wh[0], available_h / self._frame_wh[1])
         draw_w, draw_h = int(self._frame_wh[0] * scale), int(self._frame_wh[1] * scale)
         x = (self.width() - draw_w) // 2
@@ -241,19 +325,30 @@ class _TileLayoutPreview(QWidget):
                 max(1, round(other_h * scale)),
             )
 
-        title, tile_line, note_line, scales_line = self.caption_texts(len(tiles))
+        title = self.caption_texts(len(tiles))[0]
         metrics = QFontMetrics(painter.font())
         text_w = self.width() - 2 * margin
         painter.setPen(QColor("#f0f0f0"))
         painter.drawText(margin, 17, elide_at_word(title, metrics, text_w))
         painter.setPen(QColor("#c0c0c0"))
-        lines = [line for line in (tile_line, note_line, scales_line) if line]
+        lines = self.caption_lines(len(tiles))
         for offset, line in enumerate(reversed(lines)):
             painter.drawText(
                 margin,
                 self.height() - 17 * (offset + 1),
                 elide_at_word(line, metrics, text_w),
             )
+
+    def caption_lines(self, tile_count: int | None = None) -> list[str]:
+        """The caption lines painted below the frame (two when compact)."""
+        _title, tile_line, note_line, scales_line = self.caption_texts(tile_count)
+        if self._compact:
+            # Fold the body note onto the tile line: two lines, not three.
+            return [
+                " · ".join(line for line in (tile_line, note_line) if line),
+                scales_line,
+            ]
+        return [line for line in (tile_line, note_line, scales_line) if line]
 
     def _plan_tile_count(self, tile_w: int, tile_h: int) -> int:
         try:

@@ -38,6 +38,7 @@ from hydra_suite.core.post.trajectory_writer import (
     user_tracks_path,
     write_base_final_csv,
 )
+from hydra_suite.core.post.video_output_scale import resolve_video_output_scale
 from hydra_suite.core.tracking.errors import TrackingSessionError
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.core.tracking.session_policy import (
@@ -660,6 +661,9 @@ class TrackingSessionCore:
         output_path = str(self.config.get("video_output_path", "") or "").strip()
         if not (self.config.get("video_output_enabled", False) and output_path):
             return None
+        # Validate OUTSIDE the render swallow below: a bad scale is a config
+        # error, not a render failure.
+        resolve_video_output_scale(self.config)
         trajectories_df, loaded_path = media_export.load_video_trajectories(
             final_csv_path
         )
@@ -670,20 +674,35 @@ class TrackingSessionCore:
             )
             return None
         self.callbacks.stage_changed("annotated_video")
-        return media_export.render_annotated_video(
-            trajectories_df=trajectories_df,
-            video_path=self.video_path,
-            output_path=output_path,
-            params=self.params,
-            config=self.config,
-            progress=self.callbacks.progress,
-            should_stop=self.callbacks.should_stop,
-        )
+        try:
+            return media_export.render_annotated_video(
+                trajectories_df=trajectories_df,
+                video_path=self.video_path,
+                output_path=output_path,
+                params=self.params,
+                config=self.config,
+                progress=self.callbacks.progress,
+                should_stop=self.callbacks.should_stop,
+            )
+        except Exception as exc:
+            # The run itself is finished (CSVs written): a failed render must
+            # not turn it into a failed session -- before the threaded decoder
+            # a decode/encode failure just ended the video early. Loud, not
+            # silent: logged with traceback and surfaced as a warning.
+            logger.exception("Annotated video generation failed: %s", exc)
+            self.callbacks.warning(
+                "Annotated Video Error",
+                f"Annotated video generation failed: {exc}",
+            )
+            return None
 
     def run_post_tracking(
         self, forward_trajectories, backward_trajectories=None
     ) -> SessionResult:
         cb = self.callbacks
+        if self.config.get("video_output_enabled", False):
+            # Loud and early: not a render-time warning hours from now.
+            resolve_video_output_scale(self.config)
         try:
             with self._profiler.armed(), span(N.SESSION):
                 if cb.should_stop():

@@ -50,6 +50,20 @@ When identity or pose ran, the final CSV also gets a
 `..._with_individual.csv` sibling (e.g. `<stem>_tracking_final_with_individual.csv`)
 carrying the identity and `PoseKpt_*` columns.
 
+## Annotated video resolution
+
+```bash
+trackerkit track video.mp4 --video-scale 1.0    # full-resolution annotated video
+trackerkit track --video-list batch.txt --video-scale 0.25
+```
+
+`--video-scale` (0.1-1.0) overrides the config's `video_output_scale` for
+every video in the batch, including fanned-out GPU children and
+`trackerkit job pack`. Without it the config's value is used, and a config
+without the key renders at `0.5`. An out-of-range value -- on the command
+line or in a config -- stops the run before tracking starts. It only affects
+the final annotated video, not tracking or the CSVs.
+
 ## Parallel across GPUs
 
 ```bash

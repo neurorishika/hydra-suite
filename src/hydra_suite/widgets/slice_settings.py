@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -36,6 +37,7 @@ from hydra_suite.utils.tiling_spec import (
     TilingSpec,
 )
 
+from .slice_settings_compact import build_compact_grid, pack_compact, refresh_summary
 from .slice_settings_controls import (
     ADVANCED,
     FULL_WIDTH,
@@ -47,6 +49,8 @@ from .slice_settings_controls import (
 )
 from .slice_settings_parts import (
     ESCALATE_ROLES,
+    LAYOUTS,
+    PREVIEW_POSITIONS,
     ROLE_BACKEND,
     ROLES,
     SOURCE_DESCRIPTIONS,
@@ -83,6 +87,16 @@ class SliceSettingsWidget(QGroupBox):
         super().__init__(title or "", parent)
         self._role = role
         self._caps = capabilities or default_capabilities(role)
+        if self._caps.preview_position not in PREVIEW_POSITIONS:
+            raise ValueError(
+                f"unknown preview position: {self._caps.preview_position!r}"
+            )
+        if self._caps.layout not in LAYOUTS:
+            raise ValueError(f"unknown SAHI widget layout: {self._caps.layout!r}")
+        self._compact = self._caps.layout == "compact"
+        self._advanced_note: QWidget | None = None
+        self._packed: tuple | None = None
+        self._packed_plan: list = []
         self._base = TilingSpec.defaults(ROLE_BACKEND[role])
         self._passthrough: dict[str, Any] = {}
         self._model_input_size = DEFAULT_YOLO_IMGSZ
@@ -116,7 +130,9 @@ class SliceSettingsWidget(QGroupBox):
         theme). Tool buttons take the host's label colour, which a theme sets
         through a stylesheet the buttons themselves do not match.
         """
-        style = widget_stylesheet(text_color, bare=self._bare)
+        style = widget_stylesheet(
+            text_color, bare=self._bare, compact=self._caps.layout == "compact"
+        )
         self.setStyleSheet(style)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
@@ -132,16 +148,18 @@ class SliceSettingsWidget(QGroupBox):
     # ------------------------------------------------------------------ build
 
     def _build_layout(self, *, bare: bool) -> None:
-        outer = QHBoxLayout(self)
+        bottom = self._caps.preview_position == "bottom"
+        outer = QVBoxLayout(self) if bottom else QHBoxLayout(self)
         if bare:
             outer.setContentsMargins(0, 0, 0, 0)
         else:
             outer.setContentsMargins(14, 16, 14, 12)
-        outer.setSpacing(18)
+        outer.setSpacing(10 if bottom else 18)
         controls = QWidget()
+        self._controls = controls
         grid = QGridLayout(controls)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(10)
+        grid.setHorizontalSpacing(6 if self._compact else 10)
         grid.setVerticalSpacing(7)
         grid.setColumnStretch(1, 1)
         self._grid = grid
@@ -149,6 +167,22 @@ class SliceSettingsWidget(QGroupBox):
         # Legacy name kept for DetectKit tests: key -> (label, control).
         self._rows: dict[str, tuple[QLabel, QWidget]] = {}
         self._row_widgets: dict[str, list[QWidget]] = {}
+        if self._compact:
+            build_compact_grid(self, controls)
+        else:
+            self._build_row_grid()
+            # Only the compact layout shows the summary line.
+            self.lbl_slice_summary.setParent(controls)
+            self.lbl_slice_summary.hide()
+        outer.addWidget(controls, 0)
+        if self._role in ESCALATE_ROLES:
+            self.preview.hide()
+        else:
+            outer.addWidget(self.preview, 0 if bottom else 1)
+
+    def _build_row_grid(self) -> None:
+        """One field per grid row: label | control | badge."""
+        grid = self._grid
         for row, (key, text, control, badge) in enumerate(row_specs(self)):
             widgets: list[QWidget] = [control]
             if text is None or key in FULL_WIDTH or key == "advanced":
@@ -156,20 +190,39 @@ class SliceSettingsWidget(QGroupBox):
             else:
                 label = QLabel(text)
                 label.setToolTip(self._label_tooltip(control))
-                grid.addWidget(label, row, 0)
+                if key in self._stacked_rows:
+                    # Level with the control line, not centred on the note.
+                    top = control.layout().itemAt(0).widget()
+                    label.setMinimumHeight(top.sizeHint().height())
+                    grid.addWidget(label, row, 0, Qt.AlignmentFlag.AlignTop)
+                else:
+                    grid.addWidget(label, row, 0)
                 grid.addWidget(control, row, 1)
                 self._rows[key] = (label, control)
                 widgets.append(label)
             if badge is not None:
-                grid.addWidget(badge, row, 2)
+                if key in self._stacked_rows:
+                    badge.setMinimumHeight(label.minimumHeight())
+                    grid.addWidget(badge, row, 2, Qt.AlignmentFlag.AlignTop)
+                else:
+                    grid.addWidget(badge, row, 2)
                 widgets.append(badge)
             self._row_widgets[key] = widgets
         grid.setRowStretch(len(self._row_widgets), 1)
-        outer.addWidget(controls, 0)
-        if self._role in ESCALATE_ROLES:
-            self.preview.hide()
+
+    def set_advanced_note(self, note: QWidget) -> None:
+        """Host-owned note shown full width under the Advanced rows.
+
+        The host keeps control of its text and visibility (TrackerKit's tile
+        admission note); the widget only places it.
+        """
+        self._advanced_note = note
+        note.setParent(self._controls)
+        if self._compact:
+            self._packed = None
+            pack_compact(self)
         else:
-            outer.addWidget(self.preview, 1)
+            self._grid.addWidget(note, self._grid.rowCount(), 0, 1, 3)
 
     @staticmethod
     def _label_tooltip(control: QWidget) -> str:
@@ -236,7 +289,10 @@ class SliceSettingsWidget(QGroupBox):
                 "This backend's tiles always overlap by this constant."
             )
         self._tile_spins.setVisible(self._role not in ESCALATE_ROLES)
-        self.lbl_slice_scale_px.setVisible(self._role == "infer_yolo")
+        # Compact folds this note into the summary line (never shown alone).
+        self.lbl_slice_scale_px.setVisible(
+            self._role == "infer_yolo" and not self._compact
+        )
         # Merge policy/metric are display-only here: no S4a host persists them
         # (DetectKit reads them from the model's profile).
         self.combo_slice_merge_policy.setEnabled(False)
@@ -602,9 +658,9 @@ class SliceSettingsWidget(QGroupBox):
         derived_body = self._body_is_derived()
         body_gate = on and (role != "infer_yolo" or auto_object)
         enabled = {
-            # Profiles own `enabled`: picking one from a SAHI-off state
-            # applies it and turns SAHI on, so the picker is never gated on
-            # the checkbox (only on the row being shown).
+            # Profiles own `enabled`: the picker is never gated on the
+            # checkbox (only on the row being shown -- and the whole row
+            # hides while SAHI is off, S6), so a host can still drive it.
             self.combo_slice_profile: self._profile_row_shown,
             self.combo_slice_geometry: on,
             self.txt_slice_scales: on and auto_object,
@@ -699,6 +755,8 @@ class SliceSettingsWidget(QGroupBox):
             self._refresh_reference_note(body)
         if self._caps.fixed_overlap is None:
             refresh_overlap_minimum(self)
+        if self._compact:
+            refresh_summary(self, mode)
         if role not in ESCALATE_ROLES:
             self.preview.set_settings(
                 mode=mode,
@@ -732,10 +790,27 @@ class SliceSettingsWidget(QGroupBox):
         if row is not None:
             row[0].setToolTip(self.txt_slice_scales.toolTip())
 
+    def tiling_shown(self) -> bool:
+        """False while a role with the Enable checkbox has it unchecked.
+
+        S6: SAHI off collapses the block to that checkbox (every other row,
+        Advanced, the profile row and the preview hide; values are kept).
+        Within SAHI on, constrained fields stay visible-but-disabled.
+        """
+        if "enabled" not in self._role_rows:
+            return True
+        return self.chk_slice_enabled.isChecked()
+
     def _apply_visibility(self) -> None:
+        # The WINDOW's focus widget before hiding: only a control of ours that
+        # the collapse hides may hand focus to the checkbox; focus elsewhere
+        # in the window (another panel's field) is never touched. Read before
+        # the loop because Qt's own hide handling may already move it.
+        before = self.window().focusWidget()
         mode = self._mode()
+        shown = self.tiling_shown()
         for key, widgets in self._row_widgets.items():
-            visible = key in self._role_rows
+            visible = key in self._role_rows and (shown or key == "enabled")
             if key in ADVANCED:
                 visible = visible and self._advanced_expanded
             if key == "profile":
@@ -745,4 +820,18 @@ class SliceSettingsWidget(QGroupBox):
                 visible = visible and mode == "auto_object"
             for widget in widgets:
                 widget.setHidden(not visible)
+        if self._role not in ESCALATE_ROLES:
+            self.preview.setHidden(not shown)
+        if self._compact:
+            self._summary_row.setHidden(not shown)
+            pack_compact(self)
+        # Qt moves focus only off an explicitly hidden widget, not off one
+        # inside a hidden row holder: keyboard input must not reach a hidden
+        # control (Down on the hidden profile combo would switch profiles).
+        if (
+            before is not None
+            and self.isAncestorOf(before)
+            and not before.isVisibleTo(self)
+        ):
+            self.chk_slice_enabled.setFocus()
         self.updateGeometry()  # let host layouts re-measure (rows came/went)

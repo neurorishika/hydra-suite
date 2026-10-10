@@ -38,11 +38,20 @@ inference dialog, and "Enable sliced training + preview" in YOLO training.
 The SAM3 training and escalation hosts have no checkbox. In escalation, an
 object scale of 0 means no tiling (see below).
 
+While the checkbox is unticked, the group collapses to just the checkbox:
+every other row, the Advanced section, the profile picker and the
+tile-layout preview are hidden (in TrackerKit, so are the tile-batch note and
+the profile status line). Nothing is reset. Tick it again and every value,
+including whether Advanced was open, comes back as you left it. The DetectKit
+inference dialog shrinks and grows with the group.
+
 ### Profile
 
 The calibration profile picker: "Training geometry", each calibrated profile
 saved with the model, or "Custom". The row appears only in TrackerKit, and
-only when the selected model's sidecar contains calibration profiles. If
+only when the selected model's sidecar contains calibration profiles, and
+only while sliced inference is on: to switch to a profile, tick the Enable
+checkbox first, then pick it. If
 you edit a profile-owned value, the picker switches to `Custom (based on
 <name>)`. Derived values never cause this switch. See [SAHI calibration
 profiles](detectkit-sahi-calibration.md).
@@ -157,12 +166,37 @@ The rows under Advanced depend on the host:
 | Keep empty tiles (SAM3 training) | Keep tiles with no labelled object as negative evidence. |
 | Mix full frames (training) | Add unsliced full-frame examples so the model keeps global context. |
 | Balance multi-scale training loss / Balance strength (YOLO training) | Normalize the loss so that a scale producing more tiles cannot dominate. 0.5 gives square-root balancing and 1.0 gives exact balance. |
-| Tiles per call / Tile memory budget (TrackerKit) | Execution knobs that set how many tiles go to the detector in one call. |
+| Tiles per call / Memory (TrackerKit tile memory budget) | Execution knobs that set how many tiles go to the detector in one call. |
 
 ## Which hosts show which rows
 
-Constrained fields are **disabled, never hidden**. A row is hidden only when
-the host has no such setting.
+While sliced inference is on, constrained fields are **disabled, never
+hidden**: a row is hidden only when the host has no such setting. The one
+exception is the Enable checkbox: while it is unticked, everything but the
+checkbox is hidden (see [Enable checkbox](#enable-checkbox)).
+
+In TrackerKit the settings use a **compact layout** so they fit the side
+panel without sideways scrolling:
+
+- Related fields share a row: Profile | Tile strategy, Object scale | Body
+  size, Tile size | Overlap, and (under Advanced) Tiles per call | Memory. A
+  field whose partner is not shown (for example, no profile row) stands alone
+  at the left. The body size's source badge (`profile`, `stamped` ...) stays
+  next to its field; the tile size's source follows the resolved tile size
+  on the summary line, in brackets (`(derived)`, `(profile)` ...). Hover a
+  Profile or Tile strategy box to see the selected item's full name.
+- The derived values are one muted summary line under the fields, for
+  example `→ 480 × 480 px (derived) · ≈102 px at 1024 · ≥ whole-animal minimum (0.15)`:
+  the resolved tile size, the object's size at the model input (Fit to animal
+  size only) and the overlap check. The line shortens when the panel is narrow;
+  hover it for the full text. A below-minimum warning keeps its orange colour
+  and its **Raise to X** button on that line and is never shortened.
+- The tile-batch note sits under Tiles per call | Memory.
+- The tile-layout preview sits **below** the controls at a fixed, shorter
+  height with a two-line caption.
+
+The DetectKit dialogs keep one field per row and the preview beside the
+controls.
 
 | Row | TrackerKit | DetectKit inference | YOLO training | SAM3 training | SAM3 escalation | SAM2 escalation |
 |---|---|---|---|---|---|---|
@@ -174,8 +208,8 @@ the host has no such setting.
 | Body size | display only | editable (`user`) | note (measured at build) | note (measured at build) | Override | Override |
 | Tile size / Resolved tile | yes | yes | yes | yes | label | label |
 | Tile overlap | yes | yes | yes | yes (max 0.99) | yes | fixed 0.5 |
-| Tile-layout preview | yes | yes | yes | yes | – | – |
-| Advanced | Tiles per call, Tile memory budget | Merge threshold | Merge threshold, min area, below the floor, empty-tile fraction, mix full frames, loss balance | min area, below the floor, keep empty tiles, mix full frames | Merge IoU, Seam margin | – |
+| Tile-layout preview | below the controls (compact) | beside | beside | beside | – | – |
+| Advanced | Tiles per call, Memory (tile memory budget) | Merge threshold | Merge threshold, min area, below the floor, empty-tile fraction, mix full frames, loss balance | min area, below the floor, keep empty tiles, mix full frames | Merge IoU, Seam margin | – |
 
 TrackerKit's merge policy, metric and threshold belong to the model's
 profile, so the panel does not show them. The **Calibrate** buttons sit next

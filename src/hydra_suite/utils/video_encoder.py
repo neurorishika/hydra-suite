@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 from typing import Optional
 
@@ -59,6 +60,17 @@ def _resolve_codec(backend: str, width: int, height: int) -> str:
     if width * height > _H264_MAX_PIXELS:
         codec = _H264_TO_HEVC.get(codec, codec)
     return codec
+
+
+def _encoder_rate(fps) -> Fraction:
+    """The stream rate as an exact fraction (29.97 stays 30000/1001, not 29).
+
+    NTSC-family rates arrive from cv2 as floats; ``limit_denominator(1001)``
+    recovers the exact x/1001 rational and leaves integer / simple rates alone.
+    """
+    if isinstance(fps, Fraction):
+        return fps
+    return Fraction(float(fps)).limit_denominator(1001)
 
 
 # Probe-clip edge length: NVENC's minimum is ~145 px, VideoToolbox wants a
@@ -205,6 +217,7 @@ class VideoEncoder:
         backend: Optional[str] = None,
     ) -> None:
         self._path = Path(path)
+        self._fps_exact = fps
         self._fps = float(fps)
         self._width = int(width)
         self._height = int(height)
@@ -240,7 +253,9 @@ class VideoEncoder:
             opts = _AV_CODEC_OPTS[self._backend]
             try:
                 self._container = av.open(str(self._path), mode="w")
-                self._stream = self._container.add_stream(codec, rate=int(self._fps))
+                self._stream = self._container.add_stream(
+                    codec, rate=_encoder_rate(self._fps_exact)
+                )
                 self._stream.width = self._width
                 self._stream.height = self._height
                 self._stream.pix_fmt = "yuv420p"

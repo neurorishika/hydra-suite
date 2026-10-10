@@ -289,3 +289,22 @@ def test_pyav_write_even_frame_skips_bgr24_conversion(tmp_path, monkeypatch):
     ) as enc:
         enc.write(np.zeros((48, 64, 3), dtype=np.uint8))
     assert "bgr24" not in formats
+
+
+@pytest.mark.parametrize(
+    "fps,expected",
+    [
+        (29.97002997002997, "30000/1001"),
+        (59.94005994005994, "60000/1001"),
+        (25.0, "25"),
+        (100.0, "100"),
+        (12.5, "25/2"),
+    ],
+)
+def test_encoder_rate_keeps_fractional_fps(fps, expected):
+    from fractions import Fraction
+
+    from hydra_suite.utils.video_encoder import _encoder_rate
+
+    assert _encoder_rate(fps) == Fraction(expected)
+    assert _encoder_rate(Fraction(30000, 1001)) == Fraction(30000, 1001)

@@ -13,6 +13,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from hydra_suite.core.post.video_output_scale import (
+    VIDEO_OUTPUT_SCALE_KEY,
+    validate_video_output_scale,
+)
 from hydra_suite.trackerkit.cli_config import (
     _default_output_paths,
     apply_inference_autotune_override,
@@ -122,6 +126,7 @@ def plan_batch_jobs(
     explicit_config_path: str | None = None,
     keystone_override: bool = False,
     sahi_profile: str | None = None,
+    video_scale: float | None = None,
     apply_tuned_inference: bool | None = None,
     inference_autotune_manual: Sequence[str] | None = None,
 ) -> list[BatchJobSpec]:
@@ -171,6 +176,15 @@ def plan_batch_jobs(
             provenance = "own-sidecar"
         if sahi_profile:
             cfg = apply_sahi_profile_override(cfg, sahi_profile)
+        # --video-scale wins over the config; either way a bad value fails
+        # HERE, before hours of tracking, not at the final render.
+        if video_scale is not None:
+            cfg = {
+                **cfg,
+                VIDEO_OUTPUT_SCALE_KEY: validate_video_output_scale(video_scale),
+            }
+        elif cfg.get(VIDEO_OUTPUT_SCALE_KEY) is not None:
+            validate_video_output_scale(cfg[VIDEO_OUTPUT_SCALE_KEY])
         # Applied HERE, beside the SAHI profile, rather than in the sequential
         # loop: the planner is the single place both the in-process loop and
         # the per-GPU fan-out children read their effective config from, so a

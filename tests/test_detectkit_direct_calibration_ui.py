@@ -1716,3 +1716,267 @@ def test_history_calibration_follows_a_derived_segment_dataset_to_full_frames(tm
         json.dumps({"type": "derived_segment", "source": str(sliced)})
     )
     assert resolve_calibration_dataset_yaml(derived) == source / "dataset.yaml"
+
+
+def test_tradeoff_plot_is_default_and_selection_matches_table(results_dialog):
+    from types import SimpleNamespace
+
+    dialog = results_dialog
+    assert dialog.results_tabs.currentIndex() == 0
+    dialog.table_rows.selectRow(1)
+    assert dialog.tradeoffs.selected_row == 1
+    assert dialog.outcome.points[1].label in dialog.lbl_selected_results.text()
+    dialog.tradeoffs._on_pick(
+        SimpleNamespace(artist=dialog.tradeoffs._scatter, ind=[0])
+    )
+    assert dialog.table_rows.currentRow() == 0
+    assert dialog.tradeoffs.selected_row == 0
+    dialog.results_tabs.setCurrentIndex(1)
+    assert dialog.table_rows.rowCount() == len(dialog.outcome.points)
+
+
+def test_overlapping_plot_points_cycle_original_rows(results_dialog):
+    from types import SimpleNamespace
+
+    plot = results_dialog.tradeoffs
+    plot._on_pick(SimpleNamespace(artist=plot._scatter, ind=[0, 1]))
+    assert results_dialog.table_rows.currentRow() == 0
+    plot._on_pick(SimpleNamespace(artist=plot._scatter, ind=[0, 1]))
+    assert results_dialog.table_rows.currentRow() == 1
+
+
+def test_canvas_click_selects_measurement_and_survives_view_change(results_dialog):
+    from matplotlib.backend_bases import MouseEvent
+
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    ax = plot.figure.axes[0]
+    x, y = ax.transData.transform((0.4, 0.92))
+    event = MouseEvent("button_press_event", plot.canvas, x, y, button=1)
+    plot.canvas.callbacks.process("button_press_event", event)
+    assert results_dialog.table_rows.currentRow() == 1
+    for index in range(len(plot.VIEWS)):
+        plot.view.setCurrentIndex(index)
+        assert plot.selected_row == 1
+        assert results_dialog.table_rows.currentRow() == 1
+
+
+def _plot_event(plot, name, x, y, **kwargs):
+    from matplotlib.backend_bases import MouseEvent
+
+    px, py = plot.figure.axes[0].transData.transform((x, y))
+    event = MouseEvent(name, plot.canvas, px, py, **kwargs)
+    plot.canvas.callbacks.process(name, event)
+    return event
+
+
+def test_plot_scroll_zoom_preserves_cursor_and_selection_does_not_reset_view(
+    results_dialog,
+):
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    ax = plot.figure.axes[0]
+    original = ax.get_xlim(), ax.get_ylim()
+    _plot_event(plot, "scroll_event", 0.4, 0.8, button="up", step=1)
+    zoomed = ax.get_xlim(), ax.get_ylim()
+    assert zoomed[0][1] - zoomed[0][0] < original[0][1] - original[0][0]
+    assert zoomed[1][1] - zoomed[1][0] < original[1][1] - original[1][0]
+    results_dialog.table_rows.selectRow(1)
+    assert plot.figure.axes[0] is ax
+    assert (ax.get_xlim(), ax.get_ylim()) == zoomed
+    plot.toolbar.home()
+    assert ax.get_xlim() == pytest.approx(original[0])
+    assert ax.get_ylim() == pytest.approx(original[1])
+
+
+def test_plot_rectangle_zoom_and_pan_do_not_select_points(results_dialog):
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    ax = plot.figure.axes[0]
+    original = ax.get_xlim(), ax.get_ylim()
+    plot.toolbar.zoom()
+    _plot_event(plot, "button_press_event", 0.39, 0.75, button=1)
+    _plot_event(plot, "motion_notify_event", 0.41, 0.9, button=1)
+    _plot_event(plot, "button_release_event", 0.41, 0.9, button=1)
+    assert ax.get_xlim()[1] - ax.get_xlim()[0] < original[0][1] - original[0][0]
+    assert results_dialog.table_rows.currentRow() == 0
+    plot.toolbar.zoom()
+    plot.toolbar.pan()
+    zoomed = ax.get_xlim()
+    _plot_event(plot, "button_press_event", 0.4, 0.8, button=1)
+    _plot_event(plot, "motion_notify_event", 0.405, 0.82, button=1)
+    _plot_event(plot, "button_release_event", 0.405, 0.82, button=1)
+    assert ax.get_xlim() != zoomed
+    assert results_dialog.table_rows.currentRow() == 0
+    plot.toolbar.pan()
+
+
+def test_hover_inspects_point_and_overlap_chooser_selects_exact_row(results_dialog):
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    _plot_event(plot, "motion_notify_event", 0.4, 0.92)
+    assert "Training geometry" in plot.hover_details.text()
+    assert "confidence" in plot.hover_details.text()
+    plot._on_pick(type("Pick", (), {"artist": plot._scatter, "ind": [0, 1]})())
+    assert plot.nearby_points.count() == 2
+    plot.nearby_points.setCurrentIndex(1)
+    assert results_dialog.table_rows.currentRow() == 1
+
+
+def test_frontier_filter_reduces_clutter_without_losing_table_rows(results_dialog):
+    plot = results_dialog.tradeoffs
+    plot.frontier_only.setChecked(True)
+    assert {row for row, _, _ in plot._display_values} == {1}
+    assert results_dialog.table_rows.rowCount() == 4
+    results_dialog.table_rows.selectRow(2)
+    assert plot.selected_row == 2
+    assert "Training geometry" not in results_dialog.lbl_selected_results.text()
+    plot.frontier_only.setChecked(False)
+    assert len(plot._display_values) == 3
+
+
+def test_dense_cloud_overlap_chooser_keeps_every_measurement_reachable(results_dialog):
+    from dataclasses import replace
+
+    from PySide6.QtTest import QSignalSpy
+
+    from hydra_suite.detectkit.gui.widgets.calibration_tradeoffs import (
+        CalibrationTradeoffs,
+    )
+
+    base = results_dialog.outcome.points[1]
+    points = [
+        replace(base, confidence=0.05 + (row % 19) * 0.05, candidate_index=row)
+        for row in range(2000)
+    ]
+    plot = CalibrationTradeoffs(points)
+    plot.row_selected.connect(plot.set_selection)
+    spy = QSignalSpy(plot.row_selected)
+    try:
+        plot.canvas.draw()
+        _plot_event(
+            plot,
+            "button_press_event",
+            base.seconds_per_frame,
+            base.score.recall,
+            button=1,
+        )
+        assert plot.nearby_points.count() == len(points)
+        plot.nearby_points.setCurrentIndex(1999)
+        assert plot.selected_row == 1999
+        assert spy.at(spy.count() - 1) == [1999]
+        ax = plot.figure.axes[0]
+        _plot_event(
+            plot,
+            "scroll_event",
+            base.seconds_per_frame,
+            base.score.recall,
+            step=1,
+            button="up",
+        )
+        limits = ax.get_xlim(), ax.get_ylim()
+        plot.set_selection(500)
+        assert (ax.get_xlim(), ax.get_ylim()) == limits
+    finally:
+        plot.close()
+
+
+def test_metric_change_resets_navigation_and_unknown_quality_is_empty(results_dialog):
+    from dataclasses import replace
+
+    from hydra_suite.detectkit.gui.widgets.calibration_tradeoffs import (
+        CalibrationTradeoffs,
+    )
+
+    base = results_dialog.outcome.points[1]
+    plot = CalibrationTradeoffs(
+        [replace(base, score=replace(base.score, mean_quality=None))]
+    )
+    try:
+        plot.canvas.draw()
+        plot.view.setCurrentIndex(4)
+        assert plot._display_values == []
+        plot.toolbar.home()
+        assert plot.nearby_points.count() == 0
+        assert "No measurements" in plot.figure.axes[0].texts[0].get_text()
+    finally:
+        plot.close()
+
+
+def test_scrolling_over_a_point_never_changes_selected_measurement(results_dialog):
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    results_dialog.table_rows.selectRow(0)
+    _plot_event(plot, "scroll_event", 0.4, 0.92, step=1, button="up")
+    assert results_dialog.table_rows.currentRow() == 0
+
+
+def test_interactive_controls_have_dark_background_and_legible_text(results_dialog):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPalette
+
+    plot = results_dialog.tradeoffs
+    assert plot.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+    assert plot.palette().color(QPalette.ColorRole.Window).lightness() < 80
+    assert plot.toolbar.palette().color(QPalette.ColorRole.WindowText).lightness() > 180
+
+
+def test_recommended_button_reveals_an_offscreen_point_without_changing_zoom(
+    results_dialog,
+):
+    plot = results_dialog.tradeoffs
+    ax = plot.figure.axes[0]
+    ax.set_xlim(0.1, 0.2)
+    ax.set_ylim(0.1, 0.2)
+    plot.btn_recommended.click()
+    assert results_dialog.table_rows.currentRow() == plot.recommended_row
+    point = results_dialog.outcome.points[plot.recommended_row]
+    assert ax.get_xlim()[0] < point.seconds_per_frame < ax.get_xlim()[1]
+    assert ax.get_ylim()[0] < point.score.recall < ax.get_ylim()[1]
+    assert ax.get_xlim()[1] - ax.get_xlim()[0] == pytest.approx(0.1)
+    assert ax.get_ylim()[1] - ax.get_ylim()[0] == pytest.approx(0.1)
+
+
+def test_scroll_zoom_keeps_cursor_anchor_and_navigation_history(results_dialog):
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    ax = plot.figure.axes[0]
+    original = ax.get_xlim(), ax.get_ylim()
+    event = _plot_event(plot, "scroll_event", 0.39, 0.8, button="up", step=1)
+    zoomed = ax.get_xlim(), ax.get_ylim()
+    for center, before, after in zip((event.xdata, event.ydata), original, zoomed):
+        assert (center - before[0]) / (before[1] - before[0]) == pytest.approx(
+            (center - after[0]) / (after[1] - after[0])
+        )
+    plot.toolbar.back()
+    assert ax.get_xlim() == pytest.approx(original[0])
+    plot.toolbar.forward()
+    assert ax.get_xlim() == pytest.approx(zoomed[0])
+
+
+def test_click_in_dense_cloud_prefers_closest_point_and_keeps_neighbors_available(
+    results_dialog,
+):
+    from dataclasses import replace
+
+    from hydra_suite.detectkit.gui.widgets.calibration_tradeoffs import (
+        CalibrationTradeoffs,
+    )
+
+    base = results_dialog.outcome.points[1]
+    points = [
+        replace(base, score=replace(base.score, recall=value))
+        for value in (0.92, 0.927, 0.4)
+    ]
+    plot = CalibrationTradeoffs(points)
+    plot.row_selected.connect(plot.set_selection)
+    try:
+        plot.canvas.draw()
+        _plot_event(plot, "button_press_event", 0.4, 0.927, button=1)
+        assert plot.selected_row == 1
+        assert {
+            plot.nearby_points.itemData(index)
+            for index in range(plot.nearby_points.count())
+        } == {0, 1}
+    finally:
+        plot.close()
