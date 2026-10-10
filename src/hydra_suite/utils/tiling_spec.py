@@ -134,6 +134,15 @@ BACKEND_DEFAULTS: dict[str, BackendDefaults] = {
     ),
 }
 
+# YOLO TRAINING overlap default (user decision 2026-10-10): the whole-animal
+# minimum of the default scale set, max(set) + OVERLAP_MARGIN = 0.25, so a new
+# project never opens below its own minimum. Training only -- TrackerKit's
+# serving default stays DEFAULT_OVERLAP (0.2), which keeps tracking output
+# byte-identical. Saved projects/plans keep their stored overlap.
+DEFAULT_TRAIN_OVERLAP = round(
+    max(BACKEND_DEFAULTS["yolo_train"].object_tile_fractions) + OVERLAP_MARGIN, 6
+)
+
 
 def _clamp_fraction(value: float) -> float:
     return max(FRACTION_MIN, min(FRACTION_MAX, float(value)))

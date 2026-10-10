@@ -36,8 +36,8 @@ from hydra_suite.utils.slice_geometry import (
 )
 from hydra_suite.utils.tiling_spec import (
     BACKEND_DEFAULTS,
-    DEFAULT_OVERLAP,
     DEFAULT_TRAIN_OBJECT_TILE_FRACTION,
+    DEFAULT_TRAIN_OVERLAP,
     DEFAULT_YOLO_IMGSZ,
 )
 
@@ -117,7 +117,7 @@ class SliceBuildParams:
     object_tile_fraction: float = DEFAULT_TRAIN_OBJECT_TILE_FRACTION
     slice_width: int = 0
     slice_height: int = 0
-    overlap: float = DEFAULT_OVERLAP
+    overlap: float = DEFAULT_TRAIN_OVERLAP
     # D18: this is the ONE fragment floor both the YOLO and SAM3 builders
     # apply (see `utils.slice_geometry.DEFAULT_MIN_AREA_RATIO`); each keeps a
     # private per-build field (a different dataclass, a different training
