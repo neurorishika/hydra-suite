@@ -10896,7 +10896,17 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(0)
         left_layout.addWidget(table)
         left_layout.addStretch(1)
-        splitter.addWidget(left_pane)
+        # The table is fixed-height (one row per class, 47+ for identity), so it
+        # must live in a scroll area: otherwise its height becomes the minimum
+        # height of the whole window, which then outgrows the screen and can
+        # no longer be resized.
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.NoFrame)
+        left_scroll.setStyleSheet("background:#1e1e1e; border:none;")
+        left_scroll.setMinimumHeight(120)
+        left_scroll.setWidget(left_pane)
+        splitter.addWidget(left_scroll)
 
         # Right: matplotlib figure in a scroll area
         fig_label = QLabel("Rendering…")
