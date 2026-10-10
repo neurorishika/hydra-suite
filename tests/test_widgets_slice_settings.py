@@ -681,3 +681,28 @@ def test_profile_combo_stays_enabled_while_tiling_is_off():
     w.chk_slice_enabled.setChecked(False)
     assert w.combo_slice_profile.isEnabled()
     assert not w.combo_slice_geometry.isEnabled()
+
+
+def test_measured_overlap_below_the_minimum_is_info_not_a_warning():
+    """Review MINOR-2 (decision 22/22a): an overlap a profile or the stamp
+    set is never nudged -- muted info naming its source, no Raise button."""
+    w = _infer_widget("custom", body=48.0, tile=(1024, 800), overlap=0.1)
+    w.set_source("overlap", "profile", note="profile 'Fast scan'")
+    label = w.lbl_slice_overlap_minimum
+    assert label.text() == (
+        "below whole-animal minimum (0.11) — set by profile 'Fast scan'"
+    )
+    assert "e0943a" not in label.styleSheet()
+    assert w.btn_slice_overlap_raise.isHidden()
+    # A user edit makes it the user's value again: warning + Raise.
+    w.spin_slice_overlap.setValue(0.05)
+    assert label.text() == "Below whole-animal minimum (0.11)"
+    assert not w.btn_slice_overlap_raise.isHidden()
+    assert w.source_badge("overlap") == "user"
+
+
+def test_stamped_overlap_note_defaults_to_the_source_description():
+    w = _infer_widget("custom", body=48.0, tile=(1024, 800), overlap=0.1)
+    w.set_source("overlap", "stamped")
+    assert w.lbl_slice_overlap_minimum.text().endswith("— set by stamped on the model")
+    assert w.btn_slice_overlap_raise.isHidden()

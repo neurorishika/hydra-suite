@@ -29,6 +29,7 @@ from .slice_settings_parts import (
     SAM3_TRAIN_OVERLAP_MAX,
     SEAM_MARGIN_MAX_PX,
     SLICE_SIZE_MAX,
+    SOURCE_DESCRIPTIONS,
     TRAIN_ROLES,
     badge_label,
     double_spin,
@@ -479,6 +480,22 @@ def refresh_overlap_minimum(w) -> None:
     if below and not tiling_on:
         # Nothing is tiled: no warning, no button for an inert setting.
         label.setText("")
+        button.setVisible(False)
+        return
+    source = w._sources.get("overlap", "user")
+    if below and source not in ("user", "override", "default"):
+        # A measured/deliberate overlap (profile, stamp, saved session) is
+        # never nudged (decisions 22/22a): info, no Raise.
+        origin = w._source_notes.get("overlap") or SOURCE_DESCRIPTIONS.get(
+            source, source
+        )
+        label.setText(f"below whole-animal minimum ({shown}) — set by {origin}")
+        label.setStyleSheet("color: #8f969e;")
+        label.setToolTip(
+            "This overlap came from a calibration or the model's stamp and is "
+            "kept as measured. An animal at a tile seam may be cut in every "
+            "tile; edit the overlap to take it over."
+        )
         button.setVisible(False)
         return
     if below:

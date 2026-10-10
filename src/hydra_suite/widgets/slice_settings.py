@@ -89,6 +89,7 @@ class SliceSettingsWidget(QGroupBox):
         self._body_derived = (0.0, "user")
         self._body_source = "user"
         self._sources: dict[str, str] = {}
+        self._source_notes: dict[str, str] = {}
         self._advanced_expanded = False
         self._profile_row_shown = False
         self._loading = False
@@ -361,13 +362,17 @@ class SliceSettingsWidget(QGroupBox):
         """Recompute derived labels, badges and enablement (no control writes)."""
         self._refresh()
 
-    def set_source(self, field: str, source: str) -> None:
+    def set_source(self, field: str, source: str, *, note: str = "") -> None:
         """Badge a field's source (e.g. fractions ``stamped``/``profile``).
 
         ``"tile_size"`` badges a custom tile size the host applied (shown only
         in Custom; any user edit of W/H or the mode resets it to ``user``).
+        ``"overlap"`` from a profile/stamp is never nudged: the whole-animal
+        minimum shows as muted info naming ``note`` (else the source's
+        description), with no Raise, until the user edits the overlap.
         """
         self._sources[field] = source
+        self._source_notes[field] = note
         self._refresh()
 
     def source_badge(self, field: str) -> str:
@@ -519,6 +524,8 @@ class SliceSettingsWidget(QGroupBox):
                 self._set_quietly(self.spin_slice_body, value)
         elif field in ("slice_width", "slice_height", "geometry_mode"):
             self._sources.pop("tile_size", None)
+        elif field == "overlap":
+            self._sources.pop("overlap", None)
         elif field == "merge_policy":
             self._passthrough.pop("merge_policy_raw", None)
         self._refresh()
