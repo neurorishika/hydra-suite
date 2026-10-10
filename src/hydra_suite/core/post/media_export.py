@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -18,11 +19,20 @@ from hydra_suite.core.individual.dataset.oriented_video import (
 )
 from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.properties.export import build_pose_keypoint_labels
+from hydra_suite.core.post.video_output_scale import (
+    resolve_video_output_scale,
+    scaled_output_size,
+)
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
 )
 from hydra_suite.utils.profiling import bind_target
+from hydra_suite.utils.video_decoder import (
+    FrameSource,
+    ThreadedFrameReader,
+    default_decoder_candidates,
+)
 from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
@@ -313,8 +323,30 @@ def build_precomputed_color_palette(colors, _track_ids, color_keys):
     return _row_colors
 
 
-def build_video_draw_params(params, config, fps, trajectories_df):
-    """Return drawing parameters derived from params, config dict, and body size."""
+def _scaled_size(value, scale):
+    """A radius/length at output scale (``round``; identity at 1.0)."""
+    return int(round(value * scale))
+
+
+def _scaled_thickness(value, scale):
+    """A line thickness at output scale, never below 1.
+
+    Negative values are OpenCV's FILLED sentinel, not a size, and pass through.
+    At scale 1.0 every caller's thickness is already >= 1, so this is identity.
+    """
+    if value < 0:
+        return int(value)
+    return max(1, int(round(value * scale)))
+
+
+def build_video_draw_params(params, config, fps, trajectories_df, *, scale=1.0):
+    """Return drawing parameters derived from params, config dict, and body size.
+
+    Sizes are computed in source pixels exactly as before and then multiplied
+    by ``scale`` (the video output scale), so ``scale=1.0`` is the historical
+    result bit for bit.
+    """
+    scale = float(scale)
     colors = params.get("TRAJECTORY_COLORS", [])
     reference_body_size = params.get("REFERENCE_BODY_SIZE", 30.0)
     show_labels = bool(config.get("video_show_labels", True))
@@ -359,20 +391,24 @@ def build_video_draw_params(params, config, fps, trajectories_df):
     pose_min_conf = normalize_pose_render_min_conf(
         params.get("POSE_MIN_KPT_CONF_VALID", 0.2)
     )
+    text_thickness = max(1, int(text_scale * 2))
     return dict(
         colors=colors,
         show_labels=show_labels,
         show_orientation=show_orientation,
         show_trails=show_trails,
         trail_duration_frames=trail_duration_frames,
-        marker_radius=marker_radius,
-        arrow_len=arrow_len,
-        text_size=text_size,
+        scale=scale,
+        marker_radius=_scaled_size(marker_radius, scale),
+        arrow_len=_scaled_size(arrow_len, scale),
+        text_size=text_size * scale,
         text_scale=text_scale,
-        marker_thickness=marker_thickness,
-        pose_point_radius=pose_point_radius,
-        pose_point_thickness=pose_point_thickness,
-        pose_line_thickness=pose_line_thickness,
+        text_thickness=_scaled_thickness(text_thickness, scale),
+        label_pad=5 * scale,
+        marker_thickness=_scaled_thickness(marker_thickness, scale),
+        pose_point_radius=max(1, _scaled_size(pose_point_radius, scale)),
+        pose_point_thickness=_scaled_thickness(pose_point_thickness, scale),
+        pose_line_thickness=_scaled_thickness(pose_line_thickness, scale),
         pose_color_mode=pose_color_mode,
         pose_fixed_color=pose_fixed_color,
         pose_min_conf=pose_min_conf,
@@ -570,7 +606,7 @@ def draw_single_track_on_frame(
     marker_thickness = draw_p["marker_thickness"]
     cv2.circle(frame, (cx, cy), marker_radius, color, marker_thickness)
     if draw_p["show_labels"]:
-        label_offset = int(marker_radius + 5)
+        label_offset = int(marker_radius + draw_p["label_pad"])
         cv2.putText(
             frame,
             str(_label_texts[row_i]),
@@ -578,7 +614,7 @@ def draw_single_track_on_frame(
             cv2.FONT_HERSHEY_SIMPLEX,
             draw_p["text_size"],
             color,
-            max(1, int(draw_p["text_scale"] * 2)),
+            draw_p["text_thickness"],
         )
     if draw_p["show_orientation"]:
         _theta = _thetas[row_i]
@@ -645,22 +681,83 @@ def draw_single_track_on_frame(
                 )
 
 
-def render_annotated_video_frames(
-    cap,
-    out,
-    start_frame,
-    total_frames,
-    draw_p,
-    pose_edges,
-    show_pose,
-    arrays,
-    progress=None,
-    should_stop=None,
-):
-    """Write annotated frames from cap into out. Return True if completed, False if cancelled."""
-    import queue as _queue
-    import threading as _threading
+class AnnotatedDrawState(NamedTuple):
+    """Everything the per-frame overlay draw needs, already at output scale."""
 
+    draw_p: dict
+    pose_edges: list
+    show_pose: bool
+    arrays: tuple
+
+
+def prepare_annotated_draw_state(
+    trajectories_df, params, config, fps, *, scale=1.0, scale_xy=None
+):
+    """Build the draw parameters and trajectory arrays for one render.
+
+    ``scale`` multiplies every size (radii, lengths, thicknesses, text);
+    ``scale_xy`` = (output_w / source_w, output_h / source_h) multiplies every
+    coordinate -- positions, trails and pose keypoints -- once, up front, so
+    the per-frame draw works directly in output pixels. Both default to 1.0,
+    which leaves every array and size exactly as the source-resolution draw.
+    """
+    sx, sy = (float(scale), float(scale)) if scale_xy is None else map(float, scale_xy)
+    draw_p = build_video_draw_params(params, config, fps, trajectories_df, scale=scale)
+    show_identity = should_show_identity_video_overlay(config)
+    pose_edges, pose_column_triplets, show_pose = get_pose_column_info(
+        params, draw_p["advanced_config"], trajectories_df
+    )
+    (
+        _frame_ids,
+        _track_ids,
+        _xs,
+        _ys,
+        _label_texts,
+        _thetas,
+        _pose_kpts,
+        traj_indices_by_frame,
+        _track_sorted_row_indices,
+        _track_sorted_frame_vals,
+    ) = preextract_traj_arrays(
+        trajectories_df,
+        show_pose,
+        pose_column_triplets,
+        draw_p["show_trails"],
+        show_identity=show_identity,
+    )
+    if sx != 1.0:
+        _xs = _xs * sx
+    if sy != 1.0:
+        _ys = _ys * sy
+    if _pose_kpts is not None and (sx != 1.0 or sy != 1.0):
+        _pose_kpts = _pose_kpts.copy()
+        _pose_kpts[:, :, 0] *= np.float32(sx)
+        _pose_kpts[:, :, 1] *= np.float32(sy)
+    _color_keys = build_video_track_color_key_array(
+        trajectories_df, show_identity=show_identity
+    )
+    _row_colors = build_precomputed_color_palette(
+        draw_p["colors"], _track_ids, _color_keys
+    )
+    arrays = (
+        _frame_ids,
+        _track_ids,
+        _xs,
+        _ys,
+        _label_texts,
+        _thetas,
+        _pose_kpts,
+        traj_indices_by_frame,
+        _track_sorted_row_indices,
+        _track_sorted_frame_vals,
+        _row_colors,
+    )
+    return AnnotatedDrawState(draw_p, pose_edges, show_pose, arrays)
+
+
+def draw_annotations_on_frame(frame, frame_idx, state):
+    """Draw every track's overlay for ``frame_idx`` onto ``frame`` in place."""
+    draw_p = state.draw_p
     (
         _frame_ids,
         _track_ids,
@@ -673,98 +770,123 @@ def render_annotated_video_frames(
         _track_sorted_row_indices,
         _track_sorted_frame_vals,
         _row_colors,
-    ) = arrays
-    _write_q: _queue.Queue = _queue.Queue(maxsize=4)
+    ) = state.arrays
+    frame_row_indices = traj_indices_by_frame.get(frame_idx, [])
 
-    def _writer_thread():
-        while True:
-            _item = _write_q.get()
-            if _item is None:
-                break
-            out.write(_item)
-
-    _writer = _threading.Thread(target=bind_target(_writer_thread), daemon=True)
-    _writer.start()
-    cancelled = False
-
-    for rel_idx in range(total_frames):
-        if should_stop is not None and should_stop():
-            cancelled = True
-            break
-        frame_idx = start_frame + rel_idx
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame_row_indices = traj_indices_by_frame.get(frame_idx, [])
-
-        if draw_p["show_trails"]:
-            for row_i in frame_row_indices:
-                track_id = int(_track_ids[row_i])
-                color = tuple(_row_colors[row_i])
-                draw_trail_for_track(
-                    frame,
-                    track_id,
-                    frame_idx,
-                    color,
-                    _xs,
-                    _ys,
-                    _track_sorted_frame_vals,
-                    _track_sorted_row_indices,
-                    draw_p["trail_duration_frames"],
-                    draw_p["marker_thickness"],
-                )
-
+    if draw_p["show_trails"]:
         for row_i in frame_row_indices:
             track_id = int(_track_ids[row_i])
-            cx_f, cy_f = _xs[row_i], _ys[row_i]
-            if np.isnan(cx_f) or np.isnan(cy_f):
-                continue
-            cx, cy = int(cx_f), int(cy_f)
             color = tuple(_row_colors[row_i])
-            draw_single_track_on_frame(
+            draw_trail_for_track(
                 frame,
-                row_i,
                 track_id,
-                cx,
-                cy,
+                frame_idx,
                 color,
-                draw_p,
-                _thetas,
-                _pose_kpts if show_pose else None,
-                _label_texts,
-                pose_edges,
+                _xs,
+                _ys,
+                _track_sorted_frame_vals,
+                _track_sorted_row_indices,
+                draw_p["trail_duration_frames"],
+                draw_p["marker_thickness"],
             )
 
-        _write_q.put(frame)
+    for row_i in frame_row_indices:
+        track_id = int(_track_ids[row_i])
+        cx_f, cy_f = _xs[row_i], _ys[row_i]
+        if np.isnan(cx_f) or np.isnan(cy_f):
+            continue
+        cx, cy = int(cx_f), int(cy_f)
+        color = tuple(_row_colors[row_i])
+        draw_single_track_on_frame(
+            frame,
+            row_i,
+            track_id,
+            cx,
+            cy,
+            color,
+            draw_p,
+            _thetas,
+            _pose_kpts if state.show_pose else None,
+            _label_texts,
+            state.pose_edges,
+        )
 
-        if progress is not None and rel_idx % 30 == 0:
-            pct = int(((rel_idx + 1) / total_frames) * 100)
-            progress(pct, "Generating video...")
 
-    _write_q.put(None)
-    _writer.join()
-    return not cancelled
+def probe_video_for_render(video_path):
+    """Return ``(fps, total_frames, width, height)`` via cv2, or None.
 
-
-def open_video_cap_and_writer(video_path, output_path):
-    """Open video capture and writer; return (cap, out, fps, total_video_frames) or None on error."""
+    Metadata deliberately still comes from ``cv2.VideoCapture`` -- the frame
+    count it reports is what ``compute_video_frame_range`` has always clamped
+    START/END against, so the rendered frame range is unchanged.
+    """
     cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        logger.error(f"Failed to open video: {video_path}")
-        return None
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     try:
-        out = VideoEncoder(output_path, fps=fps, width=frame_width, height=frame_height)
-    except Exception:
-        logger.error(f"Failed to create output video: {output_path}")
+        if not cap.isOpened():
+            logger.error(f"Failed to open video: {video_path}")
+            return None
+        return (
+            cap.get(cv2.CAP_PROP_FPS),
+            int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+            int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+        )
+    finally:
         cap.release()
-        return None
-    logger.info(f"Writing video: {frame_width}x{frame_height} @ {fps} FPS")
-    return cap, out, fps, total_video_frames
+
+
+class _EncodeStage:
+    """``VideoEncoder`` on its own thread behind a small bounded queue.
+
+    An encoder exception is captured and re-raised on the next ``put``/
+    ``finish`` so a dead writer can never deadlock or be silently ignored.
+    """
+
+    def __init__(self, encoder, maxsize=4):
+        import queue as _queue
+        import threading as _threading
+
+        self._encoder = encoder
+        self._q = _queue.Queue(maxsize=maxsize)
+        self.error = None
+        self._thread = _threading.Thread(
+            target=bind_target(self._run), name="video-encode", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self):
+        while True:
+            item = self._q.get()
+            if item is None:
+                return
+            if self.error is not None:
+                continue  # drain so the producer never blocks
+            try:
+                self._encoder.write(item)
+            except Exception as exc:
+                self.error = exc
+
+    def put(self, frame):
+        if self.error is not None:
+            raise self.error
+        self._q.put(frame)
+
+    def finish(self):
+        """Flush the queue, stop the thread, release the encoder."""
+        self._q.put(None)
+        self._thread.join()
+        try:
+            self._encoder.release()
+        except Exception as exc:
+            if self.error is None:
+                self.error = exc
+
+
+def _remove_partial_output(output_path):
+    try:
+        if os.path.exists(output_path):
+            os.remove(output_path)
+    except OSError:
+        logger.warning("Could not delete partial video: %s", output_path)
 
 
 def compute_video_frame_range(params, total_video_frames):
@@ -814,11 +936,20 @@ def render_annotated_video(
     config,
     progress=None,
     should_stop=None,
+    decoder_candidates=None,
 ):
     """Generate an annotated overlay video from post-processed trajectories.
 
-    Returns the output path on success, or None on failure/cancellation (partial
-    output file is deleted on cancellation so no half-written video survives)."""
+    Three stages, each on its own thread: decode (hardware where available,
+    already at the output size -- ``video_output_scale``, default 0.5), draw
+    (this thread, in output pixels) and encode (``VideoEncoder``).
+
+    Returns the output path on success, or None on failure/cancellation
+    (partial output file is deleted on cancellation so no half-written video
+    survives). A decode/encode error is re-raised after the partial output is
+    removed. ``decoder_candidates`` overrides the decoder ladder (tests,
+    benchmarks).
+    """
     logger.info("=" * 80)
     logger.info("Generating video from post-processed trajectories...")
     logger.info("=" * 80)
@@ -828,90 +959,81 @@ def render_annotated_video(
     if not video_path or not output_path:
         logger.error("Video input or output path not specified")
         return None
+    scale = resolve_video_output_scale(config)
 
-    opened = open_video_cap_and_writer(video_path, output_path)
-    if opened is None:
+    meta = probe_video_for_render(video_path)
+    if meta is None:
         return None
-    cap, out, fps, total_video_frames = opened
+    fps, total_video_frames, src_w, src_h = meta
+    out_w, out_h = scaled_output_size(src_w, src_h, scale)
 
     start_frame, end_frame, total_frames = compute_video_frame_range(
         params, total_video_frames
     )
     if total_frames <= 0:
         logger.error("Invalid frame range for video generation.")
-        cap.release()
-        out.release()
         return None
 
-    if start_frame > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    draw_p = build_video_draw_params(params, config, fps, trajectories_df)
-    show_identity = should_show_identity_video_overlay(config)
-    pose_edges, pose_column_triplets, show_pose = get_pose_column_info(
-        params, draw_p["advanced_config"], trajectories_df
-    )
-    (
-        _frame_ids,
-        _track_ids,
-        _xs,
-        _ys,
-        _label_texts,
-        _thetas,
-        _pose_kpts,
-        traj_indices_by_frame,
-        _track_sorted_row_indices,
-        _track_sorted_frame_vals,
-    ) = preextract_traj_arrays(
+    state = prepare_annotated_draw_state(
         trajectories_df,
-        show_pose,
-        pose_column_triplets,
-        draw_p["show_trails"],
-        show_identity=show_identity,
+        params,
+        config,
+        fps,
+        scale=scale,
+        scale_xy=(out_w / src_w, out_h / src_h),
     )
-    _color_keys = build_video_track_color_key_array(
-        trajectories_df, show_identity=show_identity
-    )
-    _row_colors = build_precomputed_color_palette(
-        draw_p["colors"], _track_ids, _color_keys
-    )
-
-    arrays = (
-        _frame_ids,
-        _track_ids,
-        _xs,
-        _ys,
-        _label_texts,
-        _thetas,
-        _pose_kpts,
-        traj_indices_by_frame,
-        _track_sorted_row_indices,
-        _track_sorted_frame_vals,
-        _row_colors,
-    )
-    completed = render_annotated_video_frames(
-        cap,
-        out,
-        start_frame,
-        total_frames,
-        draw_p,
-        pose_edges,
-        show_pose,
-        arrays,
-        progress=progress,
-        should_stop=should_stop,
+    candidates = (
+        list(decoder_candidates)
+        if decoder_candidates is not None
+        else default_decoder_candidates(video_path, out_w, out_h)
     )
 
-    cap.release()
-    out.release()
+    try:
+        encoder = VideoEncoder(output_path, fps=fps, width=out_w, height=out_h)
+    except Exception:
+        logger.error(f"Failed to create output video: {output_path}")
+        return None
+    logger.info(
+        f"Writing video: {out_w}x{out_h} @ {fps} FPS "
+        f"(source {src_w}x{src_h}, scale {scale:g})"
+    )
 
-    if not completed:
+    decoder = ThreadedFrameReader(
+        lambda: FrameSource(
+            candidates, start_frame=start_frame, out_size=(out_w, out_h)
+        ),
+        max_frames=total_frames,
+        thread_wrapper=bind_target,
+    ).start()
+    writer = _EncodeStage(encoder)
+    cancelled = False
+    try:
+        for rel_idx in range(total_frames):
+            if should_stop is not None and should_stop():
+                cancelled = True
+                break
+            frame = decoder.get()
+            if frame is None:
+                break
+            draw_annotations_on_frame(frame, start_frame + rel_idx, state)
+            writer.put(frame)
+            if progress is not None and rel_idx % 30 == 0:
+                pct = int(((rel_idx + 1) / total_frames) * 100)
+                progress(pct, "Generating video...")
+    except BaseException:
+        decoder.close()
+        writer.finish()
+        _remove_partial_output(output_path)
+        raise
+    decoder.close()
+    writer.finish()
+    if writer.error is not None:
+        _remove_partial_output(output_path)
+        raise writer.error
+
+    if cancelled:
         logger.info("Annotated video generation cancelled; removing partial output.")
-        try:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-        except OSError:
-            logger.warning("Could not delete partial video: %s", output_path)
+        _remove_partial_output(output_path)
         return None
 
     logger.info(f"✓ Video saved to: {output_path}")
