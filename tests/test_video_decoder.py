@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -281,13 +282,51 @@ def test_start_frame_alignment_matches_cv2(index_clip, start, kind):
     assert _source_indices([cands[kind]], start, 40) == expected
 
 
-def test_default_ladder_order():
-    names = [c.name for c in vd.default_decoder_candidates("x.mp4", 64, 48)]
-    assert names[-2:] == ["pyav", "opencv"]
-    if "cuvid" in names:
-        assert names.index("cuvid") < names.index("hwaccel")
-    if "hwaccel" in names:
-        assert names.index("hwaccel") < names.index("pyav")
+def _ladder(monkeypatch, *, platform, cuda, out, src=(128, 64), rotated=False):
+    monkeypatch.setattr(vd.sys, "platform", platform)
+    monkeypatch.setattr(
+        vd,
+        "_av_caps",
+        lambda: (
+            {"videotoolbox", "cuda"},
+            {"h264_cuvid", "hevc_cuvid", "libx264"},
+        ),
+    )
+    monkeypatch.setattr(vd, "_cuda_usable", lambda: cuda)
+    monkeypatch.setattr(
+        vd, "_stream_facts", lambda path: vd.StreamFacts("h264", *src, rotated)
+    )
+    return [c.name for c in vd.default_decoder_candidates("x.mp4", *out)]
+
+
+@pytest.mark.parametrize(
+    "platform,cuda,out,expected",
+    [
+        # Downscale: PyAV software beats VideoToolbox (fly_obb 1200^2: 367 vs
+        # 262 fps at 0.5) and cv2 (ant 4512^2: 128 vs 93 fps at 0.5).
+        ("darwin", False, (64, 32), ["pyav", "hwaccel", "opencv"]),
+        # Same size: cv2 is today's path and measured >= PyAV (1200^2: 301 vs
+        # 289 fps; 4512^2: 39.1 vs 39.1, encoder-bound).
+        ("darwin", False, (128, 64), ["opencv", "pyav", "hwaccel"]),
+        ("linux", True, (64, 32), ["cuvid", "pyav", "hwaccel", "opencv"]),
+        ("linux", True, (128, 64), ["cuvid", "opencv", "pyav", "hwaccel"]),
+        # A compiled-in CUDA device type is not a usable GPU (M-3).
+        ("linux", False, (64, 32), ["pyav", "opencv"]),
+        ("win32", True, (64, 32), ["cuvid", "pyav", "hwaccel", "opencv"]),
+        ("win32", False, (64, 32), ["pyav", "opencv"]),
+    ],
+)
+def test_ladder_order(monkeypatch, platform, cuda, out, expected):
+    assert _ladder(monkeypatch, platform=platform, cuda=cuda, out=out) == expected
+
+
+@pytest.mark.parametrize("platform,cuda", [("darwin", False), ("linux", True)])
+def test_rotated_stream_only_uses_opencv(monkeypatch, platform, cuda):
+    """I-2: cv2 applies display rotation (what tracking saw); PyAV/cuvid don't."""
+    names = _ladder(
+        monkeypatch, platform=platform, cuda=cuda, out=(32, 64), rotated=True
+    )
+    assert names == ["opencv"]
 
 
 def test_downscaled_decode_is_output_size(index_clip):
@@ -324,7 +363,7 @@ def test_pyav_start_frame_uses_keyframe_seek_not_full_rescan(index_clip, caplog)
     cands = {c.name: c for c in vd.default_decoder_candidates(str(index_clip), 128, 64)}
     with caplog.at_level(logging.DEBUG, logger=vd.logger.name):
         assert _source_indices([cands["pyav"]], 23, 3) == [23, 24, 25]
-    assert not any("counting from 0" in r.getMessage() for r in caplog.records)
+    assert not any("decoding from frame 0" in r.getMessage() for r in caplog.records)
 
 
 def test_unreliable_pts_falls_back_to_counting_from_stream_start(
@@ -366,3 +405,133 @@ def test_every_decoder_reaches_eof_cleanly(index_clip):
         src.close()
         assert [_decode_index(f) for f in got[:10]] == list(range(30, 40)), c.name
         assert got[10] is None and got[11] is None, c.name
+
+
+# ── fix round 1: adversarial clips ──────────────────────────────────────────
+
+
+def _write_pts_clip(path, pts_of, n_frames=40, w=128, h=64):
+    """Index clip with explicit pts (time base 1/25) -- e.g. a dropped frame."""
+    av = pytest.importorskip("av")
+    from fractions import Fraction
+
+    tb = Fraction(1, 25)
+    container = av.open(str(path), mode="w")
+    stream = container.add_stream("libx264", rate=25)
+    stream.width, stream.height, stream.pix_fmt = w, h, "yuv420p"
+    stream.time_base = tb
+    stream.codec_context.time_base = tb
+    stream.options = {"g": "10", "bf": "2", "keyint_min": "10"}
+    bw = w // _BITS
+    for i in range(n_frames):
+        img = np.zeros((h, w, 3), np.uint8)
+        for b in range(_BITS):
+            if (i >> b) & 1:
+                img[:, b * bw : (b + 1) * bw] = 255
+        frame = av.VideoFrame.from_ndarray(img, format="bgr24")
+        frame.pts = pts_of(i)
+        frame.time_base = tb
+        for pkt in stream.encode(frame):
+            container.mux(pkt)
+    for pkt in stream.encode():
+        container.mux(pkt)
+    container.close()
+
+
+@pytest.fixture(scope="module")
+def vfr_gap_clip(tmp_path_factory):
+    path = tmp_path_factory.mktemp("vfr") / "vfr_gap.mp4"
+    _write_pts_clip(path, lambda i: i if i < 7 else i + 1)  # one dropped frame
+    return path
+
+
+@pytest.mark.parametrize("start", [0, 1, 6, 7, 9, 11, 23, 39])
+def test_vfr_gap_alignment_matches_cv2(vfr_gap_clip, start):
+    """I-1: average_rate is 1000/41 here, so pts->index drifted by one past
+    the gap; the frame index must equal cv2's (= tracking's decode order)."""
+    expected = _cv2_indices(vfr_gap_clip, start, 40)
+    assert expected == list(range(start, 40))
+    for cand in vd.default_decoder_candidates(str(vfr_gap_clip), 64, 32):
+        src = vd.FrameSource([cand], start_frame=start, out_size=(64, 32))
+        got = []
+        while (f := src.read()) is not None:
+            got.append(_decode_index(f))
+        src.close()
+        assert got == expected, cand.name
+
+
+def test_rotated_clip_matches_cv2_frames(index_clip, tmp_path):
+    import shutil
+    import subprocess
+
+    try:
+        import imageio_ffmpeg
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        ffmpeg = shutil.which("ffmpeg") or (
+            "/opt/homebrew/bin/ffmpeg"
+            if Path("/opt/homebrew/bin/ffmpeg").exists()
+            else None
+        )
+    if not ffmpeg:
+        pytest.skip("no ffmpeg binary to write a rotation tag")
+
+    rot = tmp_path / "rot90.mp4"
+    r = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-display_rotation",
+            "90",
+            "-i",
+            str(index_clip),
+            "-c",
+            "copy",
+            str(rot),
+        ],
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        pytest.skip("ffmpeg cannot write display rotation here")
+    cap = cv2.VideoCapture(str(rot))
+    if not cap.get(cv2.CAP_PROP_ORIENTATION_META):
+        cap.release()
+        pytest.skip("cv2 does not see the rotation tag")
+    refs = [cap.read()[1] for _ in range(8)]
+    cap.release()
+    h, w = refs[0].shape[:2]
+    cands = vd.default_decoder_candidates(str(rot), w, h)
+    assert [c.name for c in cands] == ["opencv"]
+    src = vd.FrameSource(cands, start_frame=5, out_size=(w, h))
+    f = src.read()
+    src.close()
+    assert np.array_equal(f, refs[5])
+
+
+def test_start_past_end_fails_fast_with_one_decode(index_clip, monkeypatch):
+    """M-2: START beyond the decodable end must not re-scan the stream or walk
+    the whole ladder -- one decode pass, then EOF."""
+    opened = []
+    real = vd.default_decoder_candidates(str(index_clip), 64, 32)
+    cands = [
+        vd.DecoderCandidate(
+            c.name, lambda s, c=c: (opened.append(c.name), c.open(s))[1]
+        )
+        for c in real
+    ]
+    decodes = {"n": 0}
+    orig = vd._PyAVReader._open
+
+    def _count_open(self):
+        decodes["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(vd._PyAVReader, "_open", _count_open)
+    src = vd.FrameSource(cands, start_frame=45, out_size=(64, 32))
+    assert src.read() is None
+    src.close()
+    assert opened == [cands[0].name]
+    assert decodes["n"] <= 2  # first-pts probe + one seek pass, never a re-scan

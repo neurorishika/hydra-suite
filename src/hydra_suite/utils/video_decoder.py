@@ -25,7 +25,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Callable, Optional, Protocol, Sequence
+from typing import Callable, NamedTuple, Optional, Protocol, Sequence
 
 import cv2
 import numpy as np
@@ -132,6 +132,9 @@ def frame_to_bgr(frame, out_w: int, out_h: int) -> np.ndarray:
 # ── PyAV readers ──────────────────────────────────────────────────────────────
 
 
+_PAST_END = object()
+
+
 class _PyAVReader:
     """PyAV decode positioned at ``start_frame``.
 
@@ -163,6 +166,7 @@ class _PyAVReader:
         self._cuvid_decoder = cuvid_decoder
         self._container = None
         self._cc = None
+        self.past_end = False  # stream ended before start_frame (not an error)
         self._open()
         self._iter = self._frames()
 
@@ -228,16 +232,37 @@ class _PyAVReader:
             return frame.pts
         return None
 
-    def _rate(self) -> Optional[Fraction]:
-        rate = self._stream.average_rate or self._stream.guessed_rate
-        return Fraction(rate) if rate else None
+    def _provable_cfr_rate(self) -> Optional[Fraction]:
+        """The nominal rate IF pts -> index is provably exact, else None.
+
+        Exact means: the container's duration is exactly ``frames / rate``
+        (every frame interval nominal, so no dropped frame / VFR anywhere in
+        the file) -- checked again per decoded frame in ``_seek_frames``.
+        ``average_rate`` is NOT used: it is a measured mean, and on a stream
+        with one dropped frame it made the index drift past 0.5 mid-file.
+        """
+        s = self._stream
+        rate, tb, frames, duration = s.guessed_rate, s.time_base, s.frames, s.duration
+        if not (rate and tb and frames and duration):
+            return None
+        rate = Fraction(rate)
+        if Fraction(duration) * Fraction(tb) * rate != frames:
+            return None
+        return rate
 
     def _seek_frames(self):
-        """Frames from ``start_frame`` via keyframe seek, or None if unreliable."""
-        rate = self._rate()
+        """Frames from ``start_frame`` via keyframe seek.
+
+        Returns ``(first, rest)``, ``_PAST_END`` when the stream ends before
+        ``start_frame``, or None when the pts cannot be trusted (caller then
+        counts decoded frames from the start of the stream).
+        """
+        rate = self._provable_cfr_rate()
         tb = self._stream.time_base
+        if rate is None:
+            return None
         pts0 = self._first_pts()
-        if rate is None or tb is None or pts0 is None:
+        if pts0 is None:
             return None
         target = pts0 + int(Fraction(self._start) / rate / Fraction(tb))
         self._container.seek(target, stream=self._stream, backward=True)
@@ -248,7 +273,10 @@ class _PyAVReader:
         for frame in decoded:
             if frame.pts is None:
                 return None
-            idx = round((frame.pts - pts0) * Fraction(tb) * rate)
+            exact = (frame.pts - pts0) * Fraction(tb) * rate
+            if exact.denominator != 1:
+                return None  # off-grid pts: not provably CFR
+            idx = int(exact)
             if prev is not None and idx != prev + 1:
                 return None
             if prev is None and idx > self._start:
@@ -256,18 +284,30 @@ class _PyAVReader:
             prev = idx
             if idx == self._start:
                 return frame, decoded
-        return None
+        return _PAST_END if prev is not None else None
 
     def _frames(self):
         if self._start > 0:
             found = self._seek_frames()
+            if found is _PAST_END:
+                self.past_end = True
+                return
             if found is None:
-                logger.debug("pts unreliable for %s; counting from 0", self._path)
+                logger.warning(
+                    "Annotated video: frame timing of %s is not provably constant;"
+                    " decoding from frame 0 to reach start frame %d.",
+                    self._path,
+                    self._start,
+                )
                 self._close_container()
                 self._open()
+                n = 0
                 for idx, frame in enumerate(self._decoded()):
+                    n = idx + 1
                     if idx >= self._start:
                         yield frame
+                if 0 < n <= self._start:
+                    self.past_end = True
                 return
             first, rest = found
             yield first
@@ -297,11 +337,17 @@ class _OpenCVReader:
         if start_frame > 0:
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
         self._size = (int(out_w), int(out_h))
+        self._start = int(start_frame)
+        self._delivered = 0
+        self.past_end = False
 
     def read(self) -> Optional[np.ndarray]:
         ok, frame = self._cap.read()
         if not ok:
+            # A seek past the end: cv2 opened the file but has nothing there.
+            self.past_end = self._start > 0 and self._delivered == 0
             return None
+        self._delivered += 1
         if (frame.shape[1], frame.shape[0]) != self._size:
             frame = cv2.resize(frame, self._size, interpolation=cv2.INTER_AREA)
         return frame if frame.flags.c_contiguous else np.ascontiguousarray(frame)
@@ -313,60 +359,115 @@ class _OpenCVReader:
 # ── ladder ────────────────────────────────────────────────────────────────────
 
 
-def _stream_codec(path: str) -> Optional[str]:
+class StreamFacts(NamedTuple):
+    codec: Optional[str]
+    width: int
+    height: int
+    rotated: bool  # display-rotation metadata that cv2 applies and PyAV doesn't
+
+
+def _stream_facts(path: str) -> StreamFacts:
+    codec, width, height = None, 0, 0
     try:
         import av
 
         with av.open(path) as container:
-            return container.streams.video[0].codec_context.name
+            stream = container.streams.video[0]
+            codec, width, height = (
+                stream.codec_context.name,
+                stream.width,
+                stream.height,
+            )
     except Exception:
-        return None
+        pass
+    rotated = False
+    cap = cv2.VideoCapture(path)
+    try:
+        if cap.isOpened():
+            rotated = bool(cap.get(cv2.CAP_PROP_ORIENTATION_META) or 0)
+    finally:
+        cap.release()
+    return StreamFacts(codec, width, height, rotated)
+
+
+def _av_caps() -> tuple[set, set]:
+    """(hw device types FFmpeg was built with, available codec names)."""
+    import av
+    from av.codec.hwaccel import hwdevices_available
+
+    return set(hwdevices_available()), set(av.codecs_available)
+
+
+def _cuda_usable() -> bool:
+    """A CUDA device this process can actually use (respects CUDA_VISIBLE_DEVICES).
+
+    Same check as ``batch_fanout.host_has_cuda``; a compiled-in ``cuda`` hw
+    device type alone (the PyPI PyAV wheel on a CPU box) is not enough.
+    """
+    try:
+        from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, TORCH_CUDA_AVAILABLE
+
+        return bool(CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE)
+    except Exception:  # noqa: BLE001 - no torch/cupy just means no CUDA
+        return False
 
 
 def default_decoder_candidates(
     video_path: str, out_w: int, out_h: int
 ) -> list[DecoderCandidate]:
-    """The decoder ladder for this host, best first; ``opencv`` is always last."""
-    cands: list[DecoderCandidate] = []
-    try:
-        import av
-        from av.codec.hwaccel import hwdevices_available
+    """The decoder ladder for this host and video, best first.
 
-        hw_devices = set(hwdevices_available())
-        codecs = set(av.codecs_available)
-    except Exception:
-        av = None
-    if av is not None:
-        if sys.platform.startswith("linux") and "cuda" in hw_devices:
-            codec = _stream_codec(video_path)
-            cuvid = f"{codec}_cuvid" if codec else None
-            if cuvid in codecs:
-                cands.append(
-                    DecoderCandidate(
-                        "cuvid",
-                        lambda s, c=cuvid: _PyAVReader(
-                            video_path, s, out_w, out_h, cuvid_decoder=c
-                        ),
-                    )
-                )
-        device = {"darwin": "videotoolbox"}.get(sys.platform)
-        if sys.platform.startswith("linux"):
-            device = "cuda"
-        if device and device in hw_devices:
-            cands.append(
-                DecoderCandidate(
-                    "hwaccel",
-                    lambda s, d=device: _PyAVReader(
-                        video_path, s, out_w, out_h, hwaccel_device=d
-                    ),
-                )
-            )
-        cands.append(
-            DecoderCandidate("pyav", lambda s: _PyAVReader(video_path, s, out_w, out_h))
-        )
-    cands.append(
-        DecoderCandidate("opencv", lambda s: _OpenCVReader(video_path, s, out_w, out_h))
+    * Rotation metadata -> ``opencv`` only: cv2 applies the display rotation
+      (as tracking's ``CpuFrameReader`` did), PyAV/cuvid do not.
+    * ``cuvid`` (NVDEC + on-GPU resize) first wherever a CUDA device is usable
+      (Linux, Windows).
+    * Then, measured (fix round 1): PyAV software beats VideoToolbox and the
+      CUDA ``hwaccel`` (which download full-size frames) and beats cv2 when
+      downscaling; at the source size cv2 -- today's path -- is as fast or
+      faster, so it leads there.
+    """
+    opencv = DecoderCandidate(
+        "opencv", lambda s: _OpenCVReader(video_path, s, out_w, out_h)
     )
+    facts = _stream_facts(video_path)
+    if facts.rotated:
+        return [opencv]
+    try:
+        hw_devices, codecs = _av_caps()
+    except Exception:
+        return [opencv]
+    cuda_platform = sys.platform.startswith("linux") or sys.platform == "win32"
+    cuda_ok = cuda_platform and "cuda" in hw_devices and _cuda_usable()
+    cands: list[DecoderCandidate] = []
+    cuvid = f"{facts.codec}_cuvid" if facts.codec else None
+    if cuda_ok and cuvid in codecs:
+        cands.append(
+            DecoderCandidate(
+                "cuvid",
+                lambda s, c=cuvid: _PyAVReader(
+                    video_path, s, out_w, out_h, cuvid_decoder=c
+                ),
+            )
+        )
+    pyav = DecoderCandidate("pyav", lambda s: _PyAVReader(video_path, s, out_w, out_h))
+    device = None
+    if sys.platform == "darwin" and "videotoolbox" in hw_devices:
+        device = "videotoolbox"
+    elif cuda_ok:
+        device = "cuda"
+    hwaccel = (
+        DecoderCandidate(
+            "hwaccel",
+            lambda s, d=device: _PyAVReader(
+                video_path, s, out_w, out_h, hwaccel_device=d
+            ),
+        )
+        if device
+        else None
+    )
+    same_size = (out_w, out_h) == (facts.width, facts.height)
+    tail = [opencv, pyav, hwaccel] if same_size else [pyav, hwaccel, opencv]
+    cands.extend(c for c in tail if c is not None)
     return cands
 
 
@@ -397,7 +498,11 @@ class FrameSource:
             try:
                 reader = cand.open(self._next_index)
                 frame = reader.read()
-                if frame is None and i < len(self._candidates) - 1:
+                if (
+                    frame is None
+                    and i < len(self._candidates) - 1
+                    and not getattr(reader, "past_end", False)
+                ):
                     raise RuntimeError("probe decoded no frame")
             except Exception as exc:  # probe failed -> next candidate
                 errors.append(f"{cand.name}: {exc}")
