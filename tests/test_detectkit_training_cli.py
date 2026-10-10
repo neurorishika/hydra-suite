@@ -942,3 +942,96 @@ def test_training_batch_is_opt_in_auto_and_keeps_the_shared_default(tmp_path):
     assert _load(None).hyperparams.batch == TrainingHyperParams().batch == 16
     assert _load(16).hyperparams.batch == 16
     assert _load(-1).hyperparams.batch == -1
+
+
+def _sam3_resume_fixture(tmp_path: Path, *, drift: dict | None = None):
+    from dataclasses import asdict
+
+    from hydra_suite.detectkit.config.training import DetectTrainingPlan
+
+    payload = _plan_payload(tmp_path)
+    payload["roles"] = [{"role": "semantic_sam3", "imgsz": 1008}]
+    payload["sam3"] = {"prompt": "ant", "label_quality_acknowledged": True}
+    config_path = tmp_path / "training.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+    plan = DetectTrainingPlan.from_dict(payload, base_dir=tmp_path)
+
+    dataset_dir = tmp_path / "prepared" / "dataset-preparation-old"
+    dataset_dir.mkdir(parents=True)
+    run_dir = tmp_path / "workspace" / "runs" / "old_semantic_sam3"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    saved_params = json.loads(json.dumps(asdict(plan.sam3_params)))
+    saved_params["batch"] = 8
+    saved_params.update(drift or {})
+    (run_dir / "spec.json").write_text(
+        json.dumps(
+            {
+                "role": "semantic_sam3",
+                "seed": plan.seed,
+                "derived_dataset_dir": str(dataset_dir),
+                "sam3_params": saved_params,
+            }
+        ),
+        encoding="utf-8",
+    )
+    checkpoint = run_dir / "checkpoints" / "epoch_006.pt"
+    checkpoint.write_bytes(b"adapters")
+    checkpoint.with_name("epoch_006.pt.complete.json").write_text("{}")
+    return config_path, checkpoint, dataset_dir
+
+
+def test_sam3_resume_reuses_the_interrupted_runs_dataset(tmp_path, monkeypatch):
+    from hydra_suite.detectkit import cli
+
+    config_path, checkpoint, dataset_dir = _sam3_resume_fixture(tmp_path)
+
+    def prepare(*_args, **_kwargs):
+        raise AssertionError("a SAM3 resume must not re-prepare the dataset")
+
+    captured = {}
+
+    def run_entries(_orchestrator, entries, **_kwargs):
+        captured["entries"] = entries
+        return [{"success": True, "role": "semantic_sam3"}]
+
+    monkeypatch.setattr(cli, "prepare_role_datasets", prepare)
+    monkeypatch.setattr(cli, "run_role_entries", run_entries)
+
+    assert cli.main(["--config", str(config_path), "--resume", str(checkpoint)]) == 0
+
+    (entry,) = captured["entries"]
+    assert entry.spec.resume_from == str(checkpoint.resolve())
+    assert entry.spec.derived_dataset_dir == str(dataset_dir)
+    assert entry.spec.base_model == "sam3"
+    # Pinned to the batch the interrupted run resolved, so nothing re-probes.
+    assert entry.spec.sam3_params.batch == 8
+
+
+def test_sam3_resume_refuses_a_plan_that_drifted(tmp_path, monkeypatch, capsys):
+    from hydra_suite.detectkit import cli
+
+    config_path, checkpoint, _ = _sam3_resume_fixture(tmp_path, drift={"lr": 1.0})
+    monkeypatch.setattr(
+        cli,
+        "run_role_entries",
+        lambda *_a, **_k: pytest.fail("a drifted resume must not train"),
+    )
+
+    assert cli.main(["--config", str(config_path), "--resume", str(checkpoint)]) == 2
+    assert "sam3.lr" in capsys.readouterr().err
+
+
+def test_sam3_resume_refuses_when_the_prepared_dataset_is_gone(tmp_path, monkeypatch):
+    import shutil
+
+    from hydra_suite.detectkit import cli
+
+    config_path, checkpoint, dataset_dir = _sam3_resume_fixture(tmp_path)
+    shutil.rmtree(dataset_dir)
+    monkeypatch.setattr(
+        cli,
+        "prepare_role_datasets",
+        lambda *_a, **_k: pytest.fail("must refuse before preparation"),
+    )
+
+    assert cli.main(["--config", str(config_path), "--resume", str(checkpoint)]) == 2

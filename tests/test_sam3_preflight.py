@@ -1858,3 +1858,19 @@ def test_the_stamped_analytic_estimate_is_the_one_the_budget_used(
             decision.budget.accelerator_peak_bytes
             == decision.device_peak_analytic_bytes
         )
+
+
+def test_valid_epoch_checkpoint_resume_is_admitted(tmp_path):
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path)
+    run_dir = tmp_path / "old_run"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "spec.json").write_text("{}")
+    checkpoint = run_dir / "checkpoints" / "epoch_002.pt"
+    checkpoint.write_bytes(b"x")
+    checkpoint.with_name("epoch_002.pt.complete.json").write_text("{}")
+    spec.resume_from = str(checkpoint)
+
+    decision = _decision(spec)
+
+    assert not any("resum" in r.lower() for r in decision.refusals), decision.refusals

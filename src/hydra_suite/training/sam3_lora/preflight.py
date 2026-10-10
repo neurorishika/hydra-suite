@@ -1720,11 +1720,21 @@ def assess_preflight(
             "Label quality has not been acknowledged; affirm the training labels "
             "are good before SAM3 learns from them."
         )
-    if getattr(spec, "resume_from", ""):
-        refusals.append(
-            "resume_from is set, but SAM3 LoRA training does not checkpoint "
-            "optimiser state; resuming is not supported."
-        )
+    resume_from = str(getattr(spec, "resume_from", "") or "")
+    if resume_from:
+        from .resume import ResumeError, parse_resume_checkpoint
+
+        try:
+            point = parse_resume_checkpoint(resume_from)
+        except ResumeError as exc:
+            refusals.append(str(exc))
+        else:
+            epochs = int(getattr(params, "epochs", 0) or 0)
+            if epochs and point.epoch >= epochs:
+                refusals.append(
+                    f"resume_from is epoch {point.epoch}, but the run trains "
+                    f"{epochs} epochs; there is nothing left to train."
+                )
     return Sam3PreflightDecision(
         admitted=not refusals,
         request=request,

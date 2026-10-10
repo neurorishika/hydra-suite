@@ -778,6 +778,23 @@ def _fingerprint_key(identity: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def _resumed_batch_resolution(
+    resume_from: str, fallback: dict[str, Any]
+) -> dict[str, Any]:
+    """The interrupted run's batch provenance, marked as carried forward."""
+
+    from .resume import ResumeError, load_run_spec_payload, parse_resume_checkpoint
+
+    try:
+        payload = load_run_spec_payload(parse_resume_checkpoint(resume_from).run_dir)
+    except ResumeError:
+        return fallback
+    prior = payload.get("batch_resolution")
+    if not isinstance(prior, dict):
+        return fallback
+    return {**prior, "carried_forward_from": resume_from}
+
+
 def train_sam3_lora(
     spec: Any,
     run_dir: str,
@@ -863,6 +880,11 @@ def train_sam3_lora(
             )
 
     spec = resolved_spec
+    resume_from = str(getattr(spec, "resume_from", "") or "")
+    if resume_from:
+        # A resumed run trains at the batch the interrupted run resolved; keep
+        # that run's provenance instead of restamping it as "explicit".
+        batch_resolution = _resumed_batch_resolution(resume_from, batch_resolution)
 
     try:
         initial = preflight_module.assess_preflight(
