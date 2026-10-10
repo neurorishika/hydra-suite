@@ -43,9 +43,9 @@ def test_review_shortcut_defaults_use_plus_and_minus(qapp) -> None:
     dialog = ShortcutEditorDialog()
     shortcuts = dialog.get_shortcuts()
 
-    # Review approve/reject defaults were changed to Y/N (shortcut_editor _PLUS_KEY/_MINUS_KEY).
-    assert shortcuts["Approve review label"] == QKeySequence(Qt.Key.Key_Y).toString()
-    assert shortcuts["Reject review label"] == QKeySequence(Qt.Key.Key_N).toString()
+    # Y/N collided with label keys (e.g. yellow / notag), so approve/reject are +/-.
+    assert shortcuts["Approve review label"] == QKeySequence(Qt.Key.Key_Plus).toString()
+    assert shortcuts["Reject review label"] == QKeySequence(Qt.Key.Key_Minus).toString()
 
 
 def test_shortcut_editor_excludes_mode_shortcuts(qapp) -> None:

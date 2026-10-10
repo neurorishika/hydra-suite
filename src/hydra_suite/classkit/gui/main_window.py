@@ -3986,10 +3986,16 @@ class MainWindow(QMainWindow):
 
         from .dialogs import ShortcutEditorDialog
 
+        from .shortcut_rules import LEGACY_DEFAULTS
+
         allowed_actions = {name for name, _ in ShortcutEditorDialog.DEFAULT_SHORTCUTS}
         sanitized: dict[str, str] = {}
         for action_name, sequence in shortcuts.items():
             if action_name not in allowed_actions or sequence in (None, ""):
+                continue
+            # Approve/reject used to default to Y/N, which clash with label keys;
+            # a saved copy of the old default is not a customisation.
+            if LEGACY_DEFAULTS.get(action_name) == str(sequence):
                 continue
             sanitized[str(action_name)] = str(sequence)
         return sanitized
@@ -6855,7 +6861,7 @@ class MainWindow(QMainWindow):
 
     def open_class_editor(self):
         """Open the dedicated class / labeling-scheme editor dialog."""
-        from .dialogs import ClassEditorDialog
+        from .dialogs import ClassEditorDialog, ShortcutEditorDialog
 
         scheme_dict = None
         if self.project_path:
@@ -6869,10 +6875,15 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
+        from .shortcut_rules import reserved_key_map
+
+        defaults = dict(ShortcutEditorDialog.DEFAULT_SHORTCUTS)
+        active = {**defaults, **self._sanitize_custom_shortcuts(self._custom_shortcuts)}
         dlg = ClassEditorDialog(
             classes=self.classes,
             scheme_dict=scheme_dict,
             parent=self,
+            reserved_keys=reserved_key_map(active),
         )
         if dlg.exec() != ClassEditorDialog.Accepted:
             return
@@ -6941,7 +6952,20 @@ class MainWindow(QMainWindow):
         """Open the keyboard-shortcut editor dialog."""
         from .dialogs import ShortcutEditorDialog
 
-        dlg = ShortcutEditorDialog(current=self._custom_shortcuts, parent=self)
+        from .shortcut_rules import scheme_key_map
+
+        scheme_dict = None
+        scheme_path = self._project_scheme_path() if self.project_path else None
+        if scheme_path is not None and scheme_path.exists():
+            try:
+                scheme_dict = json.loads(scheme_path.read_text())
+            except Exception:
+                scheme_dict = None
+        dlg = ShortcutEditorDialog(
+            current=self._custom_shortcuts,
+            parent=self,
+            scheme_keys=scheme_key_map((scheme_dict or {}).get("factors", [])),
+        )
         if dlg.exec() != ShortcutEditorDialog.Accepted:
             return
 

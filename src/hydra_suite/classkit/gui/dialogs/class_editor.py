@@ -53,8 +53,12 @@ class ClassEditorDialog(QDialog):
         classes: Optional[List[str]] = None,
         scheme_dict: Optional[dict] = None,
         parent=None,
+        reserved_keys: Optional[dict] = None,
     ):
         super().__init__(parent)
+        # {normalized key: action} bound to global shortcuts; label keys may not
+        # reuse them.
+        self._reserved_keys = dict(reserved_keys or {})
         self.setWindowTitle("Edit Classes and Labeling Scheme")
         self.resize(820, 540)
         self.setMinimumWidth(680)
@@ -443,6 +447,17 @@ class ClassEditorDialog(QDialog):
                     "Add at least one label or remove the factor.",
                 )
                 return
+        from hydra_suite.classkit.gui.shortcut_rules import scheme_key_conflicts
+
+        problems = scheme_key_conflicts(self._factors, self._reserved_keys)
+        if problems:
+            QMessageBox.warning(
+                self,
+                "Shortcut Conflict",
+                "Fix these label shortcuts before saving:\n\n• "
+                + "\n• ".join(problems),
+            )
+            return
         self.accept()
 
     @property
