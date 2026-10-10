@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -57,6 +58,7 @@ from hydra_suite.core.inference.slice_meta import (
 )
 from hydra_suite.detectkit.gui.canvas import OBBCanvas
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
+from hydra_suite.detectkit.gui.widgets.calibration_tradeoffs import CalibrationTradeoffs
 from hydra_suite.detectkit.jobs.direct_calibration import (
     UNKNOWN_RECOMMENDATION_RULE_ID,
     UNKNOWN_RECOMMENDATION_RULE_LABEL,
@@ -281,7 +283,24 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
             QHeaderView.ResizeMode.Interactive
         )
         self.table_rows.currentCellChanged.connect(self._on_row_changed)
-        splitter.addWidget(self.table_rows)
+        self.results_tabs = QTabWidget()
+        self.tradeoffs = CalibrationTradeoffs(self.outcome.points)
+        self.tradeoffs.row_selected.connect(self.table_rows.selectRow)
+        self.tradeoffs.recommended_row = next(
+            (
+                row
+                for row, point in enumerate(self.outcome.points)
+                if point is self._recommended_point
+            ),
+            -1,
+        )
+        self.tradeoffs.redraw()
+        self.results_tabs.addTab(self.tradeoffs, "Tradeoff plot")
+        self.results_tabs.addTab(self.table_rows, "Table (all measurements)")
+        splitter.addWidget(self.results_tabs)
+        self.lbl_selected_results = QLabel()
+        self.lbl_selected_results.setWordWrap(True)
+        outer.addWidget(self.lbl_selected_results)
 
         preview = QWidget()
         preview_layout = QVBoxLayout(preview)
@@ -486,6 +505,11 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         self._active_rule_id = RECOMMENDATION_RULE_ID
         self._lbl_rule.setText(self._rule_label_text())
         self._lbl_reason.setText(self._recommendation_reason)
+        self.tradeoffs.recommended_row = next(
+            (row for row, point in enumerate(self.outcome.points) if point is chosen),
+            -1,
+        )
+        self.tradeoffs.redraw()
         self._populate_table()
 
     def _current_point(self):
@@ -552,6 +576,22 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         )
 
     def _on_row_changed(self, *_unused) -> None:
+        row = self.table_rows.currentRow()
+        self.tradeoffs.set_selection(row)
+        point = self._current_point()
+        if point is None:
+            self.lbl_selected_results.clear()
+        else:
+            self.lbl_selected_results.setText(
+                f"{point.label} · confidence {point.confidence:g} · "
+                f"tile {point.tile_width}×{point.tile_height} · overlap {point.overlap:g} · "
+                f"{point.tiles_per_frame} tiles/full frame · {point.seconds_per_frame:.3f} s/full frame · "
+                f"recall {point.score.recall:.1%} · precision {point.score.precision:.1%} · "
+                f"F1 {point.score.f1:.3f} · matched {point.score.matched} · "
+                f"missed {point.score.missed} · extra {point.score.extra} · "
+                f"duplicates {point.score.duplicate} · {point.score.frames} measured frames"
+                + (f" · FAILED: {point.failed_reason}" if point.failed_reason else "")
+            )
         self._frame_index = 0
         self._render_preview()
         self._update_save_enabled()

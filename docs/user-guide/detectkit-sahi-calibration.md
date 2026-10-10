@@ -110,6 +110,30 @@ measured with, and its scores are valid *for the cap named in the results
 table*. If your TrackerKit `MAX_TARGETS` is far below that cap, expect
 fewer detections per frame than the frontier reported.
 
+## Explore the tradeoff plot
+
+Results open on **Tradeoff plot**, with recall against measured seconds per
+full frame. Prefer points toward the upper left: more animals found with
+less inference time. Switch to tile cost, precision versus recall, F1, or
+match quality to explore other tradeoffs. Tile cost is the number of tile
+jobs per full frame (an unsliced frame is 1); it is a work proxy, not a speed
+ratio. Actual time depends on the model, hardware, batching, and merging.
+
+Blue rings identify the Pareto frontier for the two displayed metrics.
+A point is dominated when another improves at least one metric without
+worsening the other. This frontier does not replace the recommendation rule
+or its quality floors. Green stars mark the recommendation; orange squares
+mark your selection. Click any point to inspect its metrics and stored
+prediction overlays or stage a named profile. Repeated clicks cycle points
+that overlap. Selecting a point does not save or apply it.
+
+**Table (all measurements)** retains every row, including failed settings.
+Failed, unmeasured, and nonfinite results are excluded from the plot; the
+plot reports how many rows are unavailable in each view. Timing comparisons
+apply to the calibration evidence and runtime, not guaranteed deployment
+speed. These points compare settings for the calibrated checkpoint, rather
+than ranking different trained models.
+
 ## How to read the frontier columns
 
 Calibration reports one row per measured operating point (one tiling
@@ -144,15 +168,16 @@ Calibration can suggest a balanced operating point, but it never applies
 one automatically -- you always review and choose. The rule it uses, shown
 in the app and quoted here verbatim:
 
-> Balanced rule: drop failed and undersampled points, keep the Pareto
-> frontier of misses, extras and time, then take the fastest point whose F1
-> is within 0.01 of the best and whose localization quality is at least
-> 0.5.
+> Recall-first rule: drop failed points, keep only those recalling at
+> least 90% of labelled instances, then only those whose mean match
+> quality is at least 0.35, then only those with at least 60 matched
+> instances; among the survivors take the cheapest measured
+> seconds/frame, breaking ties on fewer tiles then higher confidence.
 
-If no point clears the eligibility floors (at least 60 matched instances
-and mean IoU at least 0.5), calibration refuses to recommend anything
-rather than post a misleadingly perfect score from a handful of lucky
-matches. In that case, label a few more frames or widen the sweep.
+If no point clears these eligibility floors, calibration refuses to
+recommend anything. The plot can still help diagnose the tradeoff, but a
+frontier point is not automatically eligible. Label more frames or widen
+the sweep when the evidence is insufficient.
 
 ## Saving, naming, and the primary profile
 

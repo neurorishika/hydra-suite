@@ -1716,3 +1716,46 @@ def test_history_calibration_follows_a_derived_segment_dataset_to_full_frames(tm
         json.dumps({"type": "derived_segment", "source": str(sliced)})
     )
     assert resolve_calibration_dataset_yaml(derived) == source / "dataset.yaml"
+
+
+def test_tradeoff_plot_is_default_and_selection_matches_table(results_dialog):
+    from types import SimpleNamespace
+
+    dialog = results_dialog
+    assert dialog.results_tabs.currentIndex() == 0
+    dialog.table_rows.selectRow(1)
+    assert dialog.tradeoffs.selected_row == 1
+    assert dialog.outcome.points[1].label in dialog.lbl_selected_results.text()
+    dialog.tradeoffs._on_pick(
+        SimpleNamespace(artist=dialog.tradeoffs._scatter, ind=[0])
+    )
+    assert dialog.table_rows.currentRow() == 0
+    assert dialog.tradeoffs.selected_row == 0
+    dialog.results_tabs.setCurrentIndex(1)
+    assert dialog.table_rows.rowCount() == len(dialog.outcome.points)
+
+
+def test_overlapping_plot_points_cycle_original_rows(results_dialog):
+    from types import SimpleNamespace
+
+    plot = results_dialog.tradeoffs
+    plot._on_pick(SimpleNamespace(artist=plot._scatter, ind=[0, 1]))
+    assert results_dialog.table_rows.currentRow() == 0
+    plot._on_pick(SimpleNamespace(artist=plot._scatter, ind=[0, 1]))
+    assert results_dialog.table_rows.currentRow() == 1
+
+
+def test_canvas_click_selects_measurement_and_survives_view_change(results_dialog):
+    from matplotlib.backend_bases import MouseEvent
+
+    plot = results_dialog.tradeoffs
+    plot.canvas.draw()
+    ax = plot.figure.axes[0]
+    x, y = ax.transData.transform((0.4, 0.92))
+    event = MouseEvent("button_press_event", plot.canvas, x, y, button=1)
+    plot.canvas.callbacks.process("button_press_event", event)
+    assert results_dialog.table_rows.currentRow() == 1
+    for index in range(len(plot.VIEWS)):
+        plot.view.setCurrentIndex(index)
+        assert plot.selected_row == 1
+        assert results_dialog.table_rows.currentRow() == 1
