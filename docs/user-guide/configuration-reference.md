@@ -27,10 +27,12 @@ encode. Frames are decoded straight to the output size (`video_output_scale`;
 width and height are rounded to even numbers for H.264/HEVC), so at the
 default 0.5 every stage handles a quarter of the pixels. Markers, arrows,
 labels, trails and pose overlays scale with it; at `1.0` the overlay is
-pixel-identical to earlier releases. The decoder is chosen automatically, in
-order: NVIDIA NVDEC with on-GPU resize (Linux), PyAV hardware decode
-(VideoToolbox on macOS, CUDA on Linux), PyAV software decode, then OpenCV.
-The log names the decoder that was picked (`Annotated video decode: ...`).
+pixel-identical to earlier releases. The decoder is chosen automatically: NVIDIA NVDEC
+with on-GPU resize first when a CUDA GPU is usable (Linux, Windows); then, when
+downscaling, PyAV software decode, PyAV hardware decode (VideoToolbox / CUDA),
+OpenCV; at scale 1.0, OpenCV (the historical path) leads. Videos with a
+display-rotation tag always use OpenCV, which applies the rotation tracking
+saw. The log names the decoder that was picked (`Annotated video decode: ...`).
 Hardware decoders have size limits (H.264 above 4096 px per side is
 typically refused), so such sources fall through to software decode
 automatically.
