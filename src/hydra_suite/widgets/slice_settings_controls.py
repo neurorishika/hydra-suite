@@ -105,8 +105,9 @@ def build_controls(w) -> None:
     w.combo_slice_profile.setToolTip(
         "Training geometry stamped on the model, a calibrated profile, or Custom."
     )
-    w.lbl_slice_profile_status = muted_label()
-    w.lbl_slice_profile_status.setWordWrap(True)
+    # No status label here: the profile's status is host prose (TrackerKit
+    # shows it as its own full-width row); a word-wrapped label inside a grid
+    # cell would overlap its neighbours.
     w.combo_slice_geometry = item_combo(
         GEOMETRY_ITEMS,
         "How tile size is chosen: fit to the animal, the model input, or a "
@@ -372,7 +373,7 @@ def row_specs(w) -> list[tuple[str, str | None, QWidget, QLabel | None]]:
         (
             "profile",
             "Profile",
-            hbox(w.combo_slice_profile, w.lbl_slice_profile_status),
+            hbox(w.combo_slice_profile),
             None,
         ),
         ("mode", "Tile strategy", w.combo_slice_geometry, None),

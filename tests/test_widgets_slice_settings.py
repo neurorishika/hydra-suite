@@ -725,3 +725,9 @@ def test_unknown_body_shows_no_source_badge():
     assert typable.lbl_slice_body_badge.text() == ""
     typable.spin_slice_body.setValue(40.0)
     assert typable.lbl_slice_body_badge.text() == "user"
+
+
+def test_widget_owns_no_profile_status_label():
+    """Review NIT: hosts own the profile status prose (TrackerKit's row)."""
+    w = SliceSettingsWidget(role="infer_yolo")
+    assert not hasattr(w, "lbl_slice_profile_status")
