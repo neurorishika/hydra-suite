@@ -705,6 +705,7 @@ class TrackingEngineCore:
             start_frame,
             end_frame,
             detection_cache_version="2.0",
+            max_targets=params.get("MAX_TARGETS"),
         )
         filter_hash = compute_filter_settings_hash(params)
         extractor_hash = compute_extractor_hash(params)
@@ -732,6 +733,8 @@ class TrackingEngineCore:
                     "filter_settings_hash": filter_hash,
                     "extractor_hash": extractor_hash,
                     "pose_keypoint_names": [str(k) for k in (keypoint_names or [])],
+                    # Final-N tracking artifact: readers require the same N.
+                    "max_targets": params.get("MAX_TARGETS"),
                     "start_frame": int(start_frame),
                     "end_frame": int(end_frame),
                     "video_path": str(Path(self.video_path).expanduser().resolve()),
@@ -2344,7 +2347,7 @@ class TrackingEngineCore:
             )
 
             pose_props_cache = IndividualPropertiesCache(pose_cache_candidate, mode="r")
-            if not pose_props_cache.is_compatible():
+            if not pose_props_cache.is_compatible(max_targets=int(p["MAX_TARGETS"])):
                 logger.warning(
                     "Pose direction override disabled: incompatible properties cache: %s",
                     pose_cache_candidate,
@@ -2396,6 +2399,7 @@ class TrackingEngineCore:
                 start_frame,
                 end_frame,
                 detection_cache_version="2.4",
+                max_targets=int(p["MAX_TARGETS"]),
             ),
             compute_filter_settings_hash(p),
             compute_extractor_hash(p),

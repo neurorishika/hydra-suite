@@ -22,7 +22,7 @@ A single named constant (new home: `core/inference/limits.py`) replaces
 
 1. detections stored per frame in the detection cache,
 2. per-animal analyses per frame (head-tail, pose, CNN, AprilTag, identity
-   evidence, detected/individual properties),
+   evidence),
 3. N itself.
 
 It is LOUD:
@@ -79,10 +79,17 @@ Changing N or any filter never re-runs a detector.
 
 ## 4. Per-animal stages
 
-Head-tail, pose, CNN, AprilTag, identity evidence and detected/individual
-properties are computed for **every detection surviving step 2 with N =
-1024** (i.e. the window and final cap at the limit), not the post-final-cap
-set, and stored keyed by **raw cache index**.
+Head-tail, pose, CNN, AprilTag and identity evidence are computed for
+**every detection surviving step 2 with N = 1024** (i.e. the window and final
+cap at the limit), not the post-final-cap set, and stored keyed by **raw
+cache index**.
+
+The detected/individual-properties caches are NOT among them: they are
+written in the tracking loop over the final-N detection ids, i.e. they are
+tracking-level final-N artifacts. N is therefore part of their identity
+(`compute_detection_hash(..., max_targets=N)` and a recorded `max_targets`
+that `IndividualPropertiesCache.is_compatible(max_targets=N)` checks), so a
+file written at one N is never opened by a pass at another N.
 
 - Their cache keys gain a hash of the replay filter settings (confidence,
   size, aspect, ROI, NMS IoU) and never contain N. Changing N reuses them;
@@ -95,9 +102,9 @@ set, and stored keyed by **raw cache index**.
 - Crops are materialised and run in fixed-size chunks so 1024 detections per
   frame does not spike memory.
 - `MAX_TARGETS` removed from `get_tracking_cache_model_ids`
-  (`trackerkit/tracking_cache.py`), so props-cache filenames are N-free. The
-  unused duplicate id builder in `trackerkit/gui/orchestrators/tracking.py`
-  is deleted.
+  (`trackerkit/tracking_cache.py`), so the inference model id is N-free (N
+  re-enters the props-cache identity only, see above). The unused duplicate
+  id builder in `trackerkit/gui/orchestrators/tracking.py` is deleted.
 
 ## 5. Unchanged
 
