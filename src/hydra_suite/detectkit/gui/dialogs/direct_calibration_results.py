@@ -244,6 +244,7 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         self._updating_primary_combo = False
 
         self._build_ui()
+        self.resize(1380, 860)
         self._populate_table()
         self._refresh_profile_list()
         if outcome.points:
@@ -259,6 +260,14 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         container = QWidget()
         outer = QVBoxLayout(container)
 
+        summary_row = QHBoxLayout()
+        self.lbl_recommendation_summary = QLabel()
+        self.lbl_recommendation_summary.setWordWrap(True)
+        summary_row.addWidget(self.lbl_recommendation_summary, 1)
+        self.chk_recommendation_details = QCheckBox("Recommendation details")
+        summary_row.addWidget(self.chk_recommendation_details)
+        outer.addLayout(summary_row)
+        self._update_recommendation_summary()
         self._lbl_rule = QLabel(self._rule_label_text())
         self._lbl_rule.setWordWrap(True)
         outer.addWidget(self._lbl_rule)
@@ -266,13 +275,18 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         self._lbl_reason = QLabel(self._recommendation_reason)
         self._lbl_reason.setWordWrap(True)
         outer.addWidget(self._lbl_reason)
+        self._lbl_rule.hide()
+        self._lbl_reason.hide()
+        self.chk_recommendation_details.toggled.connect(self._lbl_rule.setVisible)
+        self.chk_recommendation_details.toggled.connect(self._lbl_reason.setVisible)
 
         if self._stored_mode:
             self.btn_reevaluate = QPushButton("Re-evaluate under current rule")
             self.btn_reevaluate.clicked.connect(self._on_reevaluate_clicked)
             outer.addWidget(self.btn_reevaluate)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
         self.table_rows = QTableWidget(0, len(_COLUMN_LABELS))
         self.table_rows.setHorizontalHeaderLabels(_COLUMN_LABELS)
@@ -300,31 +314,36 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         splitter.addWidget(self.results_tabs)
         self.lbl_selected_results = QLabel()
         self.lbl_selected_results.setWordWrap(True)
-        outer.addWidget(self.lbl_selected_results)
 
         preview = QWidget()
         preview_layout = QVBoxLayout(preview)
-        preview_layout.setContentsMargins(0, 8, 0, 0)
+        preview_layout.setContentsMargins(8, 0, 0, 0)
+        preview.setMinimumWidth(400)
+        preview_layout.addWidget(QLabel("Selected measurement"))
+        preview_layout.addWidget(self.lbl_selected_results)
 
         preview_header = QHBoxLayout()
-        self.btn_prev_frame = QPushButton("< Previous frame")
+        self.btn_prev_frame = QPushButton("Previous")
         self.btn_prev_frame.clicked.connect(lambda: self._step_frame(-1))
         preview_header.addWidget(self.btn_prev_frame)
         self._frame_label = QLabel("")
         self._frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview_header.addWidget(self._frame_label, 1)
-        self.btn_next_frame = QPushButton("Next frame >")
+        self.btn_next_frame = QPushButton("Next")
         self.btn_next_frame.clicked.connect(lambda: self._step_frame(1))
         preview_header.addWidget(self.btn_next_frame)
         self.chk_show_gt = QCheckBox("Ground truth")
         self.chk_show_gt.setChecked(True)
         self.chk_show_gt.toggled.connect(self._refresh_visibility)
-        preview_header.addWidget(self.chk_show_gt)
+        visibility_row = QHBoxLayout()
+        visibility_row.addWidget(self.chk_show_gt)
         self.chk_show_pred = QCheckBox("Predictions")
         self.chk_show_pred.setChecked(True)
         self.chk_show_pred.toggled.connect(self._refresh_visibility)
-        preview_header.addWidget(self.chk_show_pred)
+        visibility_row.addWidget(self.chk_show_pred)
+        visibility_row.addStretch()
         preview_layout.addLayout(preview_header)
+        preview_layout.addLayout(visibility_row)
 
         self.canvas = OBBCanvas()
         self.canvas.setMinimumHeight(260)
@@ -335,8 +354,8 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         self.lbl_overlay_caption.setWordWrap(True)
         preview_layout.addWidget(self.lbl_overlay_caption)
         splitter.addWidget(preview)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
         outer.addWidget(splitter, 1)
 
         entry_row = QHBoxLayout()
@@ -471,6 +490,22 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         rule_label = outcome.recommendation_rule or UNKNOWN_RECOMMENDATION_RULE_LABEL
         return f"Stored recommendation (rule: {rule_label}): {outcome.recommendation_pick_reason}"
 
+    def _update_recommendation_summary(self) -> None:
+        point = self._recommended_point
+        if point is None:
+            text = "No recommended setting. Open recommendation details for the reason."
+        else:
+            prefix = (
+                "Stored recommendation"
+                if self._stored_mode and not self._reevaluated
+                else "Recommended"
+            )
+            text = (
+                f"{prefix}: {point.label} · {point.score.recall:.1%} recall · "
+                f"{point.score.precision:.1%} precision · {point.seconds_per_frame:.3f} s/full frame"
+            )
+        self.lbl_recommendation_summary.setText(text)
+
     def _rule_label_text(self) -> str:
         if self._stored_mode and not self._reevaluated:
             rule = self.outcome.recommendation_rule or UNKNOWN_RECOMMENDATION_RULE_LABEL
@@ -505,6 +540,7 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         self._active_rule_id = RECOMMENDATION_RULE_ID
         self._lbl_rule.setText(self._rule_label_text())
         self._lbl_reason.setText(self._recommendation_reason)
+        self._update_recommendation_summary()
         self.tradeoffs.recommended_row = next(
             (row for row, point in enumerate(self.outcome.points) if point is chosen),
             -1,
@@ -582,15 +618,24 @@ class DirectCalibrationResultsDialog(DetectKitDialog):
         if point is None:
             self.lbl_selected_results.clear()
         else:
+            quality = (
+                "not measured"
+                if point.score.mean_quality is None
+                else f"{point.score.mean_quality:.3f}"
+            )
             self.lbl_selected_results.setText(
-                f"{point.label} · confidence {point.confidence:g} · "
-                f"tile {point.tile_width}×{point.tile_height} · overlap {point.overlap:g} · "
-                f"{point.tiles_per_frame} tiles/full frame · {point.seconds_per_frame:.3f} s/full frame · "
-                f"recall {point.score.recall:.1%} · precision {point.score.precision:.1%} · "
-                f"F1 {point.score.f1:.3f} · matched {point.score.matched} · "
-                f"missed {point.score.missed} · extra {point.score.extra} · "
-                f"duplicates {point.score.duplicate} · {point.score.frames} measured frames"
-                + (f" · FAILED: {point.failed_reason}" if point.failed_reason else "")
+                f"#{row + 1} {point.label}\n"
+                f"Recall {point.score.recall:.1%} · Precision {point.score.precision:.1%} · F1 {point.score.f1:.3f}\n"
+                f"Matched {point.score.matched} · Missed {point.score.missed} · "
+                f"Extra {point.score.extra} · Duplicates {point.score.duplicate}\n"
+                f"Match quality {quality} · Localization IoU {point.score.mean_iou:.3f}\n"
+                f"{point.seconds_per_frame:.3f} s/full frame · {point.tiles_per_frame} tiles/full frame\n"
+                f"Tile {point.tile_width}×{point.tile_height} · Overlap {point.overlap:g} · "
+                f"Confidence {point.confidence:g}\n"
+                f"Merge {point.merge_policy}/{point.merge_metric}@{point.merge_threshold:g}\n"
+                f"Evidence: {point.score.frames} frames · "
+                f"{point.score.matched + point.score.missed} labelled instances"
+                + (f"\nFAILED: {point.failed_reason}" if point.failed_reason else "")
             )
         self._frame_index = 0
         self._render_preview()

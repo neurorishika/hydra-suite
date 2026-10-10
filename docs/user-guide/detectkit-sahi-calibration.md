@@ -123,7 +123,20 @@ Blue rings identify the Pareto frontier for the two displayed metrics.
 A point is dominated when another improves at least one metric without
 worsening the other. This frontier does not replace the recommendation rule
 or its quality floors. Green stars mark the recommendation; orange squares
-mark your selection. Click any point to inspect its metrics and stored
+mark your selection. **Scroll** over the chart to zoom around the cursor.
+**Box zoom** lets you drag a rectangle around a crowded region; **Pan** lets
+you drag the view. **Reset view**, **Back**, and **Forward** restore or revisit
+views. Turn Pan or Box zoom off to select points. Selection preserves your
+zoom and pan. Hover over a point to read its settings and measured metrics.
+
+Use **Pareto frontier only** to hide dominated settings while keeping every
+measurement in the table. Click a cluster and use **Points at click** to
+choose an exact setting when points overlap; the chooser also works with
+the keyboard. **Inspect recommended** selects the rule's suggested setting.
+The selected metrics and frame preview appear beside the chart. Expand
+**Recommendation details** to read the complete rule and explanation.
+
+Click any point to inspect its metrics and stored
 prediction overlays or stage a named profile. Repeated clicks cycle points
 that overlap. Selecting a point does not save or apply it.
 
