@@ -1033,7 +1033,7 @@ class PostProcessPanel(QWidget):
         self.spin_video_output_scale.setToolTip(
             "Resolution of the annotated video relative to the source video.\n"
             "0.5 = half width and height (a quarter of the pixels): much faster\n"
-            "to render and a much smaller file. 1.0 = full source resolution.\n"
+            "to render. 1.0 = full source resolution.\n"
             "Markers, arrows, text and trails scale with it."
         )
         f_video_destination.addRow("Output scale", self.spin_video_output_scale)
