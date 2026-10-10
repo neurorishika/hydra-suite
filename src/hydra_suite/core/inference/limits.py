@@ -50,6 +50,11 @@ def require_target_count_within_limit(n: int) -> int:
     return n
 
 
+# Per-frame limit WARNINGs logged per run before collapsing to one notice;
+# every hit is still recorded and reported in the end-of-run summary.
+MAX_PER_FRAME_LIMIT_WARNINGS = 20
+
+
 @dataclass
 class DetectionLimitStats:
     """Run-scoped record of frames that hit MAX_DETECTIONS_PER_FRAME."""
@@ -60,6 +65,13 @@ class DetectionLimitStats:
         self, frame_idx: int, candidate_count: int, criterion: str = "confidence"
     ) -> None:
         self.frames.append((int(frame_idx), int(candidate_count)))
+        if len(self.frames) > MAX_PER_FRAME_LIMIT_WARNINGS:
+            if len(self.frames) == MAX_PER_FRAME_LIMIT_WARNINGS + 1:
+                logger.warning(
+                    "(further per-frame detection-limit warnings suppressed; "
+                    "see summary)"
+                )
+            return
         logger.warning(
             "Frame %d produced %d detection candidates; the hard limit is %d "
             "per frame -- kept the top %d by %s, dropped the rest.",

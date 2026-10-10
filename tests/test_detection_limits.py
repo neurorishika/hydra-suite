@@ -67,3 +67,47 @@ def test_stats_summary_counts_frames():
     stats.record(9, 2048)
     msg = stats.summary()
     assert "2 frame(s)" in msg and "1024" in msg and "7" in msg
+
+
+# --- M12: a threshold below the extraction floor is loud ----------------------
+
+
+def test_confidence_below_extraction_floor_warns_once(caplog):
+    import logging
+
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    with caplog.at_level(logging.WARNING):
+        build_inference_config_from_params(
+            {"YOLO_CONFIDENCE_THRESHOLD": 0.005, "MAX_TARGETS": 4}
+        )
+    hits = [r for r in caplog.records if "extraction floor" in r.getMessage()]
+    assert len(hits) == 1 and "0.01" in hits[0].getMessage()
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        build_inference_config_from_params(
+            {"YOLO_CONFIDENCE_THRESHOLD": 0.25, "MAX_TARGETS": 4}
+        )
+    assert not [r for r in caplog.records if "extraction floor" in r.getMessage()]
+
+
+# --- M13: per-frame limit warnings collapse after the first 20 ---------------
+
+
+def test_per_frame_limit_warnings_collapse_after_twenty(caplog):
+    import logging
+
+    from hydra_suite.core.inference.limits import DetectionLimitStats
+
+    stats = DetectionLimitStats()
+    with caplog.at_level(logging.WARNING):
+        for f in range(50):
+            stats.record(f, 2000)
+    msgs = [r.getMessage() for r in caplog.records]
+    per_frame = [m for m in msgs if m.startswith("Frame ")]
+    assert len(per_frame) == 20
+    suppressed = [m for m in msgs if "suppressed" in m]
+    assert len(suppressed) == 1 and "see summary" in suppressed[0]
+    assert len(stats.frames) == 50  # every hit still counted
+    assert stats.summary().startswith("50 frame(s)")
