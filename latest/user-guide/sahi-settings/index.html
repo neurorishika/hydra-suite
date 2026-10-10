@@ -2337,10 +2337,18 @@ inference (SAHI)" in TrackerKit, "Enable sliced inference" in the DetectKit
 inference dialog, and "Enable sliced training + preview" in YOLO training.
 The SAM3 training and escalation hosts have no checkbox. In escalation, an
 object scale of 0 means no tiling (see below).</p>
+<p>While the checkbox is unticked, the group collapses to just the checkbox:
+every other row, the Advanced section, the profile picker and the
+tile-layout preview are hidden (in TrackerKit, so are the tile-batch note and
+the profile status line). Nothing is reset. Tick it again and every value,
+including whether Advanced was open, comes back as you left it. The DetectKit
+inference dialog shrinks and grows with the group.</p>
 <h3 id="profile">Profile<a class="headerlink" href="#profile" title="Permanent link">&para;</a></h3>
 <p>The calibration profile picker: "Training geometry", each calibrated profile
 saved with the model, or "Custom". The row appears only in TrackerKit, and
-only when the selected model's sidecar contains calibration profiles. If
+only when the selected model's sidecar contains calibration profiles, and
+only while sliced inference is on: to switch to a profile, tick the Enable
+checkbox first, then pick it. If
 you edit a profile-owned value, the picker switches to <code>Custom (based on
 &lt;name&gt;)</code>. Derived values never cause this switch. See <a href="../detectkit-sahi-calibration/">SAHI calibration
 profiles</a>.</p>
@@ -2502,8 +2510,13 @@ to 0.99 to match its own contract.</p>
 </tbody>
 </table>
 <h2 id="which-hosts-show-which-rows">Which hosts show which rows<a class="headerlink" href="#which-hosts-show-which-rows" title="Permanent link">&para;</a></h2>
-<p>Constrained fields are <strong>disabled, never hidden</strong>. A row is hidden only when
-the host has no such setting.</p>
+<p>While sliced inference is on, constrained fields are <strong>disabled, never
+hidden</strong>: a row is hidden only when the host has no such setting. The one
+exception is the Enable checkbox: while it is unticked, everything but the
+checkbox is hidden (see <a href="#enable-checkbox">Enable checkbox</a>).</p>
+<p>In TrackerKit the tile-layout preview sits <strong>below</strong> the controls and scales
+to the panel's width, so the SAHI settings fit the side panel without
+sideways scrolling. The DetectKit dialogs keep it beside the controls.</p>
 <table>
 <thead>
 <tr>
@@ -2591,10 +2604,10 @@ the host has no such setting.</p>
 </tr>
 <tr>
 <td>Tile-layout preview</td>
-<td>yes</td>
-<td>yes</td>
-<td>yes</td>
-<td>yes</td>
+<td>below the controls</td>
+<td>beside</td>
+<td>beside</td>
+<td>beside</td>
 <td>–</td>
 <td>–</td>
 </tr>

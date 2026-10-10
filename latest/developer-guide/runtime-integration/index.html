@@ -2704,7 +2704,19 @@ control/row tables in <code>slice_settings_controls.py</code> and vocabulary/ran
   a role: <code>body_override</code>, <code>body_display_only</code> (TrackerKit),
   <code>advanced_merge</code>, <code>merge_threshold_row</code>, <code>full_frame_pass</code>,
   <code>execution_knobs</code> (TrackerKit tiles per call / memory budget),
-  <code>fixed_overlap</code> (SAM2), and <code>tile_label_formatter</code> (escalation wording).</li>
+  <code>fixed_overlap</code> (SAM2), <code>tile_label_formatter</code> (escalation wording), and
+  <code>preview_position</code> (<code>"side"</code> default; <code>"bottom"</code> stacks the tile-layout
+  preview under the controls at the host's width and puts each derived note
+  on its own eliding line, so a narrow host is never widened -- TrackerKit).</li>
+<li><strong>Visibility rule:</strong> within SAHI on, constrained fields are disabled with
+  a tooltip, never hidden; a row is hidden only when the role or
+  capabilities have no such field. The one exception is SAHI off: in a role
+  with the Enable checkbox (<code>infer_yolo</code>, <code>train_yolo</code>), unchecking it hides
+  every other row, Advanced, the profile row and the preview. Hiding is
+  visibility only -- values, <code>spec()</code>/<code>extras()</code> and signals are unchanged.
+  <code>tiling_shown()</code> lets hosts hide their own SAHI rows with it (TrackerKit's
+  admission note and profile status); <code>DetectKitDialog.fit_to_content(...,
+  follow_content_height=True)</code> lets a dialog shrink and grow with it.</li>
 <li><strong>State</strong> is a <code>TilingSpec</code> plus a per-role <code>extras</code> dict (<code>ROLE_EXTRAS</code>):
   <code>set_spec(spec, extras=...)</code>, <code>spec()</code> and <code>extras()</code>. Geometry combo
   items show the label and store the enum as item data. Readers must use
