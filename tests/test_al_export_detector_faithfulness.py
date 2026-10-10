@@ -197,10 +197,10 @@ def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch, caplog
 
     Slice geometry must match tracking (what gets detected); the tile memory
     budget must not, because it only decides how many tiles ride in one model
-    call. Export takes the full ceiling, and admission never refuses a single
-    tile: a 1024px segment tile at the N-free extraction cap (1025 dense masks)
-    exceeds even the 1 GiB ceiling, so it runs at chunk size 1 with a WARNING
-    instead of exporting zero labels.
+    call. Export takes the full ceiling, so a 1024px segment tile at the
+    N-free extraction cap admits a larger chunk than tracking's 256 MiB budget
+    would (and no oversize WARNING: the dense-mask term is bounded by
+    DENSE_MASK_ESTIMATE_CANDIDATES).
     """
     from hydra_suite.core.inference.stages import slicing
     from hydra_suite.core.inference.stages.obb import effective_raw_detection_cap
@@ -218,15 +218,20 @@ def test_export_does_not_inherit_tracking_tile_memory_budget(monkeypatch, caplog
         frame_wh=(4512, 4512),
         full_frame=False,
     )
-    with caplog.at_level("WARNING"):
-        chunk = slicing.admitted_tile_chunk_size(
+
+    def _chunk(budget):
+        return slicing.admitted_tile_chunk_size(
             plan,
             imgsz=1024,
             device_tiles=False,
             requested=9,
-            byte_budget=export.direct.slice.tile_memory_budget_bytes,
+            byte_budget=budget,
             task="segment",
             max_detections=effective_raw_detection_cap(export),
         )
-    assert chunk == 1
-    assert "admitting it at batch size 1" in caplog.text
+
+    with caplog.at_level("WARNING"):
+        export_chunk = _chunk(export.direct.slice.tile_memory_budget_bytes)
+        tracking_chunk = _chunk(256 * 1024 * 1024)
+    assert export_chunk > tracking_chunk >= 1
+    assert "admitting it at batch size 1" not in caplog.text

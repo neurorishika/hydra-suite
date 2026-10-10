@@ -21,6 +21,18 @@ EXTRACTION_CONFIDENCE_FLOOR = 0.01
 # Per-animal crops are materialised and run in chunks of this many detections
 # so a 1024-detection frame does not spike memory.
 DOWNSTREAM_CHUNK_SIZE = 256
+# MEMORY-ESTIMATE ASSUMPTION, NOT A DETECTION CAP: it never drops a detection.
+# Batch admission (stages/slicing.py ``estimated_prediction_job_bytes``) sizes
+# a segment model's dense masks for at most this many masks per predicted item
+# (tile / crop / frame). The compact term still counts every candidate up to
+# the per-frame limit. Masks are emitted at the model's letterbox resolution
+# (ultralytics ``process_mask(..., upsample=True)``; measured: 24 masks at
+# imgsz 1024 = 25.2 MB uint8), so budgeting all 1025 candidate slots at full
+# resolution (~1 GiB per 1024 px item) collapsed every segment batch to 1.
+# 64 full-resolution masks is the byte equivalent of 1025 masks at prototype
+# resolution ((imgsz/4)^2), and keeps a 26-animal sliced segment run at
+# imgsz 1024 / 256 MiB admitting >= the pre-N-free 3 tiles per call.
+DENSE_MASK_ESTIMATE_CANDIDATES = 64
 
 
 class DetectionLimitError(ValueError):

@@ -13,7 +13,10 @@ Measured on a real checkpoint: `imgsz=1024, max_det=600` returned
 
 import pytest
 
-from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+from hydra_suite.core.inference.limits import (
+    DENSE_MASK_ESTIMATE_CANDIDATES,
+    MAX_DETECTIONS_PER_FRAME,
+)
 from hydra_suite.core.inference.stages.slicing import (
     DENSE_MASK_BYTES_PER_PIXEL,
     MAX_TILE_BATCH_BYTES,
@@ -34,8 +37,9 @@ def test_segment_estimate_tracks_uint8_mask_size():
     est = estimated_prediction_job_bytes(
         imgsz=imgsz, task="segment", max_detections=max_det
     )
-    dense = max_det * imgsz * imgsz  # uint8
-    assert dense <= est < dense * 1.1
+    # uint8 masks, for at most DENSE_MASK_ESTIMATE_CANDIDATES masks per item
+    dense = min(max_det, DENSE_MASK_ESTIMATE_CANDIDATES) * imgsz * imgsz
+    assert est == imgsz * imgsz * 3 * 4 + max_det * 128 + dense
 
 
 def test_detect_task_budgets_no_dense_masks():
@@ -77,12 +81,12 @@ def _fresh_oversize_warnings(monkeypatch):
 def test_oversized_single_tile_is_admitted_at_batch_one_and_warned_once(caplog):
     """Admission never refuses the minimal unit of work (controller ruling R3).
 
-    1025 dense masks (MAX_DETECTIONS_PER_FRAME + probe row) at 1024px exceed
-    even the 1 GiB hard ceiling; the tile is admitted at chunk size 1 and the
-    WARNING (estimate + ceiling) is logged once, not per call.
+    A segment model at imgsz 4096 (the bounded dense-mask term alone is 1 GiB)
+    exceeds the 1 GiB hard ceiling; the tile is admitted at chunk size 1 and
+    the WARNING (estimate + ceiling) is logged once, not per call.
     """
     est = estimated_prediction_job_bytes(
-        imgsz=1024,
+        imgsz=4096,
         task="segment",
         max_detections=MAX_DETECTIONS_PER_FRAME + 1,
         source_bytes=1931 * 1931 * 3,
@@ -92,7 +96,7 @@ def test_oversized_single_tile_is_admitted_at_batch_one_and_warned_once(caplog):
         for _ in range(3):
             chunk = admitted_tile_chunk_size(
                 _plan(),
-                imgsz=1024,
+                imgsz=4096,
                 device_tiles=False,
                 requested=16,
                 byte_budget=MAX_TILE_BATCH_BYTES,
@@ -110,11 +114,11 @@ def test_oversized_stage2_crop_is_admitted_at_batch_one(caplog):
     """Sequential stage-2 with a segment model: same rule, no ValueError."""
     with caplog.at_level("WARNING"):
         size = admitted_prediction_chunk_size(
-            imgsz=1024,
+            imgsz=4096,
             task="segment",
             max_detections=MAX_DETECTIONS_PER_FRAME + 1,
             requested=8,
-            source_bytes=1024 * 1024 * 3,
+            source_bytes=4096 * 4096 * 3,
             description="Sequential stage-2 crop batch",
         )
     assert size == 1
@@ -182,7 +186,7 @@ def test_oversize_warning_is_once_per_run_not_once_per_process(caplog):
     def _admit():
         return admitted_tile_chunk_size(
             _plan(),
-            imgsz=1024,
+            imgsz=4096,
             device_tiles=False,
             requested=16,
             byte_budget=MAX_TILE_BATCH_BYTES,

@@ -17,6 +17,7 @@ from hydra_suite.utils.slice_geometry import (  # noqa: F401 -- re-exported for 
 )
 
 from ..config import SliceConfig
+from ..limits import DENSE_MASK_ESTIMATE_CANDIDATES
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,8 @@ DENSE_MASK_BYTES_PER_PIXEL = 1
 
 # Admission never refuses the minimal unit of work (one tile / one crop): the
 # budget and MAX_TILE_BATCH_BYTES only shrink the batch, down to 1. When even a
-# single item's worst-case estimate exceeds the budget (e.g. 1025 dense masks
-# at 1024px for a segment model) it is admitted anyway and a WARNING is logged
+# single item's estimate exceeds the budget (e.g. a segment model at a very
+# large imgsz) it is admitted anyway and a WARNING is logged
 # once per RUN for each distinct (description, estimate, budget). A run starts
 # when an InferenceRunner is constructed, which calls
 # ``reset_oversize_warnings`` -- the TrackerKit GUI runs tracking in-process,
@@ -98,13 +99,21 @@ def estimated_prediction_job_bytes(
     max_detections: int,
     source_bytes: int = 0,
 ) -> int:
-    """Conservative live input/output bytes for one model prediction item."""
+    """Live input/output bytes for one model prediction item.
+
+    The compact term counts every candidate slot; the dense (segment-mask)
+    term assumes at most ``DENSE_MASK_ESTIMATE_CANDIDATES`` masks per item at
+    full model resolution -- an estimate assumption, never a detection cap.
+    """
     side = max(1, int(imgsz))
     candidates = max(1, int(max_detections))
     model_input_bytes = side * side * 3 * 4
     compact_output = candidates * COMPACT_OUTPUT_BYTES_PER_DETECTION
     dense_output = (
-        candidates * side * side * DENSE_MASK_BYTES_PER_PIXEL
+        min(candidates, DENSE_MASK_ESTIMATE_CANDIDATES)
+        * side
+        * side
+        * DENSE_MASK_BYTES_PER_PIXEL
         if task == "segment"
         else 0
     )
