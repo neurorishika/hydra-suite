@@ -2504,7 +2504,7 @@ to 0.99 to match its own contract.</p>
 <td>Normalize the loss so that a scale producing more tiles cannot dominate. 0.5 gives square-root balancing and 1.0 gives exact balance.</td>
 </tr>
 <tr>
-<td>Tiles per call / Tile memory budget (TrackerKit)</td>
+<td>Tiles per call / Memory (TrackerKit tile memory budget)</td>
 <td>Execution knobs that set how many tiles go to the detector in one call.</td>
 </tr>
 </tbody>
@@ -2514,9 +2514,28 @@ to 0.99 to match its own contract.</p>
 hidden</strong>: a row is hidden only when the host has no such setting. The one
 exception is the Enable checkbox: while it is unticked, everything but the
 checkbox is hidden (see <a href="#enable-checkbox">Enable checkbox</a>).</p>
-<p>In TrackerKit the tile-layout preview sits <strong>below</strong> the controls and scales
-to the panel's width, so the SAHI settings fit the side panel without
-sideways scrolling. The DetectKit dialogs keep it beside the controls.</p>
+<p>In TrackerKit the settings use a <strong>compact layout</strong> so they fit the side
+panel without sideways scrolling:</p>
+<ul>
+<li>Related fields share a row: Profile | Tile strategy, Object scale | Body
+  size, Tile size | Overlap, and (under Advanced) Tiles per call | Memory. A
+  field whose partner is not shown (for example, no profile row) stands alone
+  at the left. The body size's source badge (<code>profile</code>, <code>stamped</code> ...) stays
+  next to its field; the tile size's source follows the resolved tile size
+  on the summary line, in brackets (<code>(derived)</code>, <code>(profile)</code> ...). Hover a
+  Profile or Tile strategy box to see the selected item's full name.</li>
+<li>The derived values are one muted summary line under the fields, for
+  example <code>→ 480 × 480 px (derived) · ≈102 px at 1024 · ≥ whole-animal minimum (0.15)</code>:
+  the resolved tile size, the object's size at the model input (Fit to animal
+  size only) and the overlap check. The line shortens when the panel is narrow;
+  hover it for the full text. A below-minimum warning keeps its orange colour
+  and its <strong>Raise to X</strong> button on that line and is never shortened.</li>
+<li>The tile-batch note sits under Tiles per call | Memory.</li>
+<li>The tile-layout preview sits <strong>below</strong> the controls at a fixed, shorter
+  height with a two-line caption.</li>
+</ul>
+<p>The DetectKit dialogs keep one field per row and the preview beside the
+controls.</p>
 <table>
 <thead>
 <tr>
@@ -2604,7 +2623,7 @@ sideways scrolling. The DetectKit dialogs keep it beside the controls.</p>
 </tr>
 <tr>
 <td>Tile-layout preview</td>
-<td>below the controls</td>
+<td>below the controls (compact)</td>
 <td>beside</td>
 <td>beside</td>
 <td>beside</td>
@@ -2613,7 +2632,7 @@ sideways scrolling. The DetectKit dialogs keep it beside the controls.</p>
 </tr>
 <tr>
 <td>Advanced</td>
-<td>Tiles per call, Tile memory budget</td>
+<td>Tiles per call, Memory (tile memory budget)</td>
 <td>Merge threshold</td>
 <td>Merge threshold, min area, below the floor, empty-tile fraction, mix full frames, loss balance</td>
 <td>min area, below the floor, keep empty tiles, mix full frames</td>
