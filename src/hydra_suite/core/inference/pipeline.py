@@ -359,6 +359,21 @@ class Pipeline:
         det_indices_by_frame: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         nonempty_frames: list = []
         nonempty_obbs: list[OBBResult] = []
+        pending_empty: list[tuple[int, np.ndarray]] = []
+
+        def _flush_empty(before: int | None) -> None:
+            # Write deferred explicit-empty rows with frame_idx < ``before``
+            # (all remaining when None), keeping downstream writes in order.
+            while pending_empty and (before is None or pending_empty[0][0] < before):
+                e_idx, e_sel = pending_empty.pop(0)
+                self.cache_writer.write_downstream(
+                    e_idx,
+                    det_indices=e_sel,
+                    headtail=None,
+                    cnn_results=[],
+                    pose=None,
+                    apriltag=None,
+                )
 
         with span(N.MATERIALIZE, units=len(frames)):
             for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
@@ -400,17 +415,13 @@ class Pipeline:
                     cfg, obb_result, self.stages.roi_mask
                 )
                 if superset_obb.num_detections == 0:
-                    # Coverage is per enabled cache, not per detection. Persist
-                    # an explicit empty so an interrupted pass cannot look
-                    # complete in detection while downstream remains partial.
-                    self.cache_writer.write_downstream(
-                        frame_idx,
-                        det_indices=superset_idx,
-                        headtail=None,
-                        cnn_results=[],
-                        pose=None,
-                        apriltag=None,
-                    )
+                    # Coverage is per enabled cache, not per detection. An
+                    # explicit empty row is persisted so an interrupted pass
+                    # cannot look complete in detection while downstream
+                    # remains partial. Deferred: the store requires strictly
+                    # increasing frame order, and non-empty frames are only
+                    # written after the per-animal stages run.
+                    pending_empty.append((frame_idx, superset_idx))
                     continue
                 filtered_by_frame[frame_idx] = final_obb
                 det_indices_by_frame[frame_idx] = (superset_idx, final_idx)
@@ -418,6 +429,7 @@ class Pipeline:
                 nonempty_obbs.append(superset_obb)
 
         if not nonempty_obbs:
+            _flush_empty(None)
             return []
 
         # F1 guard: record overflow_ratio once per detection here -- the one
@@ -455,6 +467,7 @@ class Pipeline:
         # accumulator here -- the memory bound this loop exists to enforce.
         assembled: list[FrameResult] = []
         for frame, obb in zip(nonempty_frames, nonempty_obbs):
+            _flush_empty(obb.frame_idx)
             superset_idx, final_idx = det_indices_by_frame[obb.frame_idx]
             assembled.extend(
                 self._process_downstream_frame(
@@ -466,6 +479,7 @@ class Pipeline:
                     geometry,
                 )
             )
+        _flush_empty(None)
         return assembled
 
     def _process_downstream_frame(

@@ -371,3 +371,73 @@ def test_batch_cnn_phase_without_result_stays_phase_aligned():
     (fr,) = results
     assert [r.label for r in fr.cnn] == ["b"]
     assert [p.det_index for p in fr.cnn[0].predictions] == [0, 1]
+
+
+def _run_multi_window(cfg, n_by_frame, models, caches):
+    """One window over several frames; ``n_by_frame[i]`` detections in frame i."""
+    from hydra_suite.core.inference.pipeline import BatchWindow
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch(
+            "hydra_suite.core.inference.pipeline.run_obb",
+            side_effect=lambda frames, *a, **k: [
+                _obb(i, n) for i, n in enumerate(n_by_frame)
+            ],
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_headtail_batch",
+            side_effect=_fake_ht,
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_cnn_batch",
+            side_effect=_fake_cnn,
+        ),
+    ):
+        ml.return_value = models
+        pipeline = InferenceRunner(cfg, cache_dir=None)._build_pipeline(caches)
+        pipeline._process_window(
+            BatchWindow(
+                frames=[np.zeros((64, 600, 3), np.uint8) for _ in n_by_frame],
+                frame_indices=list(range(len(n_by_frame))),
+            )
+        )
+        pipeline.cache_writer.flush()
+
+
+@__import__("pytest").mark.parametrize(
+    "n_by_frame",
+    [(3, 0, 3), (3, 3, 0), (0, 3, 0, 3, 0), (0, 0, 0)],
+)
+def test_downstream_rows_written_in_frame_order_with_empty_frames(n_by_frame):
+    from hydra_suite.core.inference.runner import _CacheSet
+
+    cfg = _cfg(
+        4,
+        headtail=HeadTailConfig(model_path="/ht.pt"),
+        cnn_phases=[CNNConfig(label="a", model_path="/c.pt")],
+    )
+    caches = _CacheSet(detection=MagicMock(), headtail=MagicMock(), cnn=[MagicMock()])
+    ht_frames, cnn_frames = [], []
+    caches.headtail.write_frame.side_effect = lambda fi, **kw: ht_frames.append(
+        (fi, len(kw["det_indices"]))
+    )
+    caches.cnn[0].write_frame.side_effect = lambda fi, **kw: cnn_frames.append(
+        (fi, len(kw["predictions"]))
+    )
+    models = MagicMock(
+        obb=MagicMock(),
+        headtail=MagicMock(),
+        cnn=[MagicMock()],
+        pose=None,
+        apriltag=None,
+    )
+    _run_multi_window(cfg, n_by_frame, models, caches)
+
+    expected = [(i, n) for i, n in enumerate(n_by_frame)]
+    # every frame present (empty ones as explicit empty rows), strictly increasing
+    assert ht_frames == expected
+    assert [f for f, _ in cnn_frames] == list(range(len(n_by_frame)))
+    # empty frames carry an explicit empty CNN phase (predictions=[])
+    assert all(n == 0 for (f, n) in cnn_frames if n_by_frame[f] == 0)
