@@ -174,7 +174,8 @@ def test_bg_helper_entry_guard(shown, monkeypatch, tmp_path):
     video = tmp_path / "v.mp4"
     video.write_bytes(b"x")
     orch = ConfigOrchestrator.__new__(ConfigOrchestrator)
-    orch._mw = SimpleNamespace(get_parameters_dict=_raiser)
+    orch._mw = SimpleNamespace()
+    orch.get_parameters_dict = _raiser
     orch._panels = SimpleNamespace(
         setup=SimpleNamespace(file_line=SimpleNamespace(text=lambda: str(video)))
     )

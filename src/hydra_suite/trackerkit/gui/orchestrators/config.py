@@ -3331,8 +3331,7 @@ class ConfigOrchestrator:
         from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
 
         params = params_or_report_limit(
-            self._mw,
-            "Optimizer",
+            self._mw, "Optimizer", getter=self.get_parameters_dict
         )
         if params is None:
             return
@@ -3390,7 +3389,9 @@ class ConfigOrchestrator:
 
         from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
 
-        params = params_or_report_limit(self._mw, "Background helper")
+        params = params_or_report_limit(
+            self._mw, "Background helper", getter=self.get_parameters_dict
+        )
         if params is None:
             return
 
