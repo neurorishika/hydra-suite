@@ -61,6 +61,14 @@ def panel(monkeypatch, tmp_path):
     panel.apply_slice_meta_for_model(str(model))
     panel.set_slice_preview_frame_size(2448, 2048)
     window.show()
+    # Showing the window restores the first tab; measure the real, visible
+    # Find Animals page (a hidden page is never laid out).
+    app = QApplication.instance()
+    for _ in range(3):
+        app.processEvents()
+    window.tabs.setCurrentWidget(panel)
+    app.processEvents()
+    assert panel.isVisible()
     yield panel
     window.close()
     window.deleteLater()
@@ -198,7 +206,9 @@ def test_sahi_collapse_never_steals_focus_from_other_widgets(panel):
     assert window.focusWidget() is panel.spin_yolo_confidence
 
 
-@pytest.mark.parametrize("size", [(1100, 800), (1280, 800), (1440, 900), (1500, 1000)])
+@pytest.mark.parametrize(
+    "size", [(1100, 800), (1280, 800), (1440, 900), (1500, 1000), (1920, 1080)]
+)
 def test_find_animals_page_never_scrolls_sideways(panel, size):
     """The user's complaint: no horizontal scrolling on Find Animals, with
     SAHI off or on (every geometry mode, Advanced open)."""
@@ -252,3 +262,92 @@ def test_auto_set_buttons_reflow_instead_of_widening(panel):
         assert len({item.geometry().top() for item in items}) == rows, width
         assert all(item.width() <= width for item in items)
     free.hide()
+
+
+# ------------------------------------------------------- S7: compact layout
+
+# The SAHI block's height on the unmodified S6 tree (local main @5656162c +
+# d912a3e2), measured in this fixture: window 1500 x 1000, a 2448 x 2048
+# frame, the "balanced" profile, auto_object, Advanced closed, SAHI on.
+S6_BLOCK_HEIGHT = 743
+
+
+def _show_auto_object(panel, advanced=False):
+    panel.chk_slice_enabled.setChecked(True)
+    panel.slice_settings.btn_slice_advanced.setChecked(advanced)
+    combo = panel.combo_slice_geometry
+    combo.setCurrentIndex(combo.findData("auto_object"))
+    _settle(panel.window())
+    _settle(_content(panel))
+
+
+def test_trackerkit_uses_the_compact_layout(panel):
+    widget = panel.slice_settings
+    assert widget.capabilities.layout == "compact"
+    _show_auto_object(panel, advanced=True)
+    grid = widget._grid
+
+    def row_of(key):
+        return grid.getItemPosition(grid.indexOf(widget._rows[key][0]))[0]
+
+    for left, right in (
+        ("profile", "mode"),
+        ("object_fraction", "body"),
+        ("tile", "overlap"),
+        ("tile_batch", "memory"),
+    ):
+        assert row_of(left) == row_of(right), (left, right)
+    # The admission note sits under the Advanced pair, above the preview.
+    note = panel.lbl_slice_batch_admission
+    assert note.isVisibleTo(panel)
+    assert grid.getItemPosition(grid.indexOf(note))[0] > row_of("tile_batch")
+    assert note.mapTo(widget, note.rect().bottomLeft()).y() < widget.preview.y()
+
+
+def test_compact_block_is_at_least_30_percent_shorter(panel):
+    _show_auto_object(panel)
+    height = panel.slice_settings.height()
+    assert height <= 0.7 * S6_BLOCK_HEIGHT, height
+
+
+def _leaves(widget):
+    from PySide6.QtWidgets import QWidget
+
+    for child in widget.findChildren(QWidget):
+        if not child.isVisibleTo(widget) or child.width() <= 0:
+            continue
+        if any(
+            grand.isVisibleTo(widget)
+            for grand in child.findChildren(QWidget)
+            if grand.parentWidget() is child
+        ):
+            continue
+        yield child
+
+
+@pytest.mark.parametrize("width", [1100, 1920])
+def test_compact_widgets_never_overlap(panel, width):
+    from PySide6.QtCore import QRect
+
+    window = panel.window()
+    window.resize(width, 900)
+    widget = panel.slice_settings
+    for advanced in (False, True):
+        for mode in ("auto_model", "auto_object", "custom"):
+            panel.chk_slice_enabled.setChecked(True)
+            widget.btn_slice_advanced.setChecked(advanced)
+            combo = panel.combo_slice_geometry
+            combo.setCurrentIndex(combo.findData(mode))
+            _settle(window)
+            _settle(_content(panel))
+            rects = [
+                (leaf, QRect(leaf.mapTo(widget, leaf.rect().topLeft()), leaf.size()))
+                for leaf in _leaves(widget)
+                if not leaf.inherits("QScrollBar")
+            ]
+            for index, (first, a) in enumerate(rects):
+                assert widget.rect().contains(a), (first, a, mode, advanced)
+                for second, b in rects[index + 1 :]:
+                    if first.isAncestorOf(second) or second.isAncestorOf(first):
+                        continue
+                    assert not a.intersects(b), (first, second, a, b, mode)
