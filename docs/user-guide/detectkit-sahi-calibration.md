@@ -10,6 +10,10 @@ knobs -- tile size, overlap, confidence, merge policy -- and the right values
 depend on your model, your animals, and your images. Calibration measures
 those knobs against your own labelled frames instead of asking you to guess.
 
+The tiling controls themselves (tile strategy, object scale, body size, tile
+overlap and their source badges) are the same in every host. See [SAHI
+Settings](sahi-settings.md).
+
 ## What calibration measures, and what it never touches
 
 Calibration runs your existing, already-trained detection model across a
@@ -173,8 +177,11 @@ When you select a model with saved SAHI profiles in TrackerKit's detection
 panel, a profile selector appears alongside the tiling controls. Choosing
 "Training geometry" resets tiling to the values the model was trained
 with, with no calibration applied. Choosing a named profile fills in its
-measured tile size, overlap, object-tile fraction, confidence, and merge
-settings.
+measured tile size, overlap, object scale, confidence, and merge
+settings. The filled-in values carry a `profile` badge, or `stamped` for
+training geometry. A profile's overlap is never nudged toward the
+whole-animal minimum: if it sits below that minimum, the widget only notes
+it.
 
 If you then hand-edit any of those fields after selecting a profile, the
 selector switches to **`Custom (based on <name>)`** -- it keeps naming the
@@ -192,7 +199,7 @@ says so in the status line; otherwise it falls back to training geometry.
 `trackerkit track --config <video>_config.json` now honours the calibration
 profile named in the saved config: if the config's `slice_profile_id` points
 at a profile the model's sidecar still carries, the CLI run uses that
-profile's tile size, overlap, object-tile fraction, and merge settings --
+profile's tile size, overlap, object scale, and merge settings --
 the same values the GUI applied when the config was saved. Previously the
 CLI ignored `slice_profile_id` entirely and always ran with
 `advanced_config.json`'s machine-global defaults, so a config saved against
@@ -220,7 +227,7 @@ used to. Whenever the config's direct-detection model has **any** sidecar
 attached (every sliced-training publish stamps one, calibration or not),
 `trackerkit track` now takes the tiling knobs from that sidecar: the model's
 primary profile if one is marked, otherwise the geometry the model was
-trained with. Tile size, overlap, object-tile fraction and trained body size
+trained with. Tile size, overlap, object scale and trained body size
 therefore come from the model, and the four `slice_merge_*` knobs are reset
 to their defaults, instead of all of them being read from the local
 machine's `advanced_config.json`.
@@ -249,7 +256,7 @@ the config for you.
 ### Known residual: other `advanced_config` keys stay machine-global
 
 This fix carries only the SAHI/merge/confidence-adjacent knobs a profile
-actually measures (tile size, overlap, object-tile fraction, trained body
+actually measures (tile size, overlap, object scale, trained body
 size, and merge policy/metric/threshold/backend) from the named profile
 into a CLI run. Every other key in `advanced_config.json` -- for example
 `obb_seg_*` segmentation settings -- is still read from the local
