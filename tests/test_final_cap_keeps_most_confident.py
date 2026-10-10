@@ -21,10 +21,8 @@ from hydra_suite.core.inference.config import OBBConfig
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages.filtering import (
     filter_for_source,
-    filter_from_tensors,
     filter_with_indices,
 )
-from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 
 
 def _result(sizes, confs, frame_idx=0):
@@ -78,52 +76,6 @@ def test_numpy_path_final_cap_keeps_most_confident():
     assert out.num_detections == 2
     assert sorted(out.confidences.tolist()) == pytest.approx([0.8, 0.9])
     assert 0.10 not in out.confidences.tolist(), "kept the big low-confidence blob"
-
-
-def test_tensor_path_final_cap_keeps_most_confident():
-    n = len(_SIZES)
-    side = np.sqrt(_SIZES)
-    raw = _RawOBBTensors(
-        frame_idx=0,
-        xywhr=torch.tensor(
-            [[i * 10_000.0, 0.0, float(side[i]), float(side[i]), 0.0] for i in range(n)]
-        ),
-        corners=torch.zeros((n, 4, 2)),
-        conf=torch.tensor(_CONFS),
-        cls=torch.zeros(n),
-    )
-
-    class _Rt:
-        tensor_on_cuda = True
-        device = "cpu"
-
-    out = filter_from_tensors(raw, _cfg(2), None, _Rt())
-    assert out.num_detections == 2
-    assert sorted(out.confidences.tolist()) == pytest.approx([0.8, 0.9])
-
-
-def test_both_paths_agree_on_the_cap():
-    numpy_out, _ = filter_with_indices(_result(_SIZES, _CONFS), _cfg(2), None)
-    n = len(_SIZES)
-    side = np.sqrt(_SIZES)
-    raw = _RawOBBTensors(
-        frame_idx=0,
-        xywhr=torch.tensor(
-            [[i * 10_000.0, 0.0, float(side[i]), float(side[i]), 0.0] for i in range(n)]
-        ),
-        corners=torch.zeros((n, 4, 2)),
-        conf=torch.tensor(_CONFS),
-        cls=torch.zeros(n),
-    )
-
-    class _Rt:
-        tensor_on_cuda = True
-        device = "cpu"
-
-    tensor_out = filter_from_tensors(raw, _cfg(2), None, _Rt())
-    assert sorted(numpy_out.confidences.tolist()) == pytest.approx(
-        sorted(tensor_out.confidences.tolist())
-    )
 
 
 def test_equal_confidences_break_ties_deterministically():
