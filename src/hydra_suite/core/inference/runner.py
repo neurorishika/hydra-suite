@@ -755,6 +755,36 @@ def _build_identity_evidence_stage(
     return catalog, stage
 
 
+def _require_within_written_superset(
+    written_config: "InferenceConfig | None",
+    raw_obb: OBBResult,
+    roi_mask: "np.ndarray | None",
+    det_indices: np.ndarray,
+    frame_idx: int,
+) -> None:
+    """Raise unless the replayed final set lies inside the WRITTEN superset.
+
+    No-op when ``written_config`` is None (replay filters == write filters, so
+    the final set is a subset by construction). Otherwise the superset the
+    per-animal caches were written for is re-derived from the raw detections
+    with the written filters; any final-N index outside it means those caches
+    hold no result for it.
+    """
+    if written_config is None or len(det_indices) == 0:
+        return
+    _, superset = filter_for_source(
+        written_config, raw_obb, roi_mask, apply_max_detections=False
+    )
+    missing = sorted(set(np.asarray(det_indices).tolist()) - set(superset.tolist()))
+    if missing:
+        raise DownstreamCacheError(
+            f"frame {frame_idx}: the current detection filters admit "
+            f"detection(s) {missing[:8]} that the per-animal caches were not "
+            "built for -- per-animal results need recomputing for these filter "
+            "settings (rerun inference without cache reuse)."
+        )
+
+
 def write_identity_evidence_sidecar(
     caches: "_CacheSet",
     config: InferenceConfig,
@@ -763,8 +793,13 @@ def write_identity_evidence_sidecar(
     out_path: Path,
     catalog_labels: "tuple[str, ...]",
     roi_mask: "np.ndarray | None" = None,
+    written_config: "InferenceConfig | None" = None,
 ) -> None:
     """Read back raw per-frame caches over `frame_range` and write the evidence sidecar.
+
+    ``written_config`` (read-only candidate replay only): the config whose
+    filters the per-animal caches were written with; each frame's final set
+    must lie inside that superset or ``DownstreamCacheError`` is raised.
 
     The batch seam Task 4 wires into ``run_batch_pass``: for each frame, reads
     the raw (pre-filter) detection cache and re-derives the final-N filtered
@@ -807,6 +842,9 @@ def write_identity_evidence_sidecar(
         filtered_obb, det_idx = filter_for_source(config, raw_obb, roi_mask)
         if filtered_obb.num_detections == 0:
             continue
+        _require_within_written_superset(
+            written_config, raw_obb, roi_mask, det_idx, frame_idx
+        )
         det_ids = [int(d) for d in filtered_obb.detection_ids]
 
         # Read through the replay loaders: they look up the final-N RAW
@@ -1009,7 +1047,7 @@ class InferenceRunner:
         roi_mask: "np.ndarray | None" = None,
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
         runtime_overlay: "InferenceRuntimeOverlay | None" = None,
-        cache_filter_hash: "str | None" = None,
+        cache_filter_config: "InferenceConfig | None" = None,
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
@@ -1035,15 +1073,25 @@ class InferenceRunner:
         # backward/replay run reproduce the exact same cache key via
         # caches_all_valid() and read the forward run's cache.
         self._roi_mask = roi_mask
-        # Replay-filter hash the per-animal caches are keyed under. None =>
-        # derived from ``config`` (the normal case: write and replay share
-        # filters). A read-only replay at candidate filters passes the hash of
-        # the filters the caches were written with (see _open_caches). Only
-        # read paths use it: a writing pass always keys what it computes under
-        # its own filters, so it is refused outside cache-only mode.
-        if cache_filter_hash is not None and not cache_only:
-            raise ValueError("cache_filter_hash is only valid with cache_only=True")
-        self._cache_filter_hash = cache_filter_hash
+        # The config whose replay filters the per-animal caches were WRITTEN
+        # with. None => ``config`` itself (the normal case: write and replay
+        # share filters). A read-only replay of candidate filters passes the
+        # written (provenance) config: the per-animal caches open under its
+        # filter hash (see _open_caches), and every replayed frame checks the
+        # candidate's final set lies inside the written superset -- the only
+        # check that also covers CNN/AprilTag, whose caches cannot tell "no
+        # detection was stored" from "no result". The arena ROI is shared by
+        # both (it is not a candidate parameter). Only read paths use it: a
+        # writing pass keys what it computes under its own filters, so it is
+        # refused outside cache-only mode.
+        if cache_filter_config is not None and not cache_only:
+            raise ValueError("cache_filter_config is only valid with cache_only=True")
+        self._cache_filter_config = cache_filter_config
+        self._cache_filter_hash = (
+            replay_filter_hash(cache_filter_config, roi_mask)
+            if cache_filter_config is not None
+            else None
+        )
         # Memoizes _frame_space_roi_mask's result, keyed by (video_path,
         # id(self._roi_mask)) so a later `self._roi_mask` reassignment (see
         # run_batch_pass's optional roi_mask override) naturally invalidates
@@ -1717,6 +1765,7 @@ class InferenceRunner:
             out_path,
             self._identity_catalog.labels,
             roi_mask=self._frame_space_roi_mask(self._video_path),
+            written_config=self._cache_filter_config,
         )
 
     def detect_batch_raw(
@@ -1994,6 +2043,12 @@ class InferenceRunner:
         native-frame ROI transform rather than reimplementing one or the other.
         """
 
+        filtered_obb, det_indices, _raw, _roi = self._load_filtered_with_raw(frame_idx)
+        return filtered_obb, det_indices
+
+    def _load_filtered_with_raw(self, frame_idx: int):
+        """``load_filtered_obb`` plus the raw frame and frame-space ROI used."""
+
         if self.cache_dir is None:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
@@ -2027,15 +2082,20 @@ class InferenceRunner:
         # pipeline. Without this, ROI filtering silently never applied to any
         # cached/replayed YOLO-OBB read (forward cache reuse AND the backward
         # pass), regardless of the ROI configured at construction.
-        return filter_for_source(
-            self.config, raw_obb, self._frame_space_roi_mask(self._video_path)
-        )
+        roi = self._frame_space_roi_mask(self._video_path)
+        filtered_obb, det_indices = filter_for_source(self.config, raw_obb, roi)
+        return filtered_obb, det_indices, raw_obb, roi
 
     def load_frame(self, frame_idx: int) -> FrameResult:
         """Load one cached frame with its production filtering and evidence."""
 
-        filtered_obb, det_indices = self.load_filtered_obb(frame_idx)
-        assert self._caches is not None  # established by load_filtered_obb
+        filtered_obb, det_indices, raw_obb, roi = self._load_filtered_with_raw(
+            frame_idx
+        )
+        assert self._caches is not None  # established by _load_filtered_with_raw
+        _require_within_written_superset(
+            self._cache_filter_config, raw_obb, roi, det_indices, frame_idx
+        )
         try:
             ht_result = _load_headtail_for_indices(
                 self._caches.headtail, frame_idx, det_indices, filtered_obb

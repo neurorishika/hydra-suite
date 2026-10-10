@@ -133,7 +133,7 @@ def _build(tmp, cfg, identity=None, models=None):
     return runner
 
 
-def _replay_runner(tmp, cfg, identity=None, cache_filter_hash=None):
+def _replay_runner(tmp, cfg, identity=None, cache_filter_config=None):
     from hydra_suite.core.inference.runner import InferenceRunner
 
     with patch("hydra_suite.core.inference.runner._load_all_models") as ml:
@@ -143,7 +143,7 @@ def _replay_runner(tmp, cfg, identity=None, cache_filter_hash=None):
             cache_dir=tmp,
             cache_only=True,
             identity_evidence=identity,
-            cache_filter_hash=cache_filter_hash,
+            cache_filter_config=cache_filter_config,
         )
 
 
@@ -237,7 +237,6 @@ def test_optimizer_detection_replay_at_looser_conf_needs_no_per_animal_cache(
 
 
 def _headtail_replay(tmp_path, conf):
-    from hydra_suite.core.inference.cache.keys import replay_filter_hash
 
     # N=20 so the candidate final set reaches below the written conf (0.7).
     written = _cfg(20, conf=0.7, headtail=True)
@@ -245,7 +244,7 @@ def _headtail_replay(tmp_path, conf):
     return _replay_runner(
         tmp_path,
         _cfg(20, conf=conf, headtail=True),
-        cache_filter_hash=replay_filter_hash(written, None),
+        cache_filter_config=written,
     )
 
 
@@ -265,9 +264,75 @@ def test_candidate_replay_looser_than_written_filters_raises_clearly(tmp_path):
         runner.load_frame(0)
 
 
-def test_cache_filter_hash_refused_for_writing_runner(tmp_path):
+def test_cache_filter_config_refused_for_writing_runner(tmp_path):
     from hydra_suite.core.inference.runner import InferenceRunner
 
     with patch("hydra_suite.core.inference.runner._load_all_models"):
         with pytest.raises(ValueError):
-            InferenceRunner(_cfg(3), cache_dir=tmp_path, cache_filter_hash="x")
+            InferenceRunner(_cfg(3), cache_dir=tmp_path, cache_filter_config=_cfg(3))
+
+
+# --- R10b: CNN/AprilTag-only caches cannot reveal a missing row themselves ---
+# (The empty-superset frame is frame 0: the batch Pipeline writes an empty
+# frame's downstream rows during the detection loop, ahead of earlier
+# non-empty frames, so an empty frame AFTER a non-empty one in the same window
+# trips the store's increasing-frame check -- pre-existing, also on main.)
+
+
+def _obb_low_conf_frame0(frames, *a, **k):
+    # Frame 0's detections all sit below the written conf (0.7): its written
+    # superset is EMPTY, so the CNN cache stores predictions=[] for it -- which
+    # replays as "no result", indistinguishable from a covered empty frame.
+    out = []
+    for i in range(len(frames)):
+        o = _obb(i, _N_DETS, small=_SMALL)
+        if i == 0:
+            o.confidences[:] = 0.6
+        out.append(o)
+    return out
+
+
+def _cnn_only_replay(tmp_path, conf):
+    from hydra_suite.core.inference.runner import InferenceRunner, _open_caches
+
+    ident = _identity()
+    written = _cfg(10, conf=0.7)
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch(
+            "hydra_suite.core.inference.pipeline.run_obb",
+            side_effect=_obb_low_conf_frame0,
+        ),
+        patch(
+            "hydra_suite.core.inference.pipeline.run_cnn_batch", side_effect=_fake_cnn
+        ),
+    ):
+        ml.return_value = _models()
+        runner = InferenceRunner(written, cache_dir=tmp_path, identity_evidence=ident)
+        caches = _open_caches(written, tmp_path)
+        runner._run_batch([np.zeros((64, 1600, 3), np.uint8)] * 2, _FRAMES, caches)
+        caches.close()
+    return _replay_runner(
+        tmp_path, _cfg(10, conf=conf), ident, cache_filter_config=written
+    )
+
+
+def test_cnn_only_looser_candidate_raises_on_empty_written_superset(tmp_path):
+    runner = _cnn_only_replay(tmp_path, conf=0.0)
+    assert runner.caches_all_valid()
+    runner.load_frame(1)  # frame 1's final set is inside the written superset
+    with pytest.raises(DownstreamCacheError, match="recomputing for these filter"):
+        runner.load_frame(0)
+    with pytest.raises(DownstreamCacheError, match="recomputing for these filter"):
+        runner.ensure_identity_evidence_sidecar(0, 1, out_path=tmp_path / "ev.npz")
+
+
+def test_cnn_only_stricter_candidate_replays(tmp_path):
+    runner = _cnn_only_replay(tmp_path, conf=0.8)
+    assert runner.caches_all_valid()
+    fr0, fr1 = runner.load_frame(0), runner.load_frame(1)
+    assert fr0.obb.num_detections == 0
+    assert len(fr1.cnn[0].predictions) == fr1.obb.num_detections > 0
+    out = tmp_path / "ev.npz"
+    assert runner.ensure_identity_evidence_sidecar(0, 1, out_path=out) == out
+    assert _evidence(out)[1]

@@ -1161,8 +1161,22 @@ class TrackingEngineCore:
                 self._emit_finished(False, [], [])
                 return
 
+            # A read-only replay of candidate parameters (optimizer production
+            # validation) reads the per-animal caches under the replay filters
+            # they were WRITTEN with -- the provenance params -- while
+            # filtering detections with the candidate's own (see
+            # InferenceRunner's cache_filter_config). Built here so a failure
+            # is the normal configuration error.
+            _written_filter_cfg = None
             try:
                 _inference_cfg = build_inference_config_from_params(p)
+                if (
+                    self.cache_read_only_replay
+                    and self.inference_cache_provenance_params is not None
+                ):
+                    _written_filter_cfg = build_inference_config_from_params(
+                        dict(self.inference_cache_provenance_params)
+                    )
             except Exception as _cfg_err:
                 logger.error(
                     "Failed to build InferenceConfig from params: %s", _cfg_err
@@ -1321,25 +1335,6 @@ class TrackingEngineCore:
                         _replay_vector.effective.to_dict(),
                         _replay_vector.status,
                     )
-            # A read-only replay of candidate parameters (optimizer production
-            # validation) opens the per-animal caches under the replay filters
-            # they were WRITTEN with (the provenance params), while filtering
-            # detections with the candidate's own. A candidate whose final set
-            # stays inside the stored superset replays; one that admits a
-            # detection the superset lacks raises a clear DownstreamCacheError
-            # from load_frame instead of being rejected by a key mismatch.
-            _cache_filter_hash = None
-            if (
-                self.cache_read_only_replay
-                and self.inference_cache_provenance_params is not None
-            ):
-                from hydra_suite.core.inference.cache.keys import replay_filter_hash
-
-                _prov_params = dict(self.inference_cache_provenance_params)
-                _cache_filter_hash = replay_filter_hash(
-                    build_inference_config_from_params(_prov_params),
-                    _prov_params.get("ROI_MASK"),
-                )
             # Backward (replay) passes only call load_frame / caches_all_valid —
             # they never invoke run_realtime or run_batch_pass.  Skip loading
             # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
@@ -1358,7 +1353,10 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
                 runtime_overlay=self.inference_autotune_overlay,
-                cache_filter_hash=_cache_filter_hash,
+                # A candidate whose final set stays inside the written superset
+                # replays; one admitting a detection the superset lacks raises
+                # a clear DownstreamCacheError (not a key-mismatch rejection).
+                cache_filter_config=_written_filter_cfg,
             )
             if not (
                 self.backward_mode or self.cache_read_only_replay or self.preview_mode
