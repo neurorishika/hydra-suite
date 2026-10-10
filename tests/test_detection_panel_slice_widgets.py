@@ -672,3 +672,31 @@ def test_picking_a_profile_while_sahi_is_off_applies_it_and_enables_sahi(
     assert window.advanced_config["slice_profile_id"] == "fast"
     assert not panel.slice_profile_status_text().startswith("Custom")
     window.close()
+
+
+def test_profile_overlap_below_minimum_is_not_offered_a_raise(monkeypatch, tmp_path):
+    """Review MINOR-2: 'Fast scan' sets overlap 0.1 (< 0.11 for 48 px on an
+    800 px side): shown as info naming the profile, no Raise until edited."""
+    import json
+
+    from tests.test_trackerkit_sahi_widget_persistence import TWO_PROFILE_SIDECAR
+
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    widget = panel.slice_settings
+    model_path = tmp_path / "model.pt"
+    model_path.write_text("stub model", encoding="utf-8")
+    (tmp_path / "model.pt.slice_meta.json").write_text(
+        json.dumps(TWO_PROFILE_SIDECAR), encoding="utf-8"
+    )
+    panel.apply_slice_meta_for_model(str(model_path))
+    panel.combo_slice_profile.setCurrentIndex(
+        panel.combo_slice_profile.findData("fast")
+    )
+    widget.set_reference_body(48.0, "profile")
+    text = widget.lbl_slice_overlap_minimum.text()
+    assert "set by profile 'Fast scan'" in text, text
+    assert widget.btn_slice_overlap_raise.isVisibleTo(panel) is False
+    panel.spin_slice_overlap.setValue(0.05)
+    assert widget.btn_slice_overlap_raise.isVisibleTo(panel) is True
+    window.close()

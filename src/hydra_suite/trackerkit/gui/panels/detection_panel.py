@@ -2476,6 +2476,15 @@ class DetectionPanel(QWidget):
             source = SLICE_SOURCE_BY_RESOLUTION.get(resolution, "profile")
         self.slice_settings.set_reference_body(body, source)
 
+    def _slice_overlap_origin(self, source: str) -> str:
+        """Who set the applied overlap, in words for the minimum's note."""
+        if source == "stamped":
+            return "the model's training geometry"
+        if source == "config":
+            return "the saved session"
+        name = str(self._slice_profile_applied_name or "").strip()
+        return f"profile '{name}'" if name else "the selected profile"
+
     def set_slice_preview_frame_size(self, width, height) -> None:
         """Show the SAHI tile preview on the loaded video's frame size.
 
@@ -2928,11 +2937,14 @@ class DetectionPanel(QWidget):
             )
             # Badge a custom tile size with whatever supplied it (shown only
             # in Custom; the user's next W/H or mode edit makes it "user").
+            source = SLICE_SOURCE_BY_RESOLUTION.get(
+                self._slice_profile_resolution, "profile"
+            )
+            self.slice_settings.set_source("tile_size", source)
+            # The overlap is the profile's/stamp's measured value: the
+            # whole-animal minimum is shown as info naming it, never a nudge.
             self.slice_settings.set_source(
-                "tile_size",
-                SLICE_SOURCE_BY_RESOLUTION.get(
-                    self._slice_profile_resolution, "profile"
-                ),
+                "overlap", source, note=self._slice_overlap_origin(source)
             )
             if use_saved_settings:
                 self._select_slice_profile_combo_item("__custom__", label="Custom")
