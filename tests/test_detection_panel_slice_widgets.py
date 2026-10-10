@@ -38,6 +38,20 @@ def test_slice_widgets_exist_with_defaults(monkeypatch):
     window.close()
 
 
+def test_fresh_panel_starts_collapsed_with_sahi_off(monkeypatch):
+    """S6: a new window (SAHI off, no toggle fired) shows only the Enable
+    checkbox -- no SAHI rows and no panel-owned SAHI labels."""
+    window = _make_main_window(monkeypatch)
+    panel = window._detection_panel
+    _app.processEvents()
+    assert panel.chk_slice_enabled.isChecked() is False
+    assert panel.combo_slice_geometry.isVisibleTo(panel) is False
+    assert panel.slice_settings.preview.isVisibleTo(panel) is False
+    assert panel.lbl_slice_profile_status.isVisibleTo(panel) is False
+    assert panel.lbl_slice_batch_admission.isVisibleTo(panel) is False
+    window.close()
+
+
 def test_slice_widgets_hidden_in_sequential_mode(monkeypatch):
     window = _make_main_window(monkeypatch)
     panel = window._detection_panel
