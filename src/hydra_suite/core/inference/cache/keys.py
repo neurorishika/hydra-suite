@@ -413,3 +413,46 @@ def _model_signature(path: str) -> str:
     after ``model_id`` itself became content-based.
     """
     return model_content_id(path)
+
+
+def replay_filter_hash(config, roi_mask) -> str:
+    """Hash of the N-free replay filters that decide the per-animal superset.
+
+    Per-animal caches hold results for every detection surviving these
+    filters (``filter_for_source(..., apply_max_detections=False)``), so they
+    must invalidate when a filter changes -- and must NOT depend on N.
+    bg-sub has no N-free filters beyond extraction (already in its detection
+    key), so it returns ``""`` and its downstream keys are unchanged.
+    """
+    if getattr(config, "detection_source", "obb") != "obb" or config.obb is None:
+        return ""
+    o = config.obb
+    return _sha(
+        "|".join(
+            map(
+                str,
+                (
+                    "replay-filters-v1",
+                    o.confidence_threshold,
+                    o.min_object_size,
+                    o.max_object_size,
+                    o.min_aspect_ratio,
+                    o.max_aspect_ratio,
+                    o.iou_threshold,
+                    tuple(o.target_classes),
+                    _param_repr(roi_mask) if roi_mask is not None else "",
+                ),
+            )
+        )
+    )
+
+
+def with_replay_filters(key: CacheKey, filter_hash: str) -> CacheKey:
+    """Bind a per-animal (downstream) cache key to the replay-filter hash.
+
+    A no-op for an empty hash. Never applied to the detection cache key: the
+    detection cache holds raw, pre-filter results.
+    """
+    if not filter_hash:
+        return key
+    return replace(key, config_hash=_sha(f"{key.config_hash}|filters={filter_hash}"))

@@ -30,7 +30,9 @@ from .cache.keys import (
     detection_cache_key,
     headtail_cache_key,
     pose_cache_key,
+    replay_filter_hash,
     video_signature,
+    with_replay_filters,
     with_video_signature,
 )
 from .cache.set_manifest import (
@@ -50,6 +52,11 @@ from .cache.store import (
 from .cache.writer import CacheWriter
 from .cancellation import InferenceCancelled
 from .config import InferenceConfig
+from .downstream_select import (
+    apriltag_raw_to_positions,
+    cnn_raw_to_positions,
+    positions_in,
+)
 from .limits import MAX_DETECTIONS_PER_FRAME, DetectionLimitStats
 from .pipeline import Pipeline, PipelineStages
 from .result import (
@@ -550,6 +557,14 @@ def _open_caches(
     def _k(key):
         return with_video_signature(key, video_sig)
 
+    # Per-animal (downstream) caches hold every N-free filter survivor, so
+    # their keys follow the replay filters (never N). The detection key is NOT
+    # wrapped: it stores raw, pre-filter results.
+    filter_hash = replay_filter_hash(config, roi_mask)
+
+    def _dk(key):
+        return _k(with_replay_filters(key, filter_hash))
+
     detection_key = (
         # roi_mask is folded into the OBB key ONLY when slicing is enabled (see
         # detection_cache_key); None / disabled slicing => byte-identical key.
@@ -619,7 +634,7 @@ def _open_caches(
         headtail=(
             HeadTailCacheHandle(
                 path=root / "headtail.npz",
-                key=_k(headtail_cache_key(config.headtail, config.canonical)),
+                key=_dk(headtail_cache_key(config.headtail, config.canonical)),
                 read_only=read_only,
                 write_mode=write_mode,
                 generation_id=generation_id,
@@ -630,7 +645,7 @@ def _open_caches(
         cnn=[
             CNNCacheHandle(
                 path=root / f"cnn_{c.label}.npz",
-                key=_k(cnn_cache_key(c, config.canonical)),
+                key=_dk(cnn_cache_key(c, config.canonical)),
                 label=c.label,
                 read_only=read_only,
                 write_mode=write_mode,
@@ -641,7 +656,7 @@ def _open_caches(
         pose=(
             PoseCacheHandle(
                 path=root / "pose.npz",
-                key=_k(pose_cache_key(config.pose, config.canonical)),
+                key=_dk(pose_cache_key(config.pose, config.canonical)),
                 read_only=read_only,
                 write_mode=write_mode,
                 generation_id=generation_id,
@@ -652,7 +667,7 @@ def _open_caches(
         apriltag=(
             AprilTagCacheHandle(
                 path=root / "apriltag.npz",
-                key=_k(apriltag_cache_key(config.apriltag)),
+                key=_dk(apriltag_cache_key(config.apriltag)),
                 read_only=read_only,
                 write_mode=write_mode,
                 generation_id=generation_id,
@@ -745,20 +760,19 @@ def write_identity_evidence_sidecar(
     """Read back raw per-frame caches over `frame_range` and write the evidence sidecar.
 
     The batch seam Task 4 wires into ``run_batch_pass``: for each frame, reads
-    the raw (pre-filter) detection cache, re-derives the SAME filtered
-    detection set + order the pipeline used when it ran HeadTail/CNN/AprilTag
-    for that frame (``filter_for_source(config, raw_obb, roi_mask)`` --
-    deterministic, exactly mirroring ``Pipeline._process_window``'s
-    ``filter_for_source(cfg, obb_result, self.stages.roi_mask)`` call and
-    ``InferenceRunner.load_frame``'s own re-filter), and uses the resulting
-    ``filtered_obb.detection_ids`` as the stable ``det_ids`` list
-    `IdentityEvidenceStage` expects -- aligned by position with the
-    CNN/AprilTag stages' own ``det_index`` (both are sequential 0..N-1 over
-    that SAME filtered set, since CNN/AprilTag ran against the pipeline's
-    filtered_obb, not the raw one). ``roi_mask`` must be the SAME frame-space
-    mask the batch pass used (see ``InferenceRunner._write_identity_evidence_batch``),
-    or this sidecar's det_ids silently diverge from what CNN/AprilTag actually
-    ran against.
+    the raw (pre-filter) detection cache and re-derives the final-N filtered
+    detection set via ``filter_for_source(config, raw_obb, roi_mask)`` -- the
+    same deterministic call ``InferenceRunner.load_frame`` makes -- giving
+    ``filtered_obb`` plus its RAW detection-cache indices. The per-animal
+    CNN/AprilTag caches hold the N-free superset keyed by raw index, so they
+    are read through the replay loaders (``_load_cnn_for_indices`` /
+    ``_load_apriltag``), which look those raw indices up and return results
+    positionally aligned with ``filtered_obb`` -- and so with the stable
+    ``det_ids`` (``filtered_obb.detection_ids``) `IdentityEvidenceStage`
+    expects. A final-N index missing from a CNN cache raises
+    ``DownstreamCacheError``. ``roi_mask`` must be the SAME frame-space mask
+    the batch pass used (see ``InferenceRunner._write_identity_evidence_batch``),
+    or this sidecar's final set silently diverges from the replayed one.
 
     ``caches`` must already be flushed to disk (``read_frame`` is disk-backed
     only -- it never sees an unflushed in-memory write buffer), so this is
@@ -783,22 +797,23 @@ def write_identity_evidence_sidecar(
         raw_obb = caches.detection.read_frame(frame_idx)
         if raw_obb is None:
             continue
-        filtered_obb, _ = filter_for_source(config, raw_obb, roi_mask)
+        filtered_obb, det_idx = filter_for_source(config, raw_obb, roi_mask)
         if filtered_obb.num_detections == 0:
             continue
         det_ids = [int(d) for d in filtered_obb.detection_ids]
 
-        cnn_reads: dict[str, list] = {}
-        for cnn_cache in cnn_caches:
-            preds = cnn_cache.read_frame(frame_idx)
-            if preds:
-                cnn_reads[cnn_cache.label] = preds
-
-        tag_read = (
-            caches.apriltag.read_frame(frame_idx)
-            if caches.apriltag is not None
-            else None
-        )
+        # Read through the replay loaders: they look up the final-N RAW
+        # indices in the superset caches and return results positionally
+        # aligned with filtered_obb (so with det_ids). A phase with no
+        # predictions is omitted, not passed as an empty list.
+        cnn_reads: dict[str, list] = {
+            r.label: r.predictions
+            for r in _load_cnn_for_indices(
+                cnn_caches, config.cnn_phases, frame_idx, det_idx
+            )
+            if r.predictions
+        }
+        tag_read = _load_apriltag(caches.apriltag, frame_idx, det_idx)
 
         evidences = stage.evidences_for_frame(frame_idx, det_ids, cnn_reads, tag_read)
         if evidences:
@@ -847,27 +862,22 @@ def _load_headtail_for_indices(
     det_indices: np.ndarray,
     filtered_obb: OBBResult,
 ) -> HeadTailResult | None:
+    """Head-tail rows for the RAW ``det_indices``, positionally aligned.
+
+    The cache holds the N-free superset keyed by raw detection-cache index; a
+    requested index absent from it raises :class:`DownstreamCacheError`.
+    """
     if cache is None or len(det_indices) == 0:
         return None
     data = cache.read_frame(frame_idx)
     if data is None:
         return None
     cached_det_indices, hints, confs, directed = data
-    idx_map = {int(v): i for i, v in enumerate(cached_det_indices)}
-    n = len(det_indices)
-    out_hints = np.full(n, float("nan"), dtype=np.float32)
-    out_confs = np.zeros(n, dtype=np.float32)
-    out_directed = np.zeros(n, dtype=np.uint8)
-    for i, di in enumerate(det_indices):
-        j = idx_map.get(int(di))
-        if j is not None:
-            out_hints[i] = hints[j]
-            out_confs[i] = confs[j]
-            out_directed[i] = 1 if bool(directed[j]) else 0
+    pos = positions_in(cached_det_indices, det_indices)
     return HeadTailResult(
-        heading_hints=out_hints,
-        heading_confidences=out_confs,
-        directed_mask=out_directed,
+        heading_hints=np.asarray(hints, dtype=np.float32)[pos],
+        heading_confidences=np.asarray(confs, dtype=np.float32)[pos],
+        directed_mask=np.asarray(directed)[pos].astype(bool).astype(np.uint8),
         canonical_affines=None,
     )
 
@@ -878,15 +888,21 @@ def _load_cnn_for_indices(
     frame_idx: int,
     det_indices: np.ndarray,
 ) -> list[CNNResult]:
+    """One CNNResult per phase for the RAW ``det_indices``, positionally aligned.
+
+    Cached ``det_index`` values are raw detection-cache indices; the returned
+    predictions carry positions 0..K-1 over ``det_indices``. A phase with no
+    cached frame, or written as explicit empty coverage (``predictions=[]``,
+    the "phase produced no result" marker), yields an empty result. Otherwise
+    a requested index with no prediction raises :class:`DownstreamCacheError`.
+    """
     results: list[CNNResult] = []
-    det_set = {int(di) for di in det_indices}
     for cache, cfg in zip(caches, cnn_configs):
         preds = cache.read_frame(frame_idx)
-        if preds is None:
+        if not preds or len(det_indices) == 0:
             results.append(CNNResult(label=cfg.label, predictions=[]))
             continue
-        aligned = [p for p in preds if p.det_index in det_set]
-        results.append(CNNResult(label=cfg.label, predictions=aligned))
+        results.append(cnn_raw_to_positions(preds, det_indices, cfg.label))
     return results
 
 
@@ -896,34 +912,39 @@ def _load_pose_for_indices(
     det_indices: np.ndarray,
     filtered_obb: OBBResult,
 ) -> PoseResult | None:
+    """Pose rows for the RAW ``det_indices``, positionally aligned.
+
+    A requested index absent from the cached superset raises
+    :class:`DownstreamCacheError`.
+    """
     if cache is None or len(det_indices) == 0:
         return None
     data = cache.read_frame(frame_idx)
     if data is None:
         return None
     cached_keypoints, cached_det_indices, cached_valid = data
-    idx_map = {int(v): i for i, v in enumerate(cached_det_indices)}
-    n = len(det_indices)
     if cached_keypoints.ndim < 2:
         return None
-    kp_shape = cached_keypoints.shape[1:]
-    out_kp = np.zeros((n, *kp_shape), dtype=np.float32)
-    out_valid = np.zeros(n, dtype=bool)
-    for i, di in enumerate(det_indices):
-        j = idx_map.get(int(di))
-        if j is not None:
-            out_kp[i] = cached_keypoints[j]
-            out_valid[i] = bool(cached_valid[j])
-    return PoseResult(keypoints=out_kp, valid_mask=out_valid)
+    pos = positions_in(cached_det_indices, det_indices)
+    return PoseResult(
+        keypoints=np.asarray(cached_keypoints, dtype=np.float32)[pos],
+        valid_mask=np.asarray(cached_valid).astype(bool)[pos],
+    )
 
 
 def _load_apriltag(
     cache: AprilTagCacheHandle | None,
     frame_idx: int,
+    det_indices: np.ndarray,
 ) -> AprilTagResult | None:
+    """AprilTag detections on the RAW ``det_indices``, re-indexed positionally.
+
+    Tags are sparse: a tag whose raw detection is outside ``det_indices`` is
+    dropped (absence means "no tag", not an incoherent cache).
+    """
     if cache is None:
         return None
-    return cache.read_frame(frame_idx)
+    return apriltag_raw_to_positions(cache.read_frame(frame_idx), det_indices)
 
 
 class InferenceRunner:
@@ -1526,10 +1547,17 @@ class InferenceRunner:
         from .identity_evidence_key import identity_evidence_cache_key
 
         assert self._identity_evidence is not None  # caller-guaranteed
+        # The sidecar is rebuilt from the per-animal caches, so it follows the
+        # same replay-filter hash they do (folded into the base signature;
+        # an empty hash -- bg-sub -- leaves the key unchanged).
+        base_signature = self._video_sig
+        filter_hash = replay_filter_hash(self.config, self._roi_mask)
+        if filter_hash:
+            base_signature = f"{base_signature}|filters={filter_hash}"
         key = identity_evidence_cache_key(
             self._identity_evidence.catalog_spec,
             self._identity_evidence.per_factor_temps(),
-            self._video_sig,
+            base_signature,
             unknown_prior=float(self.config.identity_unknown_prior),
         )
         return build_evidence_cache_path(
@@ -1940,7 +1968,7 @@ class InferenceRunner:
         pose_result = _load_pose_for_indices(
             self._caches.pose, frame_idx, det_indices, filtered_obb
         )
-        at_result = _load_apriltag(self._caches.apriltag, frame_idx)
+        at_result = _load_apriltag(self._caches.apriltag, frame_idx, det_indices)
 
         return _build_frame_result(
             frame_idx,
