@@ -1972,7 +1972,9 @@ def _classify_frame_pair(
         x1_valid = not pd.isna(r1.get("X"))
         x2_valid = not pd.isna(r2.get("X"))
         if not x1_valid and not x2_valid:
-            return "agree", _average_trajectory_rows(r1, r2)
+            # No positions on either side: no evidence of agreement, so this
+            # must not end a split (see _advance_split_state).
+            return "both_missing", (r1, r2)
         if not x1_valid:
             return "t2_only", r2
         if not x2_valid:
@@ -2009,6 +2011,9 @@ def _advance_merged_state(
     if classification in ("agree", "t1_only", "t2_only"):
         current_segment.append(data)
         return "merged", current_segment, split_t1_segment, split_t2_segment
+    if classification == "both_missing":
+        current_segment.append(_average_trajectory_rows(*data))
+        return "merged", current_segment, split_t1_segment, split_t2_segment
     # disagree: end merged segment, start split
     _append_segment(current_segment)
     r1, r2 = data
@@ -2035,7 +2040,7 @@ def _advance_split_state(
         _append_segment(split_t1_segment)
         _append_segment(split_t2_segment)
         return "merged", [data], [], []
-    if classification == "disagree":
+    if classification in ("disagree", "both_missing"):
         r1, r2 = data
         split_t1_segment.append(r1.copy())
         split_t2_segment.append(r2.copy())
