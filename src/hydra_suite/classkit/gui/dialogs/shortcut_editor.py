@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -19,8 +20,8 @@ from hydra_suite.widgets.dialogs import (
     HYDRA_DIALOG_STYLE,
 )
 
-_PLUS_KEY = QKeySequence(Qt.Key.Key_Y).toString()
-_MINUS_KEY = QKeySequence(Qt.Key.Key_N).toString()
+_PLUS_KEY = QKeySequence(Qt.Key.Key_Plus).toString()
+_MINUS_KEY = QKeySequence(Qt.Key.Key_Minus).toString()
 
 
 class ShortcutEditorDialog(QDialog):
@@ -35,8 +36,15 @@ class ShortcutEditorDialog(QDialog):
         ("Undo last label (Ctrl+Z)", "Ctrl+Z"),
     ]
 
-    def __init__(self, current: Optional[dict] = None, parent=None) -> None:
+    def __init__(
+        self,
+        current: Optional[dict] = None,
+        parent=None,
+        scheme_keys: Optional[dict] = None,
+    ) -> None:
         super().__init__(parent)
+        # {normalized key: "factor/label"} of the project's label shortcuts.
+        self._scheme_keys = dict(scheme_keys or {})
         self.setWindowTitle("Keyboard Shortcuts")
         self.setMinimumWidth(500)
         self.setStyleSheet(HYDRA_DIALOG_STYLE)
@@ -86,9 +94,22 @@ class ShortcutEditorDialog(QDialog):
         layout.addWidget(btn_reset)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _validate_and_accept(self) -> None:
+        from hydra_suite.classkit.gui.shortcut_rules import global_shortcut_conflicts
+
+        problems = global_shortcut_conflicts(self.get_shortcuts(), self._scheme_keys)
+        if problems:
+            QMessageBox.warning(
+                self,
+                "Shortcut Conflict",
+                "These shortcuts collide:\n\n• " + "\n• ".join(problems),
+            )
+            return
+        self.accept()
 
     def _reset_defaults(self):
         for name, default_key in self.DEFAULT_SHORTCUTS:
