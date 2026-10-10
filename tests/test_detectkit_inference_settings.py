@@ -100,3 +100,59 @@ def test_tools_panel_exposes_inference_settings_button(qapp):
 
     panel = ToolsPanel()
     assert panel._btn_inference_settings.text() == "Inference Settings…"
+
+
+def test_inference_dialog_collapses_when_sahi_off_and_refits(qapp):
+    """S6: SAHI off collapses the slice widget to its checkbox; the dialog
+    re-fits shorter (schedule_fit) and grows back when SAHI is ticked."""
+    from hydra_suite.detectkit.gui.dialogs.inference_settings import (
+        InferenceSettingsDialog,
+    )
+
+    settings = InferenceRunSettings(slice_settings=SliceTrainingSettings(enabled=True))
+    dlg = InferenceSettingsDialog(settings, settings, model_input_size=1024)
+
+    def settle() -> None:
+        for _ in range(5):
+            qapp.processEvents()
+
+    dlg.show()
+    settle()
+    on_height = dlg.height()
+    before = dlg.settings()
+    assert dlg.slice_widget.preview.isVisibleTo(dlg)
+    dlg.chk_sliced.setChecked(False)
+    settle()
+    assert not dlg.slice_widget.preview.isVisibleTo(dlg)
+    assert not dlg.combo_geometry.isVisibleTo(dlg)
+    assert dlg.height() < on_height - 100
+    dlg.chk_sliced.setChecked(True)
+    settle()
+    assert dlg.height() == on_height
+    assert dlg.settings() == before
+    # Opening Advanced grows the dialog so no row is squeezed.
+    dlg.slice_widget.btn_slice_advanced.setChecked(True)
+    settle()
+    assert dlg.height() >= dlg.minimumSizeHint().height()
+    assert dlg.height() > on_height
+    dlg.close()
+
+
+def test_inference_dialog_keeps_a_user_resized_height(qapp):
+    from hydra_suite.detectkit.gui.dialogs.inference_settings import (
+        InferenceSettingsDialog,
+    )
+
+    settings = InferenceRunSettings(slice_settings=SliceTrainingSettings(enabled=True))
+    dlg = InferenceSettingsDialog(settings, settings, model_input_size=1024)
+    dlg.show()
+    for _ in range(5):
+        qapp.processEvents()
+    dlg.resize(dlg.width(), dlg.height() + 120)  # the user drags it taller
+    user_height = dlg.height()
+    dlg.chk_sliced.setChecked(False)
+    dlg.chk_sliced.setChecked(True)
+    for _ in range(5):
+        qapp.processEvents()
+    assert dlg.height() == user_height
+    dlg.close()

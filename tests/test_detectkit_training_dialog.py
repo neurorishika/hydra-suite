@@ -1285,3 +1285,44 @@ def test_training_dialog_state_cannot_expand_control_text_past_loader_cap(
     assert b"\\u0000" not in encoded
     assert len(encoded) <= gui_utils.MAX_UI_JSON_BYTES
     assert gui_utils.load_bounded_json_mapping(preset)
+
+
+def test_training_dialog_sahi_off_collapses_the_slice_group(qapp, tmp_path):
+    """S6: SAHI off hides every SAHI row but Enable (and the preview); the
+    scroll page re-lays out shorter, and grows back with values intact."""
+    from PySide6.QtWidgets import QLayout, QScrollArea
+
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.sam3_panel._probed_once = True
+    group = dlg.slice_group
+    scroll = group.parentWidget()
+    while not isinstance(scroll, QScrollArea):
+        scroll = scroll.parentWidget()
+    page = scroll.widget()
+
+    def page_height() -> int:
+        for _ in range(3):
+            qapp.processEvents()
+        for layout in reversed(page.findChildren(QLayout)):
+            layout.invalidate()
+            layout.activate()
+        return page.minimumSizeHint().height()
+
+    dlg.show()
+    group.chk_slice_enabled.setChecked(True)
+    before = group.to_settings()
+    on_height = page_height()
+    assert group.preview.isVisibleTo(group)
+    group.chk_slice_enabled.setChecked(False)
+    off_height = page_height()
+    assert not group.preview.isVisibleTo(group)
+    assert not group.combo_slice_geometry.isVisibleTo(group)
+    assert not group.btn_slice_advanced.isVisibleTo(group)
+    assert group.chk_slice_enabled.isVisibleTo(group)
+    assert off_height < on_height - 150
+    group.chk_slice_enabled.setChecked(True)
+    assert page_height() == on_height
+    assert group.to_settings() == before
+    dlg.close()
