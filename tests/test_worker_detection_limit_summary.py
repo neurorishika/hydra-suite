@@ -181,3 +181,61 @@ def test_bg_helper_entry_guard(shown, monkeypatch, tmp_path):
     )
     orch._open_bg_parameter_helper()
     assert shown and shown[0][0] == "Detection limit exceeded"
+
+
+# --- I2: GUI config load never silently clamps N ------------------------------
+
+
+def _load_core_tracking(max_targets, start_value=26):
+    """Run the real ``_load_config_core_tracking`` against real setup spinbox
+    semantics; every other widget it touches is a permissive stand-in."""
+    from unittest.mock import MagicMock
+
+    from PySide6.QtWidgets import QApplication, QSpinBox
+
+    from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+    from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
+
+    QApplication.instance() or QApplication([])
+    spin = QSpinBox()
+    spin.setRange(1, MAX_DETECTIONS_PER_FRAME)  # as setup_panel builds it
+    spin.setValue(start_value)
+    orch = ConfigOrchestrator.__new__(ConfigOrchestrator)
+    orch._mw = MagicMock()
+    orch._panels = MagicMock()
+    orch._panels.setup.spin_max_targets = spin
+    cfg = {"max_targets": max_targets}
+
+    def get_cfg(*keys, default=None):
+        for k in keys:
+            if k in cfg:
+                return cfg[k]
+        return default
+
+    try:
+        orch._load_config_core_tracking(get_cfg, lambda *a, **k: 1.0)
+    except Exception:  # noqa: BLE001 - later stand-in widgets are irrelevant
+        pass
+    return spin
+
+
+def test_loading_config_above_limit_reports_and_does_not_clamp(shown):
+    import inspect
+
+    from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+    from hydra_suite.trackerkit.gui.panels import setup_panel
+
+    assert "spin_max_targets.setRange(1, MAX_DETECTIONS_PER_FRAME)" in (
+        inspect.getsource(setup_panel)
+    )
+    spin = _load_core_tracking(2000)
+    assert shown and shown[0][0] == "Detection limit exceeded"
+    assert "2000" in shown[0][1] and "1024" in shown[0][1]
+    assert spin.value() == 26, "N above the limit must not be clamped to it"
+    assert spin.value() != MAX_DETECTIONS_PER_FRAME
+
+
+def test_loading_config_within_limit_applies_silently(shown):
+    spin = _load_core_tracking(300)
+    assert spin.value() == 300
+    assert not shown

@@ -722,7 +722,14 @@ class ConfigOrchestrator:
         self._mw._on_runtime_context_changed()
 
     def _load_config_core_tracking(self, get_cfg, get_cfg_time):
-        self._panels.setup.spin_max_targets.setValue(get_cfg("max_targets", default=4))
+        from hydra_suite.trackerkit.gui.limit_guard import loaded_target_count_or_report
+
+        # setValue would silently clamp an N above the per-frame limit to it.
+        n_targets = loaded_target_count_or_report(
+            self._mw, get_cfg("max_targets", default=4)
+        )
+        if n_targets is not None:
+            self._panels.setup.spin_max_targets.setValue(n_targets)
         self._panels.tracking.spin_max_dist.setValue(
             get_cfg(
                 "max_assignment_distance_multiplier",
