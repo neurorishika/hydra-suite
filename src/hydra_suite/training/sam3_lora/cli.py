@@ -1324,6 +1324,11 @@ def _write_trainer_state(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, target)
+        directory_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         temporary.unlink(missing_ok=True)
     return target
@@ -1353,6 +1358,15 @@ def _carry_epoch_checkpoints(
                 os.link(item, destination)
             except OSError:
                 shutil.copy2(item, destination)
+    # Carried too, so a resume from the carried epoch can still be exact.
+    # `_write_trainer_state` replaces the name (never writes through the
+    # link), so the interrupted run's copy is never modified.
+    state = source_dir / TRAINER_STATE_FILENAME
+    if state.is_file() and not (target_dir / TRAINER_STATE_FILENAME).exists():
+        try:
+            os.link(state, target_dir / TRAINER_STATE_FILENAME)
+        except OSError:
+            shutil.copy2(state, target_dir / TRAINER_STATE_FILENAME)
 
 
 @dataclass(frozen=True)
@@ -1377,6 +1391,7 @@ def _restore_resume_state(
     steps_per_epoch: int,
     warmup_steps: int,
     total_steps: int,
+    evaluate_epoch: Any = None,
 ) -> _ResumedState:
     """Restore an interrupted run's state into a freshly built model.
 
@@ -1407,6 +1422,29 @@ def _restore_resume_state(
     should_stop, last_record = replay_validation_history(
         history, early_stop, checkpoint_selector
     )
+    recorded_epochs = {int(r["epoch"]) for r in history}
+    evaluated_on_resume = False
+    if (
+        evaluate_epoch is not None
+        and point.epoch not in recorded_epochs
+        and point.epoch % val_cadence() == 0
+    ):
+        # The run died between writing epoch N's checkpoint and recording its
+        # validation (a 30-60 min window). Score the restored weights now, or
+        # epoch N is invisible to selection and early stopping forever.
+        emit_log(
+            f"SAM3 resume: epoch {point.epoch} has a checkpoint but no "
+            "validation record; evaluating the restored adapters first."
+        )
+        record = evaluate_epoch(point.epoch)
+        if record is not None:
+            checkpoint_selector.observe(
+                point.epoch, record["val_loss_mean"], record=record
+            )
+            should_stop = early_stop.observe(point.epoch, record["val_loss_mean"])
+            last_record = record
+            history = [*history, record]
+            evaluated_on_resume = True
 
     selected_state: dict[str, Any] | None = None
     selected_epoch = checkpoint_selector.selected_epoch
@@ -1433,9 +1471,15 @@ def _restore_resume_state(
         candidate = torch_module.load(
             trainer_state_path, map_location="cpu", weights_only=True
         )
-        if int(candidate.get("epoch", -1)) == point.epoch and int(
-            candidate.get("steps_per_epoch", -1)
-        ) == int(steps_per_epoch):
+        if int(candidate.get("epoch", -1)) == point.epoch:
+            if int(candidate.get("steps_per_epoch", -1)) != int(steps_per_epoch):
+                raise RuntimeError(
+                    "SAM3 resume: the interrupted run took "
+                    f"{candidate.get('steps_per_epoch')} steps per epoch, this one "
+                    f"takes {steps_per_epoch}. The batching changed (dataset, "
+                    "batch, grad_accum or HYDRA_SAM3_SCALE_GROUPED_BATCHING), so "
+                    "the LR schedule would not line up; refusing to resume."
+                )
             trainer_state = candidate
     if trainer_state is not None:
         optimizer.load_state_dict(trainer_state["optimizer"])
@@ -1447,8 +1491,13 @@ def _restore_resume_state(
             (name, np.asarray(keys, dtype=np.uint32), pos, has_gauss, cached)
         )
         torch_module.set_rng_state(trainer_state["torch_rng"])
-        if trainer_state["cuda_rng"] and torch_module.cuda.is_available():
-            torch_module.cuda.set_rng_state_all(trainer_state["cuda_rng"])
+        cuda_rng = trainer_state["cuda_rng"]
+        if (
+            cuda_rng
+            and torch_module.cuda.is_available()
+            and len(cuda_rng) == torch_module.cuda.device_count()
+        ):
+            torch_module.cuda.set_rng_state_all(cuda_rng)
         mode = "EXACT"
         caveat = "optimizer moments, LR schedule and RNG streams restored"
     else:
@@ -1480,6 +1529,12 @@ def _restore_resume_state(
         "mode": mode.lower(),
         "lr": actual_lr,
         "replayed_epochs": [int(r["epoch"]) for r in history],
+        "evaluated_resume_epoch": evaluated_on_resume,
+        "env": {
+            key: value
+            for key, value in sorted(os.environ.items())
+            if key.startswith("HYDRA_SAM3_")
+        },
         "early_stop_best_epoch": early_stop.best_epoch,
         "early_stop_epochs_without_improvement": (
             early_stop.epochs_without_improvement
@@ -1680,6 +1735,18 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
             steps_per_epoch=steps_per_epoch,
             warmup_steps=warmup_steps,
             total_steps=total_steps,
+            evaluate_epoch=lambda epoch_number: _record_epoch_validation(
+                model,
+                spec,
+                params,
+                matcher,
+                loss_fn,
+                device,
+                autocast_dtype,
+                True,
+                run_dir_path,
+                epoch_number,
+            ),
         )
         start_epoch = resumed.epoch
         global_step = resumed.global_step
@@ -1696,6 +1763,7 @@ def run_training(spec: Any, run_dir_path: Path) -> bool:
                 f"EARLY STOP already reached at epoch {start_epoch} before the "
                 "interruption; exporting without further training."
             )
+            emit_progress(params.epochs, params.epochs)
 
     for epoch in range(start_epoch, params.epochs):
         if resume_should_stop:

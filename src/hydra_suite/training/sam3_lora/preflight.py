@@ -201,6 +201,10 @@ _MAX_JSON_DEPTH = 24
 # trainer can run on affords.
 _METADATA_PARSE_BUDGET_FRACTION = 0.25
 _MIN_METADATA_PARSE_BUDGET_BYTES = 96 * MiB
+# And never above 2 GiB: the guard reads and pre-scans the file in the launcher
+# (a pure-Python scan, ~8 MB/s) before refusing, so a budget that tracked host
+# RAM unbounded would cost minutes per preflight call on a big box.
+_MAX_METADATA_PARSE_BUDGET_BYTES = 2 * GiB
 # estimated_parsed >= 2 * raw and >= 64 * values (see the pre-scan formula), so
 # these two derived caps can only refuse what the budget would refuse anyway,
 # but they refuse it before reading or scanning the bytes.
@@ -365,9 +369,12 @@ def _metadata_parse_budget_bytes() -> int:  # seam for tests
         int(int(host.total) * _MINIMUM_HOST_RESERVE_FRACTION),
     )
     usable = max(0, int(host.available) - reserve)
-    return max(
-        _MIN_METADATA_PARSE_BUDGET_BYTES,
-        int(usable * _METADATA_PARSE_BUDGET_FRACTION),
+    return min(
+        _MAX_METADATA_PARSE_BUDGET_BYTES,
+        max(
+            _MIN_METADATA_PARSE_BUDGET_BYTES,
+            int(usable * _METADATA_PARSE_BUDGET_FRACTION),
+        ),
     )
 
 

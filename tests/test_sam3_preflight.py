@@ -415,15 +415,14 @@ def test_metadata_parse_budget_scales_with_usable_host_memory(monkeypatch):
     import psutil
 
     gib = 1024**3
-    host = SimpleNamespace(total=64 * gib, available=40 * gib)
+    host = SimpleNamespace(total=16 * gib, available=12 * gib)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: host)
-    # reserve = max(8 GiB, 15% of 64 GiB = 9.6 GiB); a quarter of the rest.
-    usable = 40 * gib - int(64 * gib * 0.15)
-    assert pf._metadata_parse_budget_bytes() == int(usable * 0.25)
+    # reserve = max(8 GiB, 15% of 16 GiB); a quarter of the remaining 4 GiB.
+    assert pf._metadata_parse_budget_bytes() == 1 * gib
 
     host = SimpleNamespace(total=2048 * gib, available=1900 * gib)
     big = pf._metadata_parse_budget_bytes()
-    assert big > 350 * gib
+    assert big == pf._MAX_METADATA_PARSE_BUDGET_BYTES
     # The 25.6 MB / ~1.5M-value COCO file that the old fixed 16 MiB / 2M /
     # 96 MiB caps refused fits easily on such a host.
     assert big // 2 > 25_607_715 and big // 64 > 1_536_730
@@ -1874,3 +1873,15 @@ def test_valid_epoch_checkpoint_resume_is_admitted(tmp_path):
     decision = _decision(spec)
 
     assert not any("resum" in r.lower() for r in decision.refusals), decision.refusals
+
+
+def test_metadata_parse_budget_has_an_absolute_ceiling(monkeypatch):
+    import psutil
+
+    gib = 1024**3
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=4096 * gib, available=4000 * gib),
+    )
+    assert pf._metadata_parse_budget_bytes() == pf._MAX_METADATA_PARSE_BUDGET_BYTES

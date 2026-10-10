@@ -336,3 +336,52 @@ def test_resume_refuses_a_finished_run(tmp_path, monkeypatch):
     new.mkdir()
     with pytest.raises(RuntimeError, match="nothing left to train"):
         cli.run_training(spec, new)
+
+
+def test_resume_scores_an_epoch_that_died_before_validation(tmp_path, monkeypatch):
+    """Checkpoint written, validation never recorded: score it on resume."""
+    torch = pytest.importorskip("torch")
+    losses = {3: 0.5, 4: 2.5, 5: 2.6}
+    spec, model, seeds, logs, _ = _resume_harness(
+        tmp_path, monkeypatch, losses_by_epoch=losses
+    )
+    old = _seed_interrupted_run(tmp_path, torch, [10.0, 20.0, 30.0], [3.0, 1.0])
+    spec.resume_from = str(old / "checkpoints" / "epoch_003.pt")
+    new = tmp_path / "new"
+    new.mkdir()
+
+    assert cli.run_training(spec, new) is True
+
+    selection = json.loads((new / "checkpoint_selection.json").read_text())
+    assert selection["selected_epoch"] == 3
+    exported = torch.load(new / "adapters.pt", weights_only=True)
+    assert exported["w"].item() == 30.0
+    record = json.loads((new / "resume.json").read_text())[0]
+    assert record["evaluated_resume_epoch"] is True
+    assert record["replayed_epochs"] == [1, 2, 3]
+    assert seeds == [spec.seed + 3, spec.seed + 4]
+
+
+def test_resume_refuses_trainer_state_from_different_batching(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    spec, *_ = _resume_harness(tmp_path, monkeypatch, losses_by_epoch={})
+    old = _seed_interrupted_run(tmp_path, torch, [10.0, 20.0, 30.0], [3.0, 1.0, 2.0])
+    torch.save(
+        {"epoch": 3, "steps_per_epoch": 999, "global_step": 2997},
+        old / "checkpoints" / "trainer_state.pt",
+    )
+    spec.resume_from = str(old / "checkpoints" / "epoch_003.pt")
+    new = tmp_path / "new"
+    new.mkdir()
+    with pytest.raises(RuntimeError, match="steps per epoch"):
+        cli.run_training(spec, new)
+
+
+def test_resume_spec_mismatches_tolerates_fields_added_since_the_old_run():
+    from dataclasses import asdict
+
+    params = asdict(Sam3LoraParams(prompt="ant"))
+    saved_params = json.loads(json.dumps(params))
+    saved_params.pop("checkpoint_selection")
+    saved = {"seed": 41, "sam3_params": saved_params}
+    assert resume_spec_mismatches(saved, params, 41) == []

@@ -144,6 +144,11 @@ def resume_spec_mismatches(
     for key in sorted(set(old) | set(new)):
         if key in _RESUME_TOLERATED_PARAM_KEYS:
             continue
+        if key not in old:
+            # A field added after the interrupted run was written: that run
+            # trained on the field's default, which is what `new` carries
+            # unless the plan sets it. Not drift by itself.
+            continue
         if old.get(key) != new.get(key):
             problems.append(f"sam3.{key}: {old.get(key)!r} -> {new.get(key)!r}")
     return problems
