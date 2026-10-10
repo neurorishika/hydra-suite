@@ -266,3 +266,32 @@ def test_view_stored_calibration_button_needs_saved_evidence(
     dlg._view_stored_calibration()
     assert opened.get("stored") is True
     assert opened["outcome"].points[0].label == "Training geometry"
+
+
+def test_a_stopped_run_with_a_checkpoint_can_be_calibrated_and_exported(
+    qapp, tmp_path, monkeypatch
+):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+    from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
+
+    model_path = tmp_path / "model.pt"
+    model_path.write_bytes(b"weights")
+
+    def run(status):
+        return {
+            "run_id": f"run_{status}",
+            "role": "segment_direct",
+            "status": status,
+            "started_at": "2026-04-01T10:00:00",
+            "spec": {"base_model": "yolo26n-seg.pt", "hyperparams": {"epochs": 300}},
+            "artifact_paths": [str(model_path)],
+            "project_model_path": "",
+            "published_model_path": str(model_path),
+        }
+
+    for status, expected in (("canceled", True), ("interrupted", True), ("failed", False)):
+        monkeypatch.setattr(hd, "_load_runs", lambda proj, s=status: [run(s)])
+        dlg = HistoryDialog(_make_proj(tmp_path))
+        dlg.table.selectRow(0)
+        assert dlg._is_calibratable(dlg._runs[0]) is expected, status
+        assert dlg._btn_export.isEnabled() is True

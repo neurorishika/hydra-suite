@@ -207,3 +207,20 @@ def test_evaluation_result_project_record_omits_external_paths():
     assert record["dataset_name"] == "derived"
     assert "model_path" not in record
     assert "dataset_dir" not in record
+
+
+def test_stopped_runs_with_an_artifact_are_evaluable_but_failed_runs_are_not(tmp_path):
+    from hydra_suite.detectkit.evaluation import collect_evaluation_candidates
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    stopped, _, _ = _history_entry(tmp_path, run_id="stopped", role="segment_direct")
+    stopped["status"] = "canceled"
+    failed, _, _ = _history_entry(tmp_path, run_id="failed", role="segment_direct")
+    failed["status"] = "failed"
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [stopped, failed]
+
+    by_id = {c.run_id: c for c in collect_evaluation_candidates(project)}
+
+    assert by_id["stopped"].available is True
+    assert by_id["failed"].available is False

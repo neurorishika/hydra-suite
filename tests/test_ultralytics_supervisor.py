@@ -79,6 +79,10 @@ def test_generic_training_uses_shared_bounded_supervisor(monkeypatch, tmp_path):
     assert seen["kwargs"]["output_max_lines"] == mod.OUTPUT_MAX_LINES
     assert seen["kwargs"]["output_max_chars"] == mod.OUTPUT_MAX_CHARS
     assert seen["plan"].launch.limits.hard_host_bytes <= _budget().usable_host_bytes
+    # The kill threshold follows the host, not the job estimate.
+    assert seen["plan"].launch.limits.hard_host_bytes == int(
+        _budget().usable_host_bytes * 0.9
+    )
 
 
 def test_generic_training_cancellation_terminates_sidecar(monkeypatch, tmp_path):

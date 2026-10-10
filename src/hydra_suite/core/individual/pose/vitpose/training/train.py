@@ -52,7 +52,14 @@ def train(cfg: RunConfig) -> dict:
     all_ids, _ = load_coco_index(Path(cfg.dataset_dir))
     train_ids, val_ids = _split(all_ids, cfg.val_fraction, cfg.seed)
     train_ds = CocoKeypointsDataset(
-        cfg.dataset_dir, train_ids, cfg.sigma, augment=True, geom=geom
+        cfg.dataset_dir,
+        train_ids,
+        cfg.sigma,
+        augment=True,
+        geom=geom,
+        scale_jitter=cfg.scale_jitter,
+        aspect_jitter=cfg.aspect_jitter,
+        seed=cfg.seed,
     )
     val_ds = CocoKeypointsDataset(
         cfg.dataset_dir, val_ids, cfg.sigma, augment=False, geom=geom

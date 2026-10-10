@@ -1,11 +1,20 @@
 """
 Active learning batch acquisition strategies.
 
-Implements the recipe:
-- 40% uncertainty (highest entropy / smallest margin)
-- 35% diversity (k-center / farthest-first)
-- 15% representativeness (dense clusters with low label coverage)
-- 10% audits (random + high-disagreement clusters)
+Implements the recipe (default fractions):
+- 30% uncertainty (highest entropy / smallest margin)
+- 25% diversity (k-center / farthest-first)
+- 20% error neighbours (unlabeled images most similar to images the model gets
+  wrong, round-robin over the errors, most confidently wrong first)
+- 10% rare clusters (sampled with weight ``cluster_size ** -alpha``, so small
+  clusters are likelier than big ones, and less so once labeled)
+- 10% representativeness (dense clusters with low label coverage)
+- 5% audits (random + high-disagreement clusters)
+
+Slots run in that order against a shrinking pool, so no image is picked twice
+and the batch fills to ``batch_size``.  A slot whose signal is unavailable
+(no known errors, no clusters) hands its budget to uncertainty, so the batch
+size is always honoured.
 """
 
 try:
@@ -17,6 +26,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .density import select_diverse_samples
+from .error_mining import (
+    ErrorNeighborSelector,
+    RareClusterSelector,
+    find_prediction_errors,
+)
 
 
 @dataclass
@@ -24,10 +38,16 @@ class BatchConfig:
     """Configuration for batch acquisition."""
 
     batch_size: int = 100
-    uncertainty_fraction: float = 0.40
-    diversity_fraction: float = 0.35
-    representative_fraction: float = 0.15
-    audit_fraction: float = 0.10  # noqa: DC01  (dataclass field)
+    uncertainty_fraction: float = 0.30
+    diversity_fraction: float = 0.25
+    representative_fraction: float = 0.10
+    error_fraction: float = 0.20  # unlabeled images similar to known model errors
+    rare_cluster_fraction: float = 0.10  # bias toward small / under-labeled clusters
+    rare_alpha: float = 0.75  # 0 = proportional to cluster size, 1 = equal per cluster
+    error_same_pred_boost: float = (
+        0.05  # cosine bonus for repeating the same wrong answer
+    )
+    audit_fraction: float = 0.05  # noqa: DC01  (dataclass field)
     per_cluster_cap: Optional[int] = None  # Max samples per cluster
     min_per_class: int = (
         0  # noqa: DC01  (dataclass field) — minimum per class if imbalanced
@@ -100,7 +120,11 @@ class UncertaintySelector:
         # Only consider unlabeled
         uncertainty[~unlabeled_mask] = -np.inf
 
-        # Select top
+        # Never hand back masked (already-labeled) rows when asked for more
+        # samples than remain.
+        n_samples = min(int(n_samples), int(np.count_nonzero(unlabeled_mask)))
+        if n_samples <= 0:
+            return np.array([], dtype=int)
         selected = np.argsort(uncertainty)[-n_samples:][::-1]
         return selected
 
@@ -276,12 +300,20 @@ class AuditSelector:
 class BatchAcquisition:
     """Main batch acquisition orchestrator."""
 
-    def __init__(self, config: Optional[BatchConfig] = None):
+    def __init__(
+        self, config: Optional[BatchConfig] = None, seed: Optional[int] = None
+    ):
         self.config = config or BatchConfig()
         self.uncertainty_selector = UncertaintySelector()
         self.representative_selector = RepresentativeSelector()
         self.balance_selector = BalanceSelector()
         self.audit_selector = AuditSelector()
+        self.error_selector = ErrorNeighborSelector(self.config.error_same_pred_boost)
+        self.rare_selector = RareClusterSelector(self.config.rare_alpha)
+        self._rng = np.random.default_rng(seed)
+        # Diagnostics for the most recent select_batch call (not part of the
+        # (indices, breakdown) return so existing callers are unaffected).
+        self.last_info: Dict[str, object] = {}
 
     def select_batch(
         self,
@@ -294,6 +326,9 @@ class BatchAcquisition:
         cluster_disagreements: Optional[Dict[int, float]] = None,
         image_labels: Optional[List[Optional[str]]] = None,
         class_names: Optional[List[str]] = None,
+        predicted_labels: Optional[List[Optional[str]]] = None,
+        prediction_confidence: Optional[np.ndarray] = None,
+        trusted_label_mask: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, Dict[str, List[int]]]:
         """
         Select a batch using the full recipe.
@@ -302,64 +337,137 @@ class BatchAcquisition:
             embeddings: (N, D) embeddings
             probs: (N, num_classes) prediction probabilities
             unlabeled_mask: (N,) boolean mask
-            cluster_assignments: (N,) cluster IDs (optional)
+            cluster_assignments: (N,) cluster IDs (optional; ``< 0`` = noise)
             label_coverage: cluster_id -> fraction labeled (optional)
             cluster_densities: (K,) density per cluster (optional)
             cluster_disagreements: cluster_id -> disagreement (optional)
-            image_labels: per-sample label strings for balance mode (optional)
+            image_labels: per-sample label strings (balance mode and error mining)
             class_names: model output class names aligned with probs columns (optional)
+            predicted_labels: per-sample predicted label strings; with
+                ``image_labels`` this enables the error-neighbour slot.  Use the
+                same (head-aware) strings the GUI shows, so multi-head models
+                compare composite labels.
+            prediction_confidence: (N,) confidence of each prediction; ranks how
+                bad each error is (confidently wrong first)
+            trusted_label_mask: (N,) True where ``image_labels`` is human-verified
+                ground truth.  Unverified machine labels must be excluded or the
+                model's own guesses would count as errors / ground truth.
 
         Returns:
             selected_indices: (batch_size,) selected indices
             breakdown: Dictionary with indices per reason
         """
         cfg = self.config
-        breakdown = {}
+        breakdown: Dict[str, List[int]] = {}
+        info: Dict[str, object] = {}
+        self.last_info = info
 
-        # Calculate component sizes
-        n_uncertainty = int(cfg.batch_size * cfg.uncertainty_fraction)
-        n_diversity = int(cfg.batch_size * cfg.diversity_fraction)
-        n_representative = int(cfg.batch_size * cfg.representative_fraction)
-        n_audit = cfg.batch_size - (n_uncertainty + n_diversity + n_representative)
+        unlabeled_mask = np.asarray(unlabeled_mask, dtype=bool)
+        avail = unlabeled_mask.copy()  # shrinks as slots claim images
+        batch_size = min(int(cfg.batch_size), int(avail.sum()))
 
-        selected_indices = set()
+        fractions = {
+            "error": max(0.0, cfg.error_fraction),
+            "rare": max(0.0, cfg.rare_cluster_fraction),
+            "uncertainty": max(0.0, cfg.uncertainty_fraction),
+            "diversity": max(0.0, cfg.diversity_fraction),
+            "representative": max(0.0, cfg.representative_fraction),
+        }
+        total = sum(fractions.values())
+        if total > 1.0:  # over-subscribed recipe: scale every slot down evenly
+            fractions = {k: v / total for k, v in fractions.items()}
+        n_error = int(batch_size * fractions["error"])
+        n_rare = int(batch_size * fractions["rare"])
+        n_uncertainty = int(batch_size * fractions["uncertainty"])
+        n_diversity = int(batch_size * fractions["diversity"])
+        n_representative = int(batch_size * fractions["representative"])
+        n_audit = max(
+            0,
+            batch_size
+            - (n_error + n_rare + n_uncertainty + n_diversity + n_representative),
+        )
 
-        # 1. Uncertainty
-        if n_uncertainty > 0:
-            uncertain = self.uncertainty_selector.select(
-                probs, n_uncertainty, unlabeled_mask
+        chosen: List[int] = []
+
+        def claim(reason: str, picked) -> None:
+            picked = np.asarray(picked, dtype=int).reshape(-1)
+            picked = picked[avail[picked]] if picked.size else picked
+            if picked.size == 0:
+                return
+            avail[picked] = False
+            chosen.extend(int(i) for i in picked)
+            breakdown.setdefault(reason, []).extend(int(i) for i in picked)
+
+        # 1. Error neighbours: unlabeled images that look like known failures.
+        if n_error > 0 and image_labels is not None and predicted_labels is not None:
+            errors = find_prediction_errors(
+                image_labels,
+                predicted_labels,
+                prediction_confidence,
+                trusted_label_mask,
             )
-            breakdown["uncertainty"] = uncertain.tolist()
-            selected_indices.update(uncertain)
+            info["n_errors"] = len(errors)
+            if len(errors):
+                res = self.error_selector.select(
+                    embeddings, errors, avail, n_error, predicted_labels
+                )
+                claim("error_neighbors", res.indices)
+                info["error_sources"] = {
+                    int(i): int(res.source_error[int(i)])
+                    for i in res.indices
+                    if int(i) in res.source_error
+                }
+                info["error_pairs"] = {
+                    int(i): (t, p)
+                    for i, t, p in zip(
+                        errors.indices, errors.true_labels, errors.pred_labels
+                    )
+                }
 
-        # 2. Diversity
-        if n_diversity > 0:
-            # Only consider unlabeled embeddings
-            unlabeled_embs = embeddings[unlabeled_mask]
-            unlabeled_indices = np.where(unlabeled_mask)[0]
+        # 2. Uncertainty
+        if n_uncertainty > 0:
+            claim(
+                "uncertainty",
+                self.uncertainty_selector.select(probs, n_uncertainty, avail),
+            )
 
-            if len(unlabeled_embs) > 0:
-                diverse_local = select_diverse_samples(unlabeled_embs, n_diversity)
-                diverse = unlabeled_indices[diverse_local]
-                breakdown["diversity"] = diverse.tolist()
-                selected_indices.update(diverse)
+        # 3. Rare clusters
+        if n_rare > 0 and cluster_assignments is not None:
+            picked = self.rare_selector.select(
+                np.asarray(cluster_assignments),
+                avail,
+                n_rare,
+                label_coverage,
+                rng=self._rng,
+            )
+            claim("rare_cluster", picked)
+            if picked.size:
+                ids, counts = np.unique(
+                    np.asarray(cluster_assignments)[picked], return_counts=True
+                )
+                info["rare_cluster_counts"] = {
+                    int(i): int(c) for i, c in zip(ids, counts)
+                }
 
-        # 3. Representativeness / Balance
-        if n_representative > 0:
+        # 4. Diversity (k-center over what is still available)
+        if n_diversity > 0 and avail.any():
+            avail_idx = np.where(avail)[0]
+            local = select_diverse_samples(embeddings[avail_idx], n_diversity)
+            claim("diversity", avail_idx[np.asarray(local, dtype=int)])
+
+        # 5. Representativeness / Balance
+        if n_representative > 0 and avail.any():
             if (
                 cfg.balance_mode
                 and image_labels is not None
                 and class_names is not None
             ):
-                balance = self.balance_selector.select(
-                    probs,
-                    class_names,
-                    image_labels,
-                    n_representative,
-                    unlabeled_mask,
+                claim(
+                    "balance",
+                    self.balance_selector.select(
+                        probs, class_names, image_labels, n_representative, avail
+                    ),
                 )
-                breakdown["balance"] = balance.tolist()
-                selected_indices.update(balance)
             elif cluster_assignments is not None:
                 if label_coverage is None:
                     label_coverage = {}
@@ -369,31 +477,35 @@ class BatchAcquisition:
                     cluster_densities = compute_cluster_densities(
                         embeddings, cluster_assignments
                     )
-
-                representative = self.representative_selector.select(
-                    embeddings,
-                    cluster_assignments,
-                    label_coverage,
-                    cluster_densities,
-                    n_representative,
-                    unlabeled_mask,
+                claim(
+                    "representative",
+                    self.representative_selector.select(
+                        embeddings,
+                        cluster_assignments,
+                        label_coverage,
+                        cluster_densities,
+                        n_representative,
+                        avail,
+                    ),
                 )
-                breakdown["representative"] = representative.tolist()
-                selected_indices.update(representative)
 
-        # 4. Audits
-        if n_audit > 0:
-            audits = self.audit_selector.select(
-                n_audit,
-                unlabeled_mask,
-                cluster_assignments,
-                cluster_disagreements,
+        # 6. Audits
+        if n_audit > 0 and avail.any():
+            claim(
+                "audit",
+                self.audit_selector.select(
+                    n_audit, avail, cluster_assignments, cluster_disagreements
+                ),
             )
-            breakdown["audit"] = audits.tolist()
-            selected_indices.update(audits)
 
-        # Convert to array
-        final_selected = np.array(list(selected_indices))
+        # 7. Top-up: a slot with no signal (no errors yet, no clusters, or too
+        # few candidates) hands its budget to uncertainty.
+        short = batch_size - len(chosen)
+        if short > 0 and avail.any():
+            claim("uncertainty", self.uncertainty_selector.select(probs, short, avail))
+            info["topped_up"] = short
+
+        final_selected = np.asarray(chosen, dtype=int)
 
         # Apply per-cluster cap if specified
         if cfg.per_cluster_cap is not None and cluster_assignments is not None:

@@ -338,7 +338,7 @@ def signal_systemd_scope(
                 "--user",
                 "kill",
                 f"--signal={int(signum)}",
-                "--kill-whom=all",
+                "--kill-who=all",
                 unit,
             ],
             check=False,

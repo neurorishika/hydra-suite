@@ -107,6 +107,14 @@ def main() -> None:
             "to avoid a PyTorch MPS indexing fault."
         )
     install_sahi_scale_balance_and_grouped_sampling()
+    from hydra_suite.training.ultralytics_window_aug import (
+        install_window_jitter_from_env,
+    )
+
+    if install_window_jitter_from_env():
+        LOGGER.info(
+            "Hydra: centred window scale/aspect jitter enabled for training data."
+        )
     entrypoint()
 
 
