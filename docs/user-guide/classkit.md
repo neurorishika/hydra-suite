@@ -30,6 +30,14 @@ classkit
 - Active learning for efficient labeling
 - Export to Parquet/CSV, ImageFolder, and Ultralytics classification formats
 
+## Approving Predictions While Labeling
+
+With a trained model loaded, labeling mode shows **Approve** / **Reject** (default keys `+` / `-`) for any image that has a proposal: either a staged unverified machine label or the live model prediction. No review-mode staging is needed.
+
+- **Approve** stores the proposed label as a human-verified label and moves on.
+- **Reject** asks for the correct label, stores that, and moves on.
+- Images that already have a verified label, and `unknown` predictions, have nothing to approve.
+
 ## Training Augmentation Defaults
 
 The training dialog's *Space and Augmentations* tab starts with conservative

@@ -28,3 +28,22 @@ def test_click_uses_database_scope_without_batch():
     w = _stub([])
     MainWindow.on_explorer_point_clicked(w, 7)
     assert w._labeling_navigation_scope == "database"
+
+
+def test_labeling_proposal_ignores_verified_and_unknown():
+    labels = [None, "left"]
+    w = SimpleNamespace(
+        selected_point_index=0,
+        image_paths=["a", "b"],
+        image_labels=labels,
+        _review_status_for_index=lambda i: {},
+        _review_prediction_for_index=lambda i: {"label": "right"},
+    )
+    assert MainWindow._labeling_prediction_for_selected(w) == "right"
+    w.selected_point_index = 1  # already labeled: nothing to approve
+    assert MainWindow._labeling_prediction_for_selected(w) is None
+    w.selected_point_index = 0
+    w._review_prediction_for_index = lambda i: {"label": "unknown"}
+    assert MainWindow._labeling_prediction_for_selected(w) is None
+    w._review_status_for_index = lambda i: {"label": "left", "verified": False}
+    assert MainWindow._labeling_prediction_for_selected(w) == "left"

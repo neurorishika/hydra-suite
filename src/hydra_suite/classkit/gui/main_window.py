@@ -1543,7 +1543,7 @@ class MainWindow(QMainWindow):
         preview_layout.addLayout(preview_review_actions)
 
         self.preview_review_hint = QLabel(
-            "Use Approve / Reject here to expand labels while reviewing model predictions."
+            "Approve / Reject (+ / -) accept or correct the model's prediction, in labeling or review mode."
         )
         self.preview_review_hint.setWordWrap(True)
         self.preview_review_hint.setStyleSheet("color:#9a9a9a; font-size:11px;")
@@ -2604,10 +2604,13 @@ class MainWindow(QMainWindow):
             self._model_class_names
         )
 
-        if hasattr(self, "review_selected_btn"):
-            self.review_selected_btn.setEnabled(selected_can_approve)
-        if hasattr(self, "review_reject_btn"):
-            self.review_reject_btn.setEnabled(selected_can_approve)
+        if self.explorer_mode == "labeling":
+            self._update_labeling_approve_buttons()
+        else:
+            if hasattr(self, "review_selected_btn"):
+                self.review_selected_btn.setEnabled(selected_can_approve)
+            if hasattr(self, "review_reject_btn"):
+                self.review_reject_btn.setEnabled(selected_can_approve)
         if hasattr(self, "review_clear_unverified_btn"):
             self.review_clear_unverified_btn.setEnabled(has_pending)
         if hasattr(self, "review_all_btn"):
@@ -3952,7 +3955,7 @@ class MainWindow(QMainWindow):
             ("Next unlabeled", self.on_next_image),
             ("Undo last label (Ctrl+Z)", self.undo_last_assignment),
         ]
-        if self.explorer_mode == "review":
+        if self.explorer_mode in {"review", "labeling"}:
             for action_name, callback in review_only_actions:
                 self._register_label_shortcut(_key(action_name), callback)
         for action_name, callback in always_actions:
@@ -3989,7 +3992,7 @@ class MainWindow(QMainWindow):
         # so that scheme label shortcuts for the same keys don't cause Qt ambiguity.
         # In labeling mode (and other non-review modes), approve/reject are not
         # registered, so scheme shortcuts have free use of those keys.
-        if self.explorer_mode == "review":
+        if self.explorer_mode in {"review", "labeling"}:
             review_keys = {
                 QKeySequence(active.get(a, defaults.get(a, ""))).toString()
                 for a in ("Approve review label", "Reject review label")
@@ -5799,6 +5802,7 @@ class MainWindow(QMainWindow):
         self._prefetch_upcoming_images(index)
 
         self.last_preview_index = index
+        self._update_labeling_approve_buttons()
         current_label = (
             self.image_labels[index] if index < len(self.image_labels) else None
         )
@@ -11993,8 +11997,66 @@ class MainWindow(QMainWindow):
         )
         return scopes
 
+    def _labeling_prediction_for_selected(self) -> str | None:
+        """Return the label the model proposes for the selected image, if any.
+
+        An unverified machine label already staged on the image wins; otherwise
+        the live model prediction is used, so approve/reject work in labeling
+        mode without first staging predictions through review mode.  Images
+        that already carry a human-verified label have nothing to approve.
+        """
+        index = self.selected_point_index
+        if index is None or not (0 <= index < len(self.image_paths)):
+            return None
+        status = self._review_status_for_index(index)
+        if status.get("label"):
+            if status.get("verified"):
+                return None
+            return str(status["label"]).strip() or None
+        labels = self.image_labels or []
+        if index < len(labels) and labels[index]:
+            return None
+        payload = self._review_prediction_for_index(index)
+        if payload is None:
+            return None
+        label = str(payload.get("label") or "").strip()
+        return label if label and label.lower() != "unknown" else None
+
+    def _approve_prediction_while_labeling(self) -> None:
+        """Accept the proposed label as a human label and advance."""
+        label = self._labeling_prediction_for_selected()
+        if label is None:
+            self.status.showMessage(
+                "No model prediction to approve for this image", 3000
+            )
+            return
+        self.assign_label_to_selected(label)
+
+    def _reject_prediction_while_labeling(self) -> None:
+        """Dismiss the proposed label, ask for the right one and advance."""
+        label = self._labeling_prediction_for_selected()
+        if label is None:
+            self.status.showMessage("No model prediction to reject for this image", 3000)
+            return
+        replacement = self._prompt_review_relabel_choice({"label": label})
+        if replacement is None:
+            return
+        self.assign_label_to_selected(replacement)
+
+    def _update_labeling_approve_buttons(self) -> None:
+        """Enable Approve / Reject when the selected image has a proposal."""
+        if self.explorer_mode != "labeling":
+            return
+        has_proposal = self._labeling_prediction_for_selected() is not None
+        for name in ("review_selected_btn", "review_reject_btn"):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(has_proposal)
+
     def approve_selected_review_label(self) -> None:
         """Mark the currently selected machine label as verified."""
+        if self.explorer_mode == "labeling":
+            self._approve_prediction_while_labeling()
+            return
         if self.explorer_mode != "review":
             return
         if self.selected_point_index is None:
@@ -12055,6 +12117,9 @@ class MainWindow(QMainWindow):
 
     def reject_selected_review_label(self) -> None:
         """Replace the selected machine label with a human-reviewed label."""
+        if self.explorer_mode == "labeling":
+            self._reject_prediction_while_labeling()
+            return
         if self.explorer_mode != "review":
             return
         if self.selected_point_index is None:
