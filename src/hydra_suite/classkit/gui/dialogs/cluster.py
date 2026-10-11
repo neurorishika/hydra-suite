@@ -24,10 +24,6 @@ class ClusterDialog(QDialog):
         self.setMinimumWidth(500)
 
         ann_probe = probe_clustering_backend()
-        ann_ready = (
-            ann_probe.get("hdbscan_available", False)
-            or ann_probe.get("best_ann") != "numpy"
-        )
 
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
@@ -43,12 +39,17 @@ class ClusterDialog(QDialog):
         self.n_clusters_spin.setSuffix(" clusters")
         form.addRow("<b>Number of Clusters:</b>", self.n_clusters_spin)
 
-        self.gpu_combo = QComboBox()
-        self.gpu_combo.addItem("CPU (scikit-learn)", False)
-        if ann_ready:
-            self.gpu_combo.addItem(f"Accelerated ({ann_probe['best_ann']})", True)
-
-        form.addRow("<b>Backend:</b>", self.gpu_combo)
+        self.method_combo = QComboBox()
+        self.method_combo.addItem("K-means (MiniBatch above 5,000 images)", "kmeans")
+        self.method_combo.addItem("MiniBatch K-means (fastest)", "minibatch")
+        if ann_probe.get("hdbscan_available"):
+            self.method_combo.addItem("HDBSCAN (density-based)", "hdbscan")
+        self.method_combo.setToolTip(
+            "K-means is deterministic and recommended. HDBSCAN finds dense "
+            "groups on its own; the cluster count then sets its minimum "
+            "cluster size (images / clusters)."
+        )
+        form.addRow("<b>Method:</b>", self.method_combo)
 
         layout.addLayout(form)
 
@@ -56,7 +57,7 @@ class ClusterDialog(QDialog):
             "<b>Clustering Tips:</b><br>"
             + "\u2022 Use many clusters (100s-1000s) to capture visual modes<br>"
             + "\u2022 Clusters \u2260 classes (fine-grained structure)<br>"
-            + f"\u2022 Current Best Backend: <b>{ann_probe.get('best_ann', 'numpy')}</b>"
+            + f"\u2022 Neighbour search: <b>{ann_probe.get('best_ann', 'numpy')}</b>"
         )
         if ann_probe.get("hdbscan_available"):
             info_text += (
@@ -77,4 +78,6 @@ class ClusterDialog(QDialog):
         layout.addWidget(self.buttons)
 
     def get_settings(self):
-        return self.n_clusters_spin.value(), self.gpu_combo.currentData()
+        """Return ``(n_clusters, method)`` with method one of
+        ``"kmeans"``, ``"minibatch"`` or ``"hdbscan"``."""
+        return self.n_clusters_spin.value(), self.method_combo.currentData()
