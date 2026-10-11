@@ -1188,6 +1188,42 @@ class MainWindow(QMainWindow):
         self.al_balance_check.setStyleSheet("color: #aaaaaa; font-size: 11px;")
         al_balance_row.addWidget(self.al_balance_check)
         al_balance_row.addStretch(1)
+
+        self.al_grid_unknown_check = QCheckBox("incl. unknown")
+        self.al_grid_unknown_check.setToolTip(
+            "Grid Balance also visits combinations that contain 'unknown'."
+        )
+        self.al_grid_unknown_check.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        al_balance_row.addWidget(self.al_grid_unknown_check)
+
+        _cap_lbl = QLabel("Cap:")
+        _cap_lbl.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        al_balance_row.addWidget(_cap_lbl)
+        self.al_grid_cap_spin = QSpinBox()
+        self.al_grid_cap_spin.setRange(0, 100000)
+        self.al_grid_cap_spin.setValue(0)
+        self.al_grid_cap_spin.setSpecialValueText("none")
+        self.al_grid_cap_spin.setFixedWidth(72)
+        self.al_grid_cap_spin.setStyleSheet("background: #252526;")
+        self.al_grid_cap_spin.setToolTip(
+            "Upper bound on how many labels Grid Balance aims for per combination.\n"
+            "By default each combination is filled up to the most common one."
+        )
+        al_balance_row.addWidget(self.al_grid_cap_spin)
+
+        self.al_grid_balance_btn = QPushButton("\u25a6  Grid Balance\u2026")
+        self.al_grid_balance_btn.setStyleSheet(
+            "background: #6f42c1; font-weight: bold; padding: 4px 12px;"
+        )
+        self.al_grid_balance_btn.setToolTip(
+            "CAPTCHA-style balancing: for each under-represented label combination\n"
+            "(rarest first) click every matching image in a grid of likely and\n"
+            "borderline candidates. Clicked images are labeled and replaced;\n"
+            "unclicked images get no label. Runs until each combination reaches\n"
+            "the most common one's count (or the cap)."
+        )
+        self.al_grid_balance_btn.clicked.connect(self._open_grid_balance)
+        al_balance_row.addWidget(self.al_grid_balance_btn)
         al_group_layout.addLayout(al_balance_row)
 
         al_mining_row = QHBoxLayout()
@@ -11448,6 +11484,114 @@ class MainWindow(QMainWindow):
             return None, None
         return marginals, factor_labels
 
+    def _trusted_label_mask(self) -> np.ndarray:
+        """True for labels that are not pending machine review (human ground truth)."""
+        trusted = np.zeros(len(self.image_paths), dtype=bool)
+        for i, label in enumerate(self.image_labels[: len(self.image_paths)]):
+            if label:
+                record = self._image_review_status.get(str(self.image_paths[i]), {})
+                pending_machine = bool(record.get("label")) and not record.get(
+                    "verified"
+                )
+                trusted[i] = not pending_machine
+        return trusted
+
+    def _open_grid_balance(self):
+        """Open the CAPTCHA-style Grid Balance dialog over the current predictions."""
+        if self._model_probs is None:
+            QMessageBox.warning(
+                self,
+                "No Predictions",
+                "Load a trained model first; Grid Balance ranks images by its "
+                "predictions.",
+            )
+            return
+        factor_probs, factor_labels = self._collect_combination_inputs()
+        if factor_probs is None:
+            QMessageBox.warning(
+                self,
+                "Grid Balance",
+                "The model's outputs could not be mapped onto the labeling scheme.",
+            )
+            return
+        if len(self.image_labels) != len(self.image_paths):
+            QMessageBox.warning(
+                self,
+                "Grid Balance",
+                "Labels are out of sync with the image list; reload the project.",
+            )
+            return
+
+        from ..core.al.grid_balance import GridBalanceSession
+        from .dialogs.grid_balance import GridBalanceDialog
+
+        try:
+            session = GridBalanceSession(
+                factor_probs,
+                factor_labels,
+                list(self.image_labels),
+                self._trusted_label_mask(),
+                include_unknown=self.al_grid_unknown_check.isChecked(),
+                target_cap=self.al_grid_cap_spin.value() or None,
+                joint_probs=self._composite_joint_probs(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Grid Balance", str(exc))
+            return
+        if session.finished:
+            QMessageBox.information(
+                self,
+                "Grid Balance",
+                "Every combination already has as many labels as the most common "
+                f"one ({session.target}).",
+            )
+            return
+
+        dialog = GridBalanceDialog(session, self.image_paths, parent=self)
+        dialog.label_applied.connect(self._apply_grid_balance_label)
+        try:
+            dialog.exec()
+        finally:
+            self._flush_pending_label_updates(force=True)
+            self.request_refresh_label_history_strip()
+            self.request_update_explorer_plot()
+            self.request_update_context_panel()
+            n = session.session_labeled()
+            self.status.showMessage(f"Grid Balance: {n} images labeled")
+
+    def _composite_joint_probs(self):
+        """``{composite: (N,)}`` from a flat composite model, else ``None``.
+
+        A flat model already outputs the joint, so Grid Balance ranks with it
+        directly (keeping factor correlations); multi-head models only give
+        marginals and fall back to their product.
+        """
+        if self._model_probs is None or not self._model_class_names:
+            return None
+        try:
+            if len(self._current_prediction_heads()) > 1:
+                return None
+        except Exception:
+            return None
+        probs = np.asarray(self._model_probs)
+        if probs.ndim != 2:
+            return None
+        return {
+            str(name): probs[:, col]
+            for col, name in enumerate(self._model_class_names)
+            if col < probs.shape[1]
+        }
+
+    def _apply_grid_balance_label(self, index: int, label) -> None:
+        """Commit one Grid Balance click (``label``) or its undo (``None``)."""
+        self._set_label_for_index(int(index), label)
+        self._remove_history_for_index(int(index))
+        self.round_labeled_indices = [
+            i for i in self.round_labeled_indices if i != index
+        ]
+        if label:
+            self.label_history.append({"index": int(index), "label": label})
+
     def _collect_error_mining_inputs(self):
         """Head-aware predictions + which labels are trustworthy, for AL error mining.
 
@@ -11461,19 +11605,13 @@ class MainWindow(QMainWindow):
         n = len(self.image_paths)
         predicted: list[str | None] = [None] * n
         confidence = np.zeros(n, dtype=np.float64)
-        trusted = np.zeros(n, dtype=bool)
         for i in range(n):
             summary = self._prediction_summary_for_index(i, top_k=1)
             if summary is not None:
                 predicted[i] = str(summary.get("predicted_label") or "") or None
                 raw = summary.get("confidence")
                 confidence[i] = float(raw) if raw is not None else 0.0
-            if self.image_labels[i]:
-                record = self._image_review_status.get(str(self.image_paths[i]), {})
-                pending_machine = bool(record.get("label")) and not record.get(
-                    "verified"
-                )
-                trusted[i] = not pending_machine
+        trusted = self._trusted_label_mask()
         return predicted, confidence, trusted
 
     def _on_al_batch_success(self, result):

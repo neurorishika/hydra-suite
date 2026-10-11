@@ -18,6 +18,7 @@ Loader = Callable[[str], Optional[QImage]]
 
 class _Signals(QObject):
     loaded = Signal(str, object)  # path, QImage
+    failed = Signal(str)  # path that could not be read
     done = Signal(str)  # path (loaded or failed)
 
 
@@ -35,6 +36,8 @@ class _LoadTask(QRunnable):
         try:
             if image is not None and not image.isNull():
                 self._signals.loaded.emit(self._path, image)
+            else:
+                self._signals.failed.emit(self._path)
         except RuntimeError:  # receiver destroyed during shutdown
             return
         try:
@@ -47,6 +50,7 @@ class ImagePrefetcher(QObject):
     """Load images on a small thread pool and report them on the UI thread."""
 
     image_ready = Signal(str, object)  # path, QImage
+    image_failed = Signal(str)  # path
 
     def __init__(self, parent: Optional[QObject] = None, threads: int = 4) -> None:
         super().__init__(parent)
@@ -55,6 +59,7 @@ class ImagePrefetcher(QObject):
         self._pending: Set[str] = set()
         self._signals = _Signals(self)
         self._signals.loaded.connect(self.image_ready)
+        self._signals.failed.connect(self.image_failed)
         self._signals.done.connect(self._pending.discard)
 
     def request(
