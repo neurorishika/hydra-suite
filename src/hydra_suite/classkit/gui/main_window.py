@@ -738,6 +738,15 @@ class MainWindow(QMainWindow):
             return None
         return destination_dir
 
+    def _connect_labeling_options(self) -> None:
+        """Wire the labeling-options column (built in panels/labeling_options)."""
+        self.btn_sample_next.clicked.connect(self.on_sample_next_triggered)
+        self.al_build_btn.clicked.connect(self._build_al_batch)
+        self.al_grid_balance_btn.clicked.connect(self._open_grid_balance)
+        self.candidate_table.itemDoubleClicked.connect(self._prepared_candidate_goto)
+        self.btn_start_labeling.clicked.connect(self._start_prepared_labeling_batch)
+        self.btn_clear_candidates.clicked.connect(self.on_clear_candidates_triggered)
+
     def setup_central_widget(self):
         """Setup main UI layout for UMAP exploration and fast labeling."""
         self.splitter = QSplitter(Qt.Horizontal)
@@ -1072,325 +1081,31 @@ class MainWindow(QMainWindow):
         top_controls_row.addWidget(self.btn_pca_model)
 
         explorer_layout.addLayout(top_controls_row)
-        explorer_layout.addWidget(self.explorer, 1)
-
-        # Labeling controls
-        self.labeling_options_group = QGroupBox("Labeling Options")
-        # Visibility is controlled by the wrapping scroll area below.
-        labeling_options_layout = QVBoxLayout(self.labeling_options_group)
-        labeling_options_layout.setContentsMargins(10, 10, 10, 10)
-        labeling_options_layout.setSpacing(8)
-
-        self.labeling_options_hint = QLabel(
-            "Build a random or active-learning candidate set, review it, then start labeling."
+        # Plot | labeling-options column (labeling mode only).  The column
+        # sits beside the plot so landscape screens keep the plot tall.
+        from .panels.labeling_options import (
+            WIDGET_NAMES,
+            LabelingOptionsPanel,
+            PlacementController,
         )
-        self.labeling_options_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        labeling_options_layout.addWidget(self.labeling_options_hint)
 
-        labeling_mode_row = QHBoxLayout()
-        labeling_mode_row.setSpacing(12)
+        self.labeling_panel = LabelingOptionsPanel()
+        for name in WIDGET_NAMES:
+            setattr(self, name, getattr(self.labeling_panel, name))
+        self.labeling_panel.setVisible(False)
+        self._connect_labeling_options()
 
-        self.random_group = QGroupBox("Random Labeling")
-        random_group_layout = QVBoxLayout(self.random_group)
-        random_group_layout.setContentsMargins(10, 10, 10, 10)
-        random_group_layout.setSpacing(8)
-
-        random_hint = QLabel(
-            "Sample a lightweight batch from each cluster before starting labeling."
+        self.explorer_split = QSplitter(Qt.Horizontal)
+        self.explorer_split.setChildrenCollapsible(False)
+        self.explorer_split.addWidget(self.explorer)
+        self.explorer_split.addWidget(self.labeling_panel)
+        self.explorer_split.setStretchFactor(0, 1)
+        self.explorer_split.setStretchFactor(1, 0)
+        self.explorer_split.setSizes([1000, LabelingOptionsPanel.DEFAULT_WIDTH])
+        explorer_layout.addWidget(self.explorer_split, 1)
+        self._labeling_placement = PlacementController(
+            self.explorer_split, self.labeling_panel
         )
-        random_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        random_group_layout.addWidget(random_hint)
-
-        self.label_controls_row = QHBoxLayout()
-        self.label_controls_row.setSpacing(12)
-        self.label_controls_row.addWidget(QLabel("<b>Set:</b>"))
-        self.sample_spin = QSpinBox()
-        self.sample_spin.setRange(1, 100)
-        self.sample_spin.setValue(6)
-        self.sample_spin.setToolTip("Unlabeled images to sample from each cluster")
-        self.label_controls_row.addWidget(self.sample_spin)
-
-        self.btn_sample_next = QPushButton("Sample Next")
-        self.btn_sample_next.setStyleSheet(
-            "background: #0e639c; font-weight: bold; padding: 6px 12px;"
-        )
-        self.btn_sample_next.clicked.connect(self.on_sample_next_triggered)
-        self.label_controls_row.addWidget(self.btn_sample_next)
-
-        self.label_controls_row.addStretch(1)
-        random_group_layout.addLayout(self.label_controls_row)
-        labeling_mode_row.addWidget(self.random_group, 1)
-
-        # ── Inline Active Learning panel ────────────────────────────────
-
-        self.al_group = QGroupBox("Active Learning")
-        self.al_group.setStyleSheet("""
-            QGroupBox { color: #777; border: 1px solid #3e3e42; border-radius: 4px;
-                        margin-top: 8px; font-size: 11px; padding-top: 2px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
-        """)
-        al_group_layout = QVBoxLayout(self.al_group)
-        al_group_layout.setContentsMargins(10, 10, 10, 10)
-        al_group_layout.setSpacing(8)
-
-        self.al_hint_label = QLabel(
-            "Use model predictions to build a higher-value labeling batch."
-        )
-        self.al_hint_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        al_group_layout.addWidget(self.al_hint_label)
-
-        self.al_disabled_label = QLabel(
-            "Load a trained model to enable active-learning batch building."
-        )
-        self.al_disabled_label.setStyleSheet("color: #888; font-size: 11px;")
-        self.al_disabled_label.hide()
-        al_group_layout.addWidget(self.al_disabled_label)
-
-        al_ctrl_row = QHBoxLayout()
-        al_ctrl_row.setSpacing(8)
-
-        self.al_status_label = QLabel(
-            "Model: none  |  Labeled: 0 / 0  |  Predictions: none"
-        )
-        self.al_status_label.setStyleSheet("color: #777; font-size: 11px;")
-        al_ctrl_row.addWidget(self.al_status_label, 1)
-
-        al_ctrl_row.addWidget(QLabel("<b>Batch:</b>"))
-        self.al_batch_spin = QSpinBox()
-        self.al_batch_spin.setRange(5, 500)
-        self.al_batch_spin.setValue(50)
-        self.al_batch_spin.setFixedWidth(68)
-        self.al_batch_spin.setStyleSheet("background: #252526;")
-        al_ctrl_row.addWidget(self.al_batch_spin)
-
-        self.al_build_btn = QPushButton("⚙  Build Batch")
-        self.al_build_btn.setStyleSheet(
-            "background: #0e639c; font-weight: bold; padding: 4px 12px;"
-        )
-        self.al_build_btn.setToolTip(
-            "Select the highest-value unlabeled images for labeling —\n"
-            "25% uncertain · 20% diverse · 20% similar to model errors · "
-            "15% rare/missing combinations · 10% rare clusters · "
-            "5% representative (or balance) · 5% audit\n"
-            "(the error, combination and rare-cluster shares are set below)"
-        )
-        self.al_build_btn.clicked.connect(self._build_al_batch)
-        al_ctrl_row.addWidget(self.al_build_btn)
-
-        self.al_candidates_badge = QLabel("")
-        self.al_candidates_badge.setStyleSheet(
-            "color: #ccc; font-size: 11px; font-weight: bold;"
-        )
-        al_ctrl_row.addWidget(self.al_candidates_badge)
-
-        al_group_layout.addLayout(al_ctrl_row)
-
-        al_balance_row = QHBoxLayout()
-        al_balance_row.setSpacing(6)
-        self.al_balance_check = QCheckBox("Balance labels")
-        self.al_balance_check.setToolTip(
-            "When enabled, the 15% representative slot prioritises unlabeled samples\n"
-            "predicted to belong to underrepresented label classes,\n"
-            "steering the labeled set toward a more uniform distribution."
-        )
-        self.al_balance_check.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        al_balance_row.addWidget(self.al_balance_check)
-        al_balance_row.addStretch(1)
-
-        self.al_grid_unknown_check = QCheckBox("incl. unknown")
-        self.al_grid_unknown_check.setToolTip(
-            "Grid Balance also visits combinations that contain 'unknown'."
-        )
-        self.al_grid_unknown_check.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        al_balance_row.addWidget(self.al_grid_unknown_check)
-
-        _cap_lbl = QLabel("Cap:")
-        _cap_lbl.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        al_balance_row.addWidget(_cap_lbl)
-        self.al_grid_cap_spin = QSpinBox()
-        self.al_grid_cap_spin.setRange(0, 100000)
-        self.al_grid_cap_spin.setValue(0)
-        self.al_grid_cap_spin.setSpecialValueText("none")
-        self.al_grid_cap_spin.setFixedWidth(72)
-        self.al_grid_cap_spin.setStyleSheet("background: #252526;")
-        self.al_grid_cap_spin.setToolTip(
-            "Upper bound on how many labels Grid Balance aims for per combination.\n"
-            "By default each combination is filled up to the most common one."
-        )
-        al_balance_row.addWidget(self.al_grid_cap_spin)
-
-        self.al_grid_balance_btn = QPushButton("\u25a6  Grid Balance\u2026")
-        self.al_grid_balance_btn.setStyleSheet(
-            "background: #6f42c1; font-weight: bold; padding: 4px 12px;"
-        )
-        self.al_grid_balance_btn.setToolTip(
-            "CAPTCHA-style balancing: for each under-represented label combination\n"
-            "(rarest first) click every matching image in a grid of likely and\n"
-            "borderline candidates. Clicked images are labeled and replaced;\n"
-            "unclicked images get no label. Runs until each combination reaches\n"
-            "the most common one's count (or the cap)."
-        )
-        self.al_grid_balance_btn.clicked.connect(self._open_grid_balance)
-        al_balance_row.addWidget(self.al_grid_balance_btn)
-        al_group_layout.addLayout(al_balance_row)
-
-        al_mining_row = QHBoxLayout()
-        al_mining_row.setSpacing(6)
-        _mining_label_style = "color: #aaaaaa; font-size: 11px;"
-
-        def _mining_spin(maximum, value, suffix, tip):
-            spin = QSpinBox()
-            spin.setRange(0, maximum)
-            spin.setValue(value)
-            spin.setSuffix(suffix)
-            spin.setFixedWidth(64)
-            spin.setStyleSheet("background: #252526;")
-            spin.setToolTip(tip)
-            return spin
-
-        _err_lbl = QLabel("Errors:")
-        _err_lbl.setStyleSheet(_mining_label_style)
-        al_mining_row.addWidget(_err_lbl)
-        self.al_error_spin = _mining_spin(
-            60,
-            20,
-            "%",
-            "Share of the batch taken from unlabeled images most similar to images\n"
-            "the model currently gets WRONG (human-verified label != prediction),\n"
-            "taken round-robin over the errors, most confidently wrong first.\n"
-            "Needs verified labels the model has been run on; otherwise this\n"
-            "share goes to uncertainty. 0 = off.",
-        )
-        al_mining_row.addWidget(self.al_error_spin)
-
-        _combo_lbl = QLabel("Combos:")
-        _combo_lbl.setStyleSheet(_mining_label_style)
-        al_mining_row.addWidget(_combo_lbl)
-        self.al_combo_spin = _mining_spin(
-            50,
-            15,
-            "%",
-            "Share of the batch aimed at factor COMBINATIONS that are rare or\n"
-            "missing in the labeled set (e.g. blue_pink with 0 labels). Works on\n"
-            "per-factor predictions, so it can find combinations the model has\n"
-            "never output. Picks spread over the under-represented combinations.\n"
-            "Needs a trained model. 0 = off.",
-        )
-        al_mining_row.addWidget(self.al_combo_spin)
-
-        _rare_lbl = QLabel("Rare clusters:")
-        _rare_lbl.setStyleSheet(_mining_label_style)
-        al_mining_row.addWidget(_rare_lbl)
-        self.al_rare_spin = _mining_spin(
-            50,
-            10,
-            "%",
-            "Share of the batch sampled with a bias toward SMALL clusters (and\n"
-            "clusters with little labeled coverage), so under-represented groups\n"
-            "are not starved by large ones. Needs clusters. 0 = off.",
-        )
-        al_mining_row.addWidget(self.al_rare_spin)
-
-        _alpha_lbl = QLabel("Rarity:")
-        _alpha_lbl.setStyleSheet(_mining_label_style)
-        al_mining_row.addWidget(_alpha_lbl)
-        self.al_rare_alpha_spin = _mining_spin(
-            100,
-            75,
-            "%",
-            "How strongly small clusters are favoured.\n"
-            "0% = proportional to cluster size (no bias),\n"
-            "100% = every cluster gets the same expected share.",
-        )
-        al_mining_row.addWidget(self.al_rare_alpha_spin)
-        al_mining_row.addStretch(1)
-        al_group_layout.addLayout(al_mining_row)
-
-        labeling_mode_row.addWidget(self.al_group, 1)
-        labeling_options_layout.addLayout(labeling_mode_row)
-
-        self.prepared_candidates_group = QGroupBox("Prepared Candidate Set")
-        prepared_layout = QVBoxLayout(self.prepared_candidates_group)
-        prepared_layout.setContentsMargins(10, 10, 10, 10)
-        prepared_layout.setSpacing(8)
-
-        self.prepared_candidates_summary = QLabel(
-            "No candidate set prepared yet. Build one from Random Labeling or Active Learning."
-        )
-        self.prepared_candidates_summary.setStyleSheet(
-            "color: #aaaaaa; font-size: 11px;"
-        )
-        prepared_layout.addWidget(self.prepared_candidates_summary)
-
-        self.candidate_table = QTableWidget(0, 4)
-        self.candidate_table.setHorizontalHeaderLabels(
-            ["Source", "Index", "File", "Details"]
-        )
-        self.candidate_table.verticalHeader().setVisible(False)
-        self.candidate_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.candidate_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.candidate_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.candidate_table.setAlternatingRowColors(True)
-        self.candidate_table.setShowGrid(False)
-        self.candidate_table.setMinimumHeight(140)
-        self.candidate_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeToContents
-        )
-        self.candidate_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeToContents
-        )
-        self.candidate_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.Stretch
-        )
-        self.candidate_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.Stretch
-        )
-        self.candidate_table.setStyleSheet(
-            "QTableWidget { background:#1a1a1a; color:#d0d0d0; font-size:11px; }"
-        )
-        self.candidate_table.itemDoubleClicked.connect(self._prepared_candidate_goto)
-        self.candidate_table.hide()
-        prepared_layout.addWidget(self.candidate_table)
-
-        prepared_actions = QHBoxLayout()
-        prepared_actions.setSpacing(12)
-
-        self.btn_start_labeling = QPushButton("▶  Start Labeling")
-        self.btn_start_labeling.setStyleSheet(
-            "background: #28a745; color: white; font-weight: bold; padding: 6px 12px;"
-        )
-        self.btn_start_labeling.setEnabled(False)
-        self.btn_start_labeling.clicked.connect(self._start_prepared_labeling_batch)
-        prepared_actions.addWidget(self.btn_start_labeling)
-
-        self.btn_clear_candidates = QPushButton("Clear Candidates")
-        self.btn_clear_candidates.setStyleSheet(
-            "background: #3e3e42; padding: 6px 12px;"
-        )
-        self.btn_clear_candidates.clicked.connect(self.on_clear_candidates_triggered)
-        prepared_actions.addWidget(self.btn_clear_candidates)
-        prepared_actions.addStretch(1)
-        prepared_layout.addLayout(prepared_actions)
-
-        labeling_options_layout.addWidget(self.prepared_candidates_group)
-
-        # Wrap the labeling-options group in a scroll area so its content does
-        # not push the explorer page's minimum size beyond the available
-        # screen when entering labeling mode.
-        self.labeling_options_scroll = QScrollArea()
-        self.labeling_options_scroll.setWidgetResizable(True)
-        self.labeling_options_scroll.setFrameShape(QFrame.NoFrame)
-        self.labeling_options_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.labeling_options_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.labeling_options_scroll.setWidget(self.labeling_options_group)
-        self.labeling_options_scroll.setVisible(False)
-        self.labeling_options_scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Maximum,
-        )
-        self.labeling_options_scroll.setMaximumHeight(320)
-        explorer_layout.addWidget(self.labeling_options_scroll)
-        # ──────────────────────────────────────────────────────────────────
 
         self.history_title = QLabel("<b>Recent Labels (click to undo + relabel)</b>")
         self.history_title.setVisible(False)
@@ -5409,10 +5124,8 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.setEnabled(labels_enabled)
 
-        if hasattr(self, "labeling_options_scroll"):
-            self.labeling_options_scroll.setVisible(labels_enabled)
-        elif hasattr(self, "labeling_options_group"):
-            self.labeling_options_group.setVisible(labels_enabled)
+        if hasattr(self, "labeling_panel"):
+            self.labeling_panel.setVisible(labels_enabled)
 
         if hasattr(self, "al_group"):
             self.al_group.setVisible(labels_enabled)
@@ -11904,6 +11617,7 @@ class MainWindow(QMainWindow):
             self.candidate_table.setItem(row, 3, QTableWidgetItem(detail))
 
         self.candidate_table.setVisible(bool(indices))
+        self.prepared_candidates_group.setVisible(bool(indices))
         self.btn_start_labeling.setEnabled(
             bool(indices) and source in {"random", "active"}
         )

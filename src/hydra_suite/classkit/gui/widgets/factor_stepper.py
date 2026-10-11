@@ -64,13 +64,21 @@ class StepperState:
         return len(self._scheme.factors)
 
 
+STEPPER_COLUMNS = 3  # value buttons per row
+
 # ---------------------------------------------------------------------------
 # Qt widget — built lazily to avoid hard Qt import at module level
 # ---------------------------------------------------------------------------
 
 
 def _qt_stepper_build_ui(self):  # pragma: no cover
-    from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+    from PySide6.QtWidgets import (
+        QGridLayout,
+        QHBoxLayout,
+        QLabel,
+        QPushButton,
+        QVBoxLayout,
+    )
 
     self._outer = QVBoxLayout(self)
     self._outer.setContentsMargins(0, 0, 0, 0)
@@ -80,7 +88,10 @@ def _qt_stepper_build_ui(self):  # pragma: no cover
     self._header.setStyleSheet("color: #cccccc; font-weight: bold;")
     self._outer.addWidget(self._header)
 
-    self._btn_row = QHBoxLayout()
+    # Value buttons wrap onto rows so long factors never widen the side panel.
+    self._btn_row = QGridLayout()
+    self._btn_row.setHorizontalSpacing(6)
+    self._btn_row.setVerticalSpacing(6)
     self._outer.addLayout(self._btn_row)
 
     nav_row = QHBoxLayout()
@@ -125,17 +136,25 @@ def _qt_stepper_refresh(self):  # pragma: no cover
         f"Factor {idx + 1} of {self._state.total_factors}: <b>{factor.name}</b>"
     )
 
+    from PySide6.QtWidgets import QSizePolicy
+
+    shown = 0
     for i, label in enumerate(factor.labels):
         if str(label).strip() == "unknown":
             continue
         btn = QPushButton(label.capitalize())
+        btn.setToolTip(str(label))
+        # Shrinkable: long names elide instead of widening the panel.
+        btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        btn.setMinimumWidth(40)
         btn.setStyleSheet(
             "QPushButton { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555; "
             "border-radius: 4px; padding: 6px 12px; } "
             "QPushButton:hover { background: #007acc; }"
         )
         btn.clicked.connect(lambda checked, lbl=label: self._on_pick(lbl))
-        self._btn_row.addWidget(btn)
+        self._btn_row.addWidget(btn, shown // STEPPER_COLUMNS, shown % STEPPER_COLUMNS)
+        shown += 1
         self._buttons.append(btn)
 
         key = factor.shortcut_keys[i] if i < len(factor.shortcut_keys) else None
