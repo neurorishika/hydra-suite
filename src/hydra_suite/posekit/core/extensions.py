@@ -1439,6 +1439,19 @@ class EmbeddingWorker(QObject):
         """Signal the worker loop to stop at the next safe checkpoint."""
         self._cancel = True
 
+    def _assemble(self, cache, unreadable: set) -> Optional[np.ndarray]:
+        """One row per image; unreadable images get a zero row."""
+        good = [p for i, p in enumerate(self.image_paths) if i not in unreadable]
+        rows = cache.get_embeddings(good) if good else None
+        if rows is None:
+            if good:
+                return None
+            return np.zeros((len(self.image_paths), 0), dtype=np.float32)
+        out = np.zeros((len(self.image_paths), rows.shape[1]), dtype=np.float32)
+        good_idx = [i for i in range(len(self.image_paths)) if i not in unreadable]
+        out[good_idx] = rows
+        return out
+
     @Slot()
     def run(self) -> None:
         """Compute/load embeddings and emit final embedding matrix for eligible frames."""
@@ -1485,50 +1498,70 @@ class EmbeddingWorker(QObject):
             data_config = resolve_data_config({}, model=model)
             transform = create_transform(**data_config)
 
-            # embed missing
-            feats = []
+            # embed missing.  Unreadable images are skipped (and reported),
+            # not fatal: one bad file must not make the whole set unusable.
+            # Finished batches are flushed to the cache as we go, so a cancel
+            # or a crash keeps the work done so far.
+            pending_paths: List[Path] = []
+            pending_feats: List[np.ndarray] = []
+            unreadable: List[int] = []
             total = len(needs_compute)
             done = 0
 
-            for start in range(0, total, self.batch_size):
+            def flush() -> None:
+                if pending_feats:
+                    cache.update_embeddings(
+                        list(pending_paths), np.vstack(pending_feats).astype(np.float32)
+                    )
+                    pending_paths.clear()
+                    pending_feats.clear()
+
+            for n_batch, start in enumerate(range(0, total, self.batch_size)):
                 if self._cancel:
+                    flush()
                     self.failed.emit("Canceled.")
                     return
 
                 batch_idx = needs_compute[start : start + self.batch_size]
                 imgs = []
+                ok_idx = []
                 for i in batch_idx:
-                    img = _read_image_pil(self.image_paths[i])
-                    img = _maybe_downscale_pil(img, self.max_side)
-                    if self.use_enhance:
-                        img = _enhance_pil_for_pose(img)
-                    imgs.append(transform(img))
+                    try:
+                        img = _read_image_pil(self.image_paths[i])
+                        img = _maybe_downscale_pil(img, self.max_side)
+                        if self.use_enhance:
+                            img = _enhance_pil_for_pose(img)
+                        imgs.append(transform(img))
+                        ok_idx.append(i)
+                    except Exception as exc:  # unreadable / deleted / corrupt
+                        logger.warning(
+                            "Smart Select: skipping %s (%s)", self.image_paths[i], exc
+                        )
+                        unreadable.append(i)
 
-                batch = torch.stack(imgs).to(device)
-
-                with torch.no_grad():
-                    out = model(batch)
-                    out = out.detach().float().cpu().numpy()
-
-                # L2 normalize
-                out = out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-8)
-                feats.append(out)
+                if imgs:
+                    batch = torch.stack(imgs).to(device)
+                    with torch.no_grad():
+                        out = model(batch)
+                        out = out.detach().float().cpu().numpy()
+                    # L2 normalize
+                    out = out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-8)
+                    pending_paths.extend(self.image_paths[i] for i in ok_idx)
+                    pending_feats.append(out)
 
                 done += len(batch_idx)
                 self.progress.emit(done, total)
                 self.status.emit(f"Embedding {done}/{total}")
+                if (n_batch + 1) % 20 == 0:
+                    flush()
+            flush()
 
-            if feats:
-                new_emb = np.vstack(feats).astype(np.float32)
-                cache.update_embeddings(
-                    [self.image_paths[i] for i in needs_compute], new_emb
-                )
-
-            emb_all = cache.get_embeddings(self.image_paths)
+            emb_all = self._assemble(cache, set(unreadable))
             if emb_all is None:
                 self.failed.emit("Failed to load embeddings from cache.")
                 return
             cache.set_metadata(meta)
+            meta = dict(meta, unreadable=sorted(unreadable))
             self.finished.emit(emb_all, self.eligible_indices, meta)
 
         except Exception as e:

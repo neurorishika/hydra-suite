@@ -63,28 +63,16 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog
 
 from ...core.extensions import EmbeddingWorker
 from ..workers import SmartSelectWorker
-from .utils import _load_dialog_settings, _save_dialog_settings, get_available_devices
+from .utils import (
+    _load_dialog_settings,
+    _save_dialog_settings,
+    get_available_devices,
+    keep_thread_until_finished,
+)
 
 logger = logging.getLogger("pose_label.dialogs.smart_select")
 
 REASON_EXPLORER = "explorer"
-
-# Threads still running when their dialog closed: kept referenced (and
-# unparented) until they finish, so Qt never destroys a running thread.
-_ORPHANED_THREADS: List[QThread] = []
-
-
-def _orphan_until_finished(thread: QThread) -> None:
-    if thread is None or thread.isFinished():
-        return
-    thread.setParent(None)
-    _ORPHANED_THREADS.append(thread)
-
-    def _release() -> None:
-        if thread in _ORPHANED_THREADS:
-            _ORPHANED_THREADS.remove(thread)
-
-    thread.finished.connect(_release)
 
 
 _REASON_TEXT = dict(REASON_LABELS, **{REASON_EXPLORER: "Picked in Explorer"})
@@ -223,6 +211,8 @@ class SmartSelectDialog(QDialog):
         self._sel_worker: Optional[SmartSelectWorker] = None
         self._busy = False
         self._cancel_requested = False
+        self._closed = False
+        self._unreadable: set = set()
         self._last_labeled = np.zeros(len(self.image_paths), dtype=bool)
         self._last_candidates = np.zeros(len(self.image_paths), dtype=bool)
 
@@ -659,6 +649,9 @@ class SmartSelectDialog(QDialog):
 
     def done(self, result: int) -> None:  # accept, reject and Esc all land here
         """Stop background work and remember the settings, however it closes."""
+        # Signals already queued by a worker are still delivered after its
+        # connections are dropped; every handler checks this first.
+        self._closed = True
         self._stop_workers()
         try:
             self._save_settings()
@@ -746,14 +739,24 @@ class SmartSelectDialog(QDialog):
         self.progress.setFormat(f"Embedding %v / {max(1, total)}")
 
     def _end_emb_thread(self) -> None:
-        if self._emb_thread is not None:
-            self._emb_thread.quit()
-            self._emb_thread.wait(3000)
+        thread = self._emb_thread
+        if thread is not None:
+            thread.quit()
+            if thread.wait(3000):
+                thread.deleteLater()
+            else:
+                keep_thread_until_finished(thread, self._emb_worker)
         self._emb_thread = None
         self._emb_worker = None
 
     def _is_current(self, worker) -> bool:
-        """Signals from a worker this dialog has since replaced are ignored."""
+        """Only the live worker's signals count, and none once the dialog closed.
+
+        A queued signal delivered after its connection was dropped arrives
+        with ``sender()`` None; that is only trusted while the dialog is open.
+        """
+        if self._closed:
+            return False
         sender = self.sender()
         return sender is None or sender is worker
 
@@ -770,7 +773,7 @@ class SmartSelectDialog(QDialog):
         self.lbl_status.setText("Embedding failed.")
         QMessageBox.critical(self, "Embedding failed", msg)
 
-    def _on_emb_finished(self, emb_all, _eligible, _meta) -> None:
+    def _on_emb_finished(self, emb_all, _eligible, meta) -> None:
         if not self._is_current(self._emb_worker):
             return
         self._end_emb_thread()
@@ -784,6 +787,7 @@ class SmartSelectDialog(QDialog):
             return
         self._emb_all = emb_all
         self._emb_key = self._emb_key_pending
+        self._unreadable = set(int(i) for i in (meta or {}).get("unreadable", []))
         self.progress.setFormat("%p%")
         if self._cancel_requested:
             # Canceled after the last check inside the worker: keep the
@@ -817,6 +821,8 @@ class SmartSelectDialog(QDialog):
         labeled = np.array([bool(self.is_labeled_fn(p)) for p in self.image_paths])
         cand = np.zeros(n, dtype=bool)
         cand[self._eligible_indices] = True
+        if self._unreadable:  # no embedding: never pick them
+            cand[sorted(self._unreadable)] = False
         self._last_labeled = labeled
         self._last_candidates = cand
         preds = self.prediction_source.predictions if self.prediction_source else None
@@ -896,7 +902,10 @@ class SmartSelectDialog(QDialog):
         self.lbl_status.setText("Canceled.")
 
     def _on_selection_ready(self, outcome: SmartSelectOutcome) -> None:
-        if not self._is_current(self._sel_worker) or self._cancel_requested:
+        if not self._is_current(self._sel_worker):
+            return
+        if self._cancel_requested:  # canceled after the worker's last check
+            self.lbl_status.setText("Canceled.")
             return
         self._outcome = outcome
         self.batch_units = list(outcome.result.indices)
@@ -921,6 +930,8 @@ class SmartSelectDialog(QDialog):
             )
         if info.get("suppressed"):
             parts.append(f"{int(info['suppressed']):,} near-duplicates skipped")
+        if self._unreadable:
+            parts.append(f"{len(self._unreadable):,} unreadable images skipped")
         self.lbl_status.setText("Done — " + "; ".join(parts) + ".")
 
     def _cancel(self) -> None:
@@ -952,9 +963,7 @@ class SmartSelectDialog(QDialog):
             # then ends.  Keep both alive until it has.
             thread.quit()
             if not thread.wait(200):
-                thread.finished.connect(worker.deleteLater)
-                thread._smart_select_worker = worker  # keep the QObject alive
-                _orphan_until_finished(thread)
+                keep_thread_until_finished(thread, worker, cancel=worker.cancel)
             self._emb_thread = None
             self._emb_worker = None
         if self._sel_worker is not None:
@@ -971,7 +980,7 @@ class SmartSelectDialog(QDialog):
                 except (RuntimeError, TypeError):
                     pass
             if not worker.wait(200):
-                _orphan_until_finished(worker)
+                keep_thread_until_finished(worker, cancel=worker.cancel)
             self._sel_worker = None
 
     # ── table ─────────────────────────────────────────────────────────────
@@ -1110,9 +1119,15 @@ class SmartSelectDialog(QDialog):
             accept_text="Use Selection as Batch",
             parent=self,
         )
-        if dialog.exec() != QDialog.Accepted:
+        try:
+            accepted = dialog.exec() == QDialog.Accepted
+            chosen = list(dict.fromkeys(int(i) for i in dialog.selected_indices))
+        finally:
+            # Each Explorer holds a full scatter scene; don't keep it around.
+            if hasattr(dialog, "deleteLater"):
+                dialog.deleteLater()
+        if not accepted:
             return
-        chosen = list(dict.fromkeys(int(i) for i in dialog.selected_indices))
         chosen_set = set(chosen)
         kept = [u for u in self.batch_units if u in chosen_set]
         new = [u for u in chosen if u not in set(kept)]

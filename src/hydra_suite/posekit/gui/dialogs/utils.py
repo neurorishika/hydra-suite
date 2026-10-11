@@ -12,11 +12,61 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import yaml
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.hidden_files import is_hidden_file
+
+# Background threads that outlived their dialog ------------------------------
+#
+# A dialog closed mid-job hands its still-running QThreads here: they are
+# unparented (so the dialog's teardown can't destroy a running thread) and kept
+# referenced until they finish.  On application quit they are canceled and
+# waited for, because Qt aborts the process if a running QThread is destroyed.
+
+_LIVE_THREADS: list = []
+_QUIT_HOOKED = False
+
+
+def keep_thread_until_finished(thread, *refs, cancel=None) -> None:
+    """Keep ``thread`` (and ``refs``, e.g. its worker) alive until it finishes."""
+    if thread is None or thread.isFinished():
+        return
+    thread.setParent(None)
+    entry = (thread, refs, cancel)
+    _LIVE_THREADS.append(entry)
+
+    def _release() -> None:
+        if entry in _LIVE_THREADS:
+            _LIVE_THREADS.remove(entry)
+
+    thread.finished.connect(_release)
+    _hook_quit()
+
+
+def _hook_quit() -> None:
+    global _QUIT_HOOKED
+    app = QCoreApplication.instance()
+    if app is None or _QUIT_HOOKED:
+        return
+    app.aboutToQuit.connect(drain_live_threads)
+    _QUIT_HOOKED = True
+
+
+def drain_live_threads() -> None:
+    """Cancel and wait for every thread a closed dialog left running."""
+    entries = list(_LIVE_THREADS)
+    for thread, _refs, cancel in entries:
+        if cancel is not None:
+            try:
+                cancel()
+            except Exception:  # best effort; we wait below regardless
+                pass
+        thread.quit()
+    for thread, _refs, _cancel in entries:
+        thread.wait()
+    _LIVE_THREADS.clear()
 
 
 # Settings helpers

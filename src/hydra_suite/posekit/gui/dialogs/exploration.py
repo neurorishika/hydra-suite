@@ -30,21 +30,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .utils import keep_thread_until_finished
+
 logger = logging.getLogger("pose_label.dialogs.exploration")
-
-# UMAP runs still fitting when their explorer closed (thread, worker).
-_RUNNING_UMAP: list = []
-
-
-def _keep_until_finished(thread, worker) -> None:
-    entry = (thread, worker)
-    _RUNNING_UMAP.append(entry)
-
-    def _release() -> None:
-        if entry in _RUNNING_UMAP:
-            _RUNNING_UMAP.remove(entry)
-
-    thread.finished.connect(_release)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -267,6 +255,7 @@ class EmbeddingExplorerDialog(QDialog):
         self._umap_thread = None
         self._umap_worker = None
         self._stale_umap: list = []
+        self._closed = False
         self._pending_preview_idx: Optional[int] = None
 
         self._init_ui()
@@ -395,7 +384,14 @@ class EmbeddingExplorerDialog(QDialog):
     # ── UMAP ─────────────────────────────────────────────────────────────────
 
     def _compute_umap(self):
-        if self.embeddings is None:
+        if self.embeddings is None or self._closed:
+            return
+        if self._stale_umap:
+            # A canceled fit is still running (UMAP can't be interrupted):
+            # don't stack another one on top of it.
+            self.umap_status.setText(
+                "Waiting for the canceled UMAP run to finish before starting again."
+            )
             return
         self.btn_compute_umap.setEnabled(False)
         self.btn_cancel_umap.setEnabled(True)
@@ -417,28 +413,52 @@ class EmbeddingExplorerDialog(QDialog):
         self._umap_thread.start()
 
     def _cancel_umap(self):
-        if self._umap_worker:
+        worker, thread = self._umap_worker, self._umap_thread
+        if worker is not None:
             # UMAP can't be interrupted mid-fit; the worker drops its result
             # and the thread ends when the fit returns.
-            self._umap_worker.cancel()
-            self._umap_worker.finished.disconnect()
-            self._umap_worker.failed.disconnect()
-        if self._umap_thread:
-            self._umap_thread.quit()
-            # Keep the canceled run referenced until its fit returns.
-            self._stale_umap.append((self._umap_thread, self._umap_worker))
+            worker.cancel()
+            for sig in (worker.finished, worker.failed, worker.progress):
+                try:
+                    sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+        if thread is not None:
+            thread.quit()
+            if not thread.isFinished():
+                entry = (thread, worker)
+                self._stale_umap.append(entry)
+                thread.finished.connect(lambda e=entry: self._on_stale_umap_done(e))
         self._umap_thread = None
         self._umap_worker = None
-        self.btn_compute_umap.setEnabled(True)
+        self.btn_compute_umap.setEnabled(not self._stale_umap)
         self.btn_cancel_umap.setEnabled(False)
-        self.umap_status.setText("UMAP canceled.")
+        self.umap_status.setText(
+            "UMAP canceled."
+            + (" Finishing the running fit first…" if self._stale_umap else "")
+        )
+
+    def _on_stale_umap_done(self, entry) -> None:
+        if entry in self._stale_umap:
+            self._stale_umap.remove(entry)
+        if not self._closed and not self._stale_umap and self._umap_worker is None:
+            self.btn_compute_umap.setEnabled(True)
+            self.umap_status.setText("UMAP canceled.")
+
+    def _end_umap_thread(self) -> None:
+        thread = self._umap_thread
+        if thread is not None:
+            thread.quit()
+            if not thread.wait(2000):
+                keep_thread_until_finished(thread, self._umap_worker)
+        self._umap_thread = None
+        self._umap_worker = None
 
     def _on_umap_finished(self, projection: np.ndarray):
-        if self._umap_thread:
-            self._umap_thread.quit()
-            self._umap_thread.wait(2000)
-        self._umap_thread = None
-        self._umap_worker = None
+        # Only the live run counts (a queued result can outlive a cancel).
+        if self._closed or self.sender() is not self._umap_worker:
+            return
+        self._end_umap_thread()
         self.umap_projection = projection
         n = projection.shape[0]
         self.umap_status.setText(
@@ -454,11 +474,9 @@ class EmbeddingExplorerDialog(QDialog):
         )
 
     def _on_umap_failed(self, msg: str):
-        if self._umap_thread:
-            self._umap_thread.quit()
-            self._umap_thread.wait(2000)
-        self._umap_thread = None
-        self._umap_worker = None
+        if self._closed or self.sender() is not self._umap_worker:
+            return
+        self._end_umap_thread()
         self.umap_status.setText(f"UMAP failed: {msg}")
         self.btn_compute_umap.setEnabled(True)
         self.btn_cancel_umap.setEnabled(False)
@@ -551,15 +569,16 @@ class EmbeddingExplorerDialog(QDialog):
             )
 
     def _shutdown_umap(self) -> None:
-        """Cancel UMAP and make sure no running thread dies with the dialog."""
-        if self._umap_worker:
+        """Cancel UMAP and hand any running fit to the keep-alive registry.
+
+        Nothing waits here: a fit can take minutes, and the registry waits
+        for it on application quit (a destroyed running thread aborts Qt).
+        """
+        self._closed = True
+        if self._umap_worker is not None:
             self._cancel_umap()
         for thread, worker in self._stale_umap:
-            if not thread.wait(1000):
-                # Still fitting: unparent so the dialog's teardown does not
-                # destroy a running thread; released when it finishes.
-                thread.setParent(None)
-                _keep_until_finished(thread, worker)
+            keep_thread_until_finished(thread, worker)
         self._stale_umap = []
 
     def done(self, result: int) -> None:  # accept, reject, Esc

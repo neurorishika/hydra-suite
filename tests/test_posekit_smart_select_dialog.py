@@ -378,8 +378,10 @@ def test_close_while_building_does_not_abort(qapp, tmp_path, monkeypatch):
     dlg.reject()
     dlg.deleteLater()
     qapp.processEvents()
-    _pump_until(qapp, lambda: not ss._ORPHANED_THREADS, timeout=10)
-    assert not ss._ORPHANED_THREADS
+    from hydra_suite.posekit.gui.dialogs import utils as dutils
+
+    _pump_until(qapp, lambda: not dutils._LIVE_THREADS, timeout=10)
+    assert not dutils._LIVE_THREADS
 
 
 @pytest.mark.parametrize(
@@ -468,3 +470,125 @@ def test_explorer_cannot_add_frames_outside_scope(qapp, tmp_path, monkeypatch):
     dlg._open_explorer()
     assert dlg.batch_units == batch
     assert "Skipped 1" in dlg.lbl_status.text()
+
+
+_QUIT_SCRIPT = r"""
+import sys, time, os
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from pathlib import Path
+from types import SimpleNamespace
+import numpy as np
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+app = QApplication(sys.argv)
+from hydra_suite.posekit.gui.dialogs import smart_select as ss
+import hydra_suite.posekit.core.smart_select as job
+ss._load_dialog_settings = lambda key: {}
+ss._save_dialog_settings = lambda key, val: None
+def slow(req, status=lambda s: None, is_canceled=lambda: False):
+    time.sleep(1.5)  # an uninterruptible step (e.g. a long KMeans fit)
+    raise job.SmartSelectCanceled()
+job.run_smart_select = slow
+tmp = Path(sys.argv[1])
+paths = [tmp / f"img{i}.png" for i in range(20)]
+dlg = ss.SmartSelectDialog(None, SimpleNamespace(enhance_enabled=False, out_root=tmp,
+    keypoint_names=["a"]), paths, lambda p: False, labeling_frames=set())
+dlg._emb_all = np.random.default_rng(0).normal(size=(20, 8)).astype(np.float32)
+dlg._emb_key = dlg._embedding_key()
+dlg._build()
+QTimer.singleShot(100, dlg.reject)
+QTimer.singleShot(200, app.quit)
+app.exec()
+print("clean exit")
+"""
+
+
+def test_quit_while_a_closed_dialog_still_works_does_not_abort(tmp_path):
+    import subprocess
+
+    script = tmp_path / "quit.py"
+    script.write_text(_QUIT_SCRIPT)
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    out = subprocess.run(
+        [sys.executable, str(script), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert "clean exit" in out.stdout
+
+
+def test_late_signals_after_close_are_ignored(qapp, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(
+        ss.QMessageBox, "critical", staticmethod(lambda *a, **k: shown.append(a))
+    )
+    dlg = _dialog(tmp_path, ["a.png", "b.png"])
+    dlg.reject()
+    # Queued signals delivered after close arrive with sender() None.
+    dlg._on_selection_failed("boom")
+    dlg._on_emb_failed("boom")
+    assert shown == []
+
+
+def test_unreadable_images_are_skipped_not_fatal(qapp, tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("timm")
+    from PIL import Image
+
+    from hydra_suite.posekit.core import extensions as ext
+
+    class _Tiny(torch.nn.Module):
+        def forward(self, x):
+            return x.flatten(1)[:, :8] + 1.0
+
+    monkeypatch.setattr("timm.create_model", lambda *a, **k: _Tiny())
+    monkeypatch.setattr("timm.data.resolve_data_config", lambda *a, **k: {})
+    import torchvision.transforms as T
+
+    monkeypatch.setattr(
+        "timm.data.transforms_factory.create_transform",
+        lambda **k: T.Compose([T.Resize((8, 8)), T.ToTensor()]),
+    )
+    images = tmp_path / "images"
+    images.mkdir()
+    paths = []
+    for i in range(6):
+        p = images / f"img{i}.png"
+        Image.new("RGB", (16, 16), (i * 30, 0, 0)).save(p)
+        paths.append(p)
+    paths[2].write_bytes(b"not an image")
+    paths.append(images / "deleted.png")  # missing file
+
+    worker = ext.EmbeddingWorker(
+        image_paths=paths,
+        eligible_indices=list(range(len(paths))),
+        cache_dir=tmp_path / "posekit",
+        model_name="stub",
+        device_pref="cpu",
+        batch_size=4,
+        use_enhance=False,
+        max_side=0,
+    )
+    got = {}
+    worker.finished.connect(lambda e, el, m: got.update(emb=e, meta=m))
+    worker.failed.connect(lambda msg: got.update(failed=msg))
+    worker.run()
+    assert "failed" not in got
+    assert got["meta"]["unreadable"] == [2, 6]
+    assert got["emb"].shape == (7, 8)
+    assert not got["emb"][[2, 6]].any() and got["emb"][[0, 1, 3]].any()
+
+    # The dialog never picks an unreadable image.
+    dlg = _dialog(tmp_path, [p.name for p in paths])
+    dlg.cb_scope.setCurrentText("All frames")
+    dlg.n_spin.setValue(7)
+    dlg._emb_key_pending = dlg._embedding_key()
+    dlg._eligible_indices = list(range(7))
+    dlg._set_busy(True)
+    dlg._on_emb_finished(got["emb"], dlg._eligible_indices, got["meta"])
+    _pump_until(qapp, lambda: dlg._sel_worker is None)
+    assert dlg.batch_units and not {2, 6} & set(dlg.batch_units)
+    assert "2 unreadable images skipped" in dlg.lbl_status.text()
