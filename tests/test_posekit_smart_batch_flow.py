@@ -198,3 +198,60 @@ def test_canceled_dialog_changes_nothing(qapp, tmp_path, monkeypatch):
     win.open_smart_select()
     assert win.labeling_frames == before
     assert win._smart_batch_paths == []
+
+
+def test_labeling_set_and_batch_survive_images_added_between_sessions(
+    qapp, tmp_path, monkeypatch
+):
+    from PIL import Image
+
+    proj = _project(tmp_path)
+    win = _window(proj)
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.SmartSelectDialog", _FakeDialog
+    )
+    _FakeDialog.batch, _FakeDialog.start = [7, 3, 9], True
+    win.open_smart_select()
+    win.save_project()
+    names_before = {win.image_paths[i].name for i in win.labeling_frames}
+    win.close()
+
+    # A new image that sorts first shifts every index by one.
+    Image.new("RGB", (32, 32)).save(proj.images_dir / "img00a.png")
+    reloaded = Project.from_json(canonical_project_path(proj.out_root))
+    win2 = _window(reloaded)
+    names_after = {win2.image_paths[i].name for i in win2.labeling_frames}
+    assert names_after == names_before
+    win2.sort_combo.setCurrentText(SORT_SMART_BATCH)
+    order = [win2.image_paths[i].name for i in win2._labeling_order()[:3]]
+    assert order == ["img07.png", "img03.png", "img09.png"]
+
+
+def test_next_loads_when_list_row_is_already_current(qapp, tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    win = _window(proj)
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.SmartSelectDialog", _FakeDialog
+    )
+    _FakeDialog.batch, _FakeDialog.start = [7, 3, 9], True
+    win.open_smart_select()
+    assert win.current_index == 7
+    # Open a frame from the All-frames list; the labeling list keeps row 0.
+    win._select_frame_in_list(11)
+    assert win.current_index == 11
+    win._select_frame_in_list(7)
+    assert win.current_index == 7
+
+
+def test_re_adding_existing_frames_reports_order_update(qapp, tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    win = _window(proj)
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.SmartSelectDialog", _FakeDialog
+    )
+    _FakeDialog.batch, _FakeDialog.start = [7, 3], False
+    win.open_smart_select()
+    _FakeDialog.batch = [3, 7]
+    win.open_smart_select()
+    assert "Batch order updated" in win.statusBar().currentMessage()
+    assert win._smart_batch_indices() == [3, 7]

@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.selection.clustering import auto_cluster_count
 from hydra_suite.posekit.core.frame_grouping import group_indices_by_frame
 from hydra_suite.posekit.core.selection import (
     REASON_AUDIT,
@@ -117,7 +118,7 @@ EMBEDDING_MODELS = [
 CLUSTER_METHODS = [
     ("K-means", "kmeans"),
     ("MiniBatch K-means", "minibatch"),
-    ("HDBSCAN", "hdbscan"),
+    ("HDBSCAN (slow above ~10,000 frames)", "hdbscan"),
 ]
 
 SCOPES = ["Unlabeled only", "All frames", "Labeling set"]
@@ -220,7 +221,8 @@ class SmartSelectDialog(QDialog):
         self._emb_thread: Optional[QThread] = None
         self._emb_worker: Optional[EmbeddingWorker] = None
         self._sel_worker: Optional[SmartSelectWorker] = None
-        self._build_after_embedding = False
+        self._busy = False
+        self._cancel_requested = False
 
         # Results read by the caller after accept().
         self.selected_indices: List[int] = []
@@ -229,6 +231,7 @@ class SmartSelectDialog(QDialog):
 
         self._build_ui()
         self._apply_settings()
+        self._on_auto_k_toggled(self.cb_auto_k.isChecked())
         self._update_model_label()
         self._update_remainder()
         self._set_busy(False)
@@ -292,7 +295,7 @@ class SmartSelectDialog(QDialog):
         self.cb_auto_k.setToolTip(
             "Use about √N clusters (N = frames), like ClassKit's over-clustering."
         )
-        self.cb_auto_k.toggled.connect(lambda on: self.k_spin.setEnabled(not on))
+        self.cb_auto_k.toggled.connect(self._on_auto_k_toggled)
         size_row.addWidget(self.cb_auto_k)
         size_row.addSpacing(12)
         self.cluster_method_combo = QComboBox()
@@ -504,6 +507,17 @@ class SmartSelectDialog(QDialog):
             sc.setContext(Qt.WidgetShortcut)
             sc.activated.connect(self._remove_selected_rows)
 
+    def _unit_count(self) -> int:
+        return len(self._frame_groups) if self.frame_mode else len(self.image_paths)
+
+    def _on_auto_k_toggled(self, on: bool) -> None:
+        """Auto shows the cluster count it will use (≈ √N, clamped)."""
+        self.k_spin.setEnabled(not on)
+        if on:
+            self.k_spin.setValue(
+                max(self.k_spin.minimum(), auto_cluster_count(self._unit_count()))
+            )
+
     def _mix_total(self) -> int:
         return sum(getattr(self, attr).value() for attr, *_ in _MIX_FIELDS)
 
@@ -547,6 +561,7 @@ class SmartSelectDialog(QDialog):
         )
 
     def _set_busy(self, busy: bool) -> None:
+        self._busy = bool(busy)
         self.btn_build.setEnabled(not busy)
         self.btn_cancel.setEnabled(busy)
         has_batch = bool(self.batch_units) and not busy
@@ -560,41 +575,54 @@ class SmartSelectDialog(QDialog):
 
     def _apply_settings(self) -> None:
         s = _load_dialog_settings("smart_select") or {}
-        if not s:
+        if not isinstance(s, dict) or not s:
             return
 
-        def _set_combo_data(combo: QComboBox, value) -> None:
-            i = combo.findData(value)
-            if i >= 0:
-                combo.setCurrentIndex(i)
+        def num(key, spin, cast=int, src=None):
+            """Restore a spin box; ignore missing or malformed values."""
+            src = s if src is None else src
+            try:
+                spin.setValue(cast(src[key]))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                pass
+
+        def flag(key, box, default):
+            value = s.get(key, default)
+            if isinstance(value, bool):
+                box.setChecked(value)
+
+        def text(key, combo):
+            value = s.get(key)
+            if isinstance(value, str) and value.strip():
+                combo.setCurrentText(value)
 
         if s.get("scope") in SCOPES:
             self.cb_scope.setCurrentText(s["scope"])
-        self.cb_exclude_in_labeling.setChecked(bool(s.get("exclude_labeling", True)))
-        self.model_combo.setCurrentText(s.get("model", self.model_combo.currentText()))
-        self.dev_combo.setCurrentText(s.get("device", self.dev_combo.currentText()))
-        self.batch_spin.setValue(int(s.get("batch", self.batch_spin.value())))
-        self.max_side_spin.setValue(int(s.get("max_side", self.max_side_spin.value())))
-        self.cb_use_enhance.setChecked(
-            bool(s.get("use_enhance", self.cb_use_enhance.isChecked()))
-        )
-        self.n_spin.setValue(int(s.get("n", self.n_spin.value())))
-        self.k_spin.setValue(int(s.get("k", self.k_spin.value())))
-        self.cb_auto_k.setChecked(bool(s.get("auto_k", True)))
-        _set_combo_data(self.cluster_method_combo, s.get("cluster_method_v2"))
-        mix = s.get("mix") or {}
-        for attr, *_ in _MIX_FIELDS:
-            if attr in mix:
-                getattr(self, attr).setValue(int(mix[attr]))
-        self.alpha_spin.setValue(float(s.get("rare_alpha", self.alpha_spin.value())))
-        self.error_thr_spin.setValue(
-            float(s.get("error_threshold", self.error_thr_spin.value()))
-        )
-        self.cb_dedup.setChecked(bool(s.get("dedup", False)))
-        self.dedup_spin.setValue(
-            float(s.get("dedup_threshold", self.dedup_spin.value()))
-        )
+        flag("exclude_labeling", self.cb_exclude_in_labeling, True)
+        text("model", self.model_combo)
+        if s.get("device") in [
+            self.dev_combo.itemText(i) for i in range(self.dev_combo.count())
+        ]:
+            self.dev_combo.setCurrentText(s["device"])
+        num("batch", self.batch_spin)
+        num("max_side", self.max_side_spin)
+        flag("use_enhance", self.cb_use_enhance, self.cb_use_enhance.isChecked())
+        num("n", self.n_spin)
+        num("k", self.k_spin)
+        flag("auto_k", self.cb_auto_k, True)
+        i = self.cluster_method_combo.findData(s.get("cluster_method_v2"))
+        if i >= 0:
+            self.cluster_method_combo.setCurrentIndex(i)
+        mix = s.get("mix")
+        if isinstance(mix, dict):
+            for attr, *_ in _MIX_FIELDS:
+                num(attr, getattr(self, attr), src=mix)
+        num("rare_alpha", self.alpha_spin, float)
+        num("error_threshold", self.error_thr_spin, float)
+        flag("dedup", self.cb_dedup, False)
+        num("dedup_threshold", self.dedup_spin, float)
         self.k_spin.setEnabled(not self.cb_auto_k.isChecked())
+        self.dedup_spin.setEnabled(self.cb_dedup.isChecked())
 
     def _save_settings(self) -> None:
         _save_dialog_settings(
@@ -663,8 +691,9 @@ class SmartSelectDialog(QDialog):
     # ── build: embeddings, then the selection job ─────────────────────────
 
     def _build(self) -> None:
-        if not self.image_paths:
+        if self._busy or not self.image_paths:
             return
+        self._cancel_requested = False
         eligible = self._build_eligible_indices()
         if not eligible:
             QMessageBox.information(
@@ -715,7 +744,14 @@ class SmartSelectDialog(QDialog):
         self._emb_thread = None
         self._emb_worker = None
 
+    def _is_current(self, worker) -> bool:
+        """Signals from a worker this dialog has since replaced are ignored."""
+        sender = self.sender()
+        return sender is None or sender is worker
+
     def _on_emb_failed(self, msg: str) -> None:
+        if not self._is_current(self._emb_worker):
+            return
         self._end_emb_thread()
         self._set_busy(False)
         self.progress.setFormat("%p%")
@@ -727,7 +763,10 @@ class SmartSelectDialog(QDialog):
         QMessageBox.critical(self, "Embedding failed", msg)
 
     def _on_emb_finished(self, emb_all, _eligible, _meta) -> None:
+        if not self._is_current(self._emb_worker):
+            return
         self._end_emb_thread()
+        self._remove_legacy_embedding_cache()
         emb_all = np.asarray(emb_all)
         if emb_all.ndim != 2 or len(emb_all) != len(self.image_paths):
             self._set_busy(False)
@@ -738,7 +777,32 @@ class SmartSelectDialog(QDialog):
         self._emb_all = emb_all
         self._emb_key = self._emb_key_pending
         self.progress.setFormat("%p%")
+        if self._cancel_requested:
+            # Canceled after the last check inside the worker: keep the
+            # embeddings (the next Build reuses them) but stop here.
+            self.progress.setValue(0)
+            self.lbl_status.setText("Canceled.")
+            self._set_busy(False)
+            return
         self._start_selection()
+
+    def _remove_legacy_embedding_cache(self) -> None:
+        """Drop caches written by the previous Smart Select.
+
+        They sat one folder deeper (``posekit/embeddings/embeddings``) under
+        a key that included device and batch size, so nothing reads or
+        cleans them any more.
+        """
+        legacy = Path(self.project.out_root) / "posekit" / "embeddings" / "embeddings"
+        if not legacy.is_dir():
+            return
+        import shutil
+
+        try:
+            shutil.rmtree(legacy)
+            logger.info("Removed the old Smart Select embedding cache: %s", legacy)
+        except OSError:
+            logger.debug("Could not remove %s", legacy, exc_info=True)
 
     def _start_selection(self) -> None:
         n = len(self.image_paths)
@@ -800,22 +864,30 @@ class SmartSelectDialog(QDialog):
 
     def _on_selection_thread_done(self) -> None:
         worker = self.sender()
-        if worker is self._sel_worker:
-            self._sel_worker = None
+        current = worker is None or worker is self._sel_worker
         if worker is not None:
             worker.deleteLater()
+        if not current:
+            return  # an older run; the current one still owns the UI
+        self._sel_worker = None
         if self._emb_thread is None:
             self.progress.setRange(0, 100)
             self._set_busy(False)
 
     def _on_selection_failed(self, msg: str) -> None:
+        if not self._is_current(self._sel_worker):
+            return
         self.lbl_status.setText("Smart Select failed.")
         QMessageBox.critical(self, "Smart Select failed", msg)
 
     def _on_selection_canceled(self) -> None:
+        if not self._is_current(self._sel_worker):
+            return
         self.lbl_status.setText("Canceled.")
 
     def _on_selection_ready(self, outcome: SmartSelectOutcome) -> None:
+        if not self._is_current(self._sel_worker) or self._cancel_requested:
+            return
         self._outcome = outcome
         self.batch_units = list(outcome.result.indices)
         self._unit_reason = dict(outcome.result.reasons)
@@ -839,6 +911,9 @@ class SmartSelectDialog(QDialog):
         self.lbl_status.setText("Done — " + "; ".join(parts) + ".")
 
     def _cancel(self) -> None:
+        if self._busy:
+            self._cancel_requested = True
+            self.lbl_status.setText("Canceling…")
         if self._emb_worker is not None:
             self._emb_worker.cancel()
         if self._sel_worker is not None:
@@ -928,7 +1003,7 @@ class SmartSelectDialog(QDialog):
     def _refresh_table(self) -> None:
         self.table.setRowCount(0)
         if self._outcome is None:
-            self._set_busy(False)
+            self._set_busy(self._busy)
             return
         self.table.setRowCount(len(self.batch_units))
         for row, unit in enumerate(self.batch_units):
@@ -947,7 +1022,7 @@ class SmartSelectDialog(QDialog):
                     item.setData(Qt.UserRole, unit)
                 self.table.setItem(row, col, item)
         self._update_summary()
-        self._set_busy(False)
+        self._set_busy(self._busy)
 
     def _update_summary(self) -> None:
         if not self.batch_units:
@@ -958,14 +1033,12 @@ class SmartSelectDialog(QDialog):
             r = self._unit_reason.get(u, "")
             counts[r] = counts.get(r, 0) + 1
         order = list(REASONS) + [REASON_EXPLORER]
-        parts = [
-            f"{counts[r]} {_REASON_TEXT[r].lower()}" for r in order if counts.get(r)
-        ]
+        parts = [f"{_REASON_TEXT[r]} ×{counts[r]}" for r in order if counts.get(r)]
         n_inst = sum(len(self._outcome.units[u]) for u in self.batch_units)
         unit_word = "frames" if self.frame_mode else "images"
         extra = f" ({n_inst} individuals)" if self.frame_mode else ""
         self.summary_label.setText(
-            f"<b>{len(self.batch_units)} {unit_word}{extra}</b>: " + ", ".join(parts)
+            f"<b>{len(self.batch_units)} {unit_word}{extra}</b> — " + " · ".join(parts)
         )
 
     def _selected_rows(self) -> List[int]:
@@ -991,6 +1064,8 @@ class SmartSelectDialog(QDialog):
         )
 
     def _remove_selected_rows(self) -> None:
+        if self._busy:
+            return
         rows = self._selected_rows()
         if not rows:
             return
@@ -1003,7 +1078,7 @@ class SmartSelectDialog(QDialog):
     # ── explorer / CSV ────────────────────────────────────────────────────
 
     def _open_explorer(self) -> None:
-        if self._outcome is None:
+        if self._busy or self._outcome is None:
             return
         from .exploration import EmbeddingExplorerDialog
 
@@ -1079,6 +1154,8 @@ class SmartSelectDialog(QDialog):
         return out
 
     def _finish(self, start: bool) -> None:
+        if self._busy:
+            return
         self.selected_indices = self.batch_instances()
         if not self.selected_indices:
             return

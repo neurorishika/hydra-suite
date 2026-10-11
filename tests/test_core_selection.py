@@ -84,9 +84,13 @@ def test_kmeans_is_deterministic_and_finds_blobs():
         assert len(np.unique(a[ids == c])) == 1
 
 
-def test_clusterer_rejects_unknown_method():
+def test_clusterer_rejects_unknown_method_but_accepts_legacy_values():
     with pytest.raises(ValueError):
-        SKLearnClusterer(method=True)
+        SKLearnClusterer(method="ward")
+    # Older ClassKit projects stored the cluster dialog's bool as '0'/'1'.
+    for legacy in (True, False, None, "0", "1", "True", "false"):
+        assert SKLearnClusterer(method=legacy).method == "kmeans"
+    assert SKLearnClusterer(method=" MiniBatch ").method == "minibatch"
 
 
 def test_label_coverage_and_auto_count():

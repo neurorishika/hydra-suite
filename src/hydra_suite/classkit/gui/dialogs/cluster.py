@@ -43,11 +43,15 @@ class ClusterDialog(QDialog):
         self.method_combo.addItem("K-means (MiniBatch above 5,000 images)", "kmeans")
         self.method_combo.addItem("MiniBatch K-means (fastest)", "minibatch")
         if ann_probe.get("hdbscan_available"):
-            self.method_combo.addItem("HDBSCAN (density-based)", "hdbscan")
+            self.method_combo.addItem(
+                "HDBSCAN (density-based; slow, best under ~10,000 images)",
+                "hdbscan",
+            )
         self.method_combo.setToolTip(
             "K-means is deterministic and recommended. HDBSCAN finds dense "
-            "groups on its own; the cluster count then sets its minimum "
-            "cluster size (images / clusters)."
+            "groups on its own (the cluster count then sets its minimum "
+            "cluster size, images / clusters) but its time grows roughly with "
+            "the square of the image count: about a minute at 8,000 images."
         )
         form.addRow("<b>Method:</b>", self.method_combo)
 

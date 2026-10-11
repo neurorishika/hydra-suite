@@ -25,6 +25,29 @@ import numpy as np
 
 CLUSTER_METHODS = ("kmeans", "minibatch", "hdbscan")
 
+# What older ClassKit versions stored as the "method" (the cluster dialog
+# returned a CPU/accelerated bool, saved as TEXT '0'/'1'); every one of them
+# ran K-means (MiniBatch above 5,000 vectors).
+_LEGACY_KMEANS = {"", "0", "1", "true", "false", "none", "cpu", "gpu"}
+
+
+def normalize_cluster_method(method) -> str:
+    """Map a stored or user-supplied method to one of ``CLUSTER_METHODS``.
+
+    Legacy values (bools, ``'0'``/``'1'``, ``None``) mean K-means; anything
+    else unknown raises ``ValueError``.
+    """
+    if method is None or isinstance(method, bool):
+        return "kmeans"
+    text = str(method).strip().lower()
+    if text in CLUSTER_METHODS:
+        return text
+    if text in _LEGACY_KMEANS:
+        return "kmeans"
+    raise ValueError(
+        f"Unknown clustering method {method!r}; expected one of {CLUSTER_METHODS}"
+    )
+
 
 @dataclass
 class ClusterStats:
@@ -48,12 +71,8 @@ class SKLearnClusterer:
         verbose: bool = False,
         random_state: int = 42,
     ):
-        if method not in CLUSTER_METHODS:
-            raise ValueError(
-                f"Unknown clustering method {method!r}; expected one of {CLUSTER_METHODS}"
-            )
         self.n_clusters = n_clusters
-        self.method = method
+        self.method = normalize_cluster_method(method)
         self.niter = niter
         self.verbose = verbose
         self.random_state = int(random_state)

@@ -182,3 +182,27 @@ def test_cli_project_dataset_anchored_project_uses_dataset(tmp_path: Path) -> No
     assert dataset_dir_for_cli_project(path, None) == (tmp_path / "ds").resolve()
     explicit = tmp_path / "other"
     assert dataset_dir_for_cli_project(path, explicit) == explicit
+
+
+def test_cli_project_legacy_layouts_still_repair(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    ds = tmp_path / "ds"
+    (ds / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    (ds / "labels").mkdir()
+    for legacy in (ds / DEFAULT_PROJECT_NAME, ds / "labels" / DEFAULT_PROJECT_NAME):
+        legacy.write_text("{}")
+        assert dataset_dir_for_cli_project(legacy, None) == ds
+
+
+def test_cli_project_symlinked_posekit_project_dir(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    ds = tmp_path / "ds"
+    (ds / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    real = tmp_path / "elsewhere" / "proj"
+    (real / "state").mkdir(parents=True)
+    (real / "state" / DEFAULT_PROJECT_NAME).write_text("{}")
+    (ds / DEFAULT_POSEKIT_PROJECT_DIR).symlink_to(real, target_is_directory=True)
+    selected = ds / DEFAULT_POSEKIT_PROJECT_DIR / "state" / DEFAULT_PROJECT_NAME
+    assert dataset_dir_for_cli_project(selected, None) == ds

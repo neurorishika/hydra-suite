@@ -11,7 +11,11 @@ from typing import Optional
 
 from PySide6.QtWidgets import QApplication
 
-from .constants import DEFAULT_DATASET_IMAGES_DIR, DEFAULT_POSEKIT_PROJECT_DIR
+from .constants import (
+    DEFAULT_DATASET_IMAGES_DIR,
+    DEFAULT_POSEKIT_PROJECT_DIR,
+    DEFAULT_PROJECT_NAME,
+)
 from .main_window import MainWindow
 from .models import Project
 from .project import (
@@ -48,20 +52,43 @@ def dataset_dir_for_cli_project(
 ) -> Optional[Path]:
     """Return the dataset root whose layout a ``--project`` file should follow.
 
-    Only a dataset-anchored project (``<dataset>/posekit_project/...`` next to
-    ``<dataset>/images/``) or an explicit dataset argument gets its paths
-    repaired.  A standalone project bundle is opened where it is, like the
+    Only a dataset-anchored project (``<dataset>/posekit_project/...``, or the
+    legacy ``<dataset>/pose_project.json`` / ``<dataset>/labels/pose_project.json``,
+    next to ``<dataset>/images/``) or an explicit dataset argument gets its
+    paths repaired.  A standalone project bundle is opened where it is, like the
     GUI's Open Project; inferring a dataset from its images folder would move
     the project under the images' parent.
     """
     if dataset_dir is not None:
         return dataset_dir
-    root = _project_root_from_selection(project_path)
-    if (
-        root.name == DEFAULT_POSEKIT_PROJECT_DIR
-        and (root.parent / DEFAULT_DATASET_IMAGES_DIR).is_dir()
-    ):
-        return root.parent
+
+    def _dataset_of(root: Path) -> Optional[Path]:
+        if (root / DEFAULT_DATASET_IMAGES_DIR).is_dir() and (
+            root.name != DEFAULT_POSEKIT_PROJECT_DIR
+        ):
+            return root
+        return None
+
+    selected = Path(project_path).expanduser().absolute()
+    for root in (_project_root_from_selection(project_path), selected.parent):
+        # <dataset>/posekit_project/... (also when posekit_project is a symlink:
+        # the unresolved parent keeps its name).
+        for candidate in (root, *root.parents[:2]):
+            if (
+                candidate.name == DEFAULT_POSEKIT_PROJECT_DIR
+                and (candidate.parent / DEFAULT_DATASET_IMAGES_DIR).is_dir()
+            ):
+                return candidate.parent
+    # Legacy files: <dataset>/pose_project.json, <dataset>/labels/pose_project.json
+    if selected.name == DEFAULT_PROJECT_NAME:
+        parent = selected.parent
+        if parent.name == "labels":
+            found = _dataset_of(parent.parent)
+            if found is not None:
+                return found
+        found = _dataset_of(parent)
+        if found is not None:
+            return found
     return None
 
 

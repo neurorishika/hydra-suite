@@ -289,3 +289,130 @@ def test_without_predictions_model_share_fills_gaps_not_random(qapp, tmp_path):
     # to the diversity top-up.
     assert len(bd.get(ss.REASON_AUDIT, [])) == 1
     assert len(bd[ss.REASON_DIVERSITY]) >= 6 + 9
+
+
+def _slow_selection(monkeypatch, delay=0.5):
+    import hydra_suite.posekit.core.smart_select as job
+
+    real = job.run_smart_select
+    calls = []
+
+    def slow(req, status=lambda s: None, is_canceled=lambda: False):
+        calls.append(1)
+        deadline = time.monotonic() + delay
+        while time.monotonic() < deadline:
+            if is_canceled():
+                raise job.SmartSelectCanceled()
+            time.sleep(0.01)
+        return real(req, status, is_canceled)
+
+    monkeypatch.setattr(job, "run_smart_select", slow)
+    return calls
+
+
+def _pump_until(qapp, cond, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while not cond() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+
+
+def test_actions_are_ignored_while_busy(qapp, tmp_path, monkeypatch):
+    names = [f"img{i:03d}.png" for i in range(40)]
+    dlg = _dialog(tmp_path, names)
+    dlg.n_spin.setValue(6)
+    _build(qapp, dlg, _blobs([20, 20]))
+    first = list(dlg.batch_units)
+
+    calls = _slow_selection(monkeypatch)
+    dlg._build()  # second build, now running
+    assert dlg._busy and not dlg.btn_build.isEnabled()
+    dlg.table.selectRow(0)
+    dlg._remove_selected_rows()  # Delete key while busy
+    assert dlg.batch_units == first
+    assert not dlg.btn_build.isEnabled() and dlg.btn_cancel.isEnabled()
+    dlg._build()  # double build is ignored
+    dlg._finish(start=True)  # can't accept a batch mid-build
+    assert dlg.result() != QDialog.Accepted
+    _pump_until(qapp, lambda: dlg._sel_worker is None)
+    assert calls == [1]
+    assert not dlg._busy and dlg.btn_build.isEnabled()
+
+
+def test_cancel_after_embeddings_skips_the_selection(qapp, tmp_path, monkeypatch):
+    names = [f"img{i:03d}.png" for i in range(30)]
+    dlg = _dialog(tmp_path, names)
+    started = []
+    monkeypatch.setattr(dlg, "_start_selection", lambda: started.append(1))
+    dlg._eligible_indices = list(range(30))
+    dlg._set_busy(True)
+    dlg._emb_key_pending = dlg._embedding_key()
+    dlg._cancel()  # user canceled; the worker had already passed its checks
+    dlg._on_emb_finished(_blobs([15, 15]), dlg._eligible_indices, {})
+    assert started == []
+    assert dlg._emb_all is not None  # kept for the next Build
+    assert dlg.lbl_status.text() == "Canceled." and not dlg._busy
+
+
+def test_cancel_during_selection(qapp, tmp_path, monkeypatch):
+    names = [f"img{i:03d}.png" for i in range(30)]
+    dlg = _dialog(tmp_path, names)
+    _slow_selection(monkeypatch, delay=5)
+    dlg._emb_all = _blobs([15, 15])
+    dlg._emb_key = dlg._embedding_key()
+    dlg._build()
+    dlg._cancel()
+    _pump_until(qapp, lambda: dlg._sel_worker is None)
+    assert dlg._outcome is None and dlg.batch_units == []
+    assert dlg.lbl_status.text() == "Canceled." and not dlg._busy
+
+
+def test_close_while_building_does_not_abort(qapp, tmp_path, monkeypatch):
+    names = [f"img{i:03d}.png" for i in range(30)]
+    dlg = _dialog(tmp_path, names)
+    _slow_selection(monkeypatch, delay=1)
+    dlg._emb_all = _blobs([15, 15])
+    dlg._emb_key = dlg._embedding_key()
+    dlg._build()
+    dlg.reject()
+    dlg.deleteLater()
+    qapp.processEvents()
+    _pump_until(qapp, lambda: not ss._ORPHANED_THREADS, timeout=10)
+    assert not ss._ORPHANED_THREADS
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"n": None},
+        {"n": "abc"},
+        {"mix": 5},
+        {"mix": {"error_spin": None}},
+        {"rare_alpha": None, "dedup": "yes", "model": 3, "device": "tpu"},
+        ["not", "a", "dict"],
+    ],
+)
+def test_corrupt_settings_fall_back_to_defaults(qapp, tmp_path, monkeypatch, bad):
+    monkeypatch.setattr(ss, "_load_dialog_settings", lambda key: bad)
+    dlg = _dialog(tmp_path, ["a.png"])
+    assert dlg.n_spin.value() == 50 and dlg.error_spin.value() == 20
+
+
+def test_auto_cluster_count_is_shown(qapp, tmp_path):
+    names = [f"img{i:03d}.png" for i in range(400)]
+    dlg = _dialog(tmp_path, names)
+    assert dlg.cb_auto_k.isChecked() and dlg.k_spin.value() == 20  # sqrt(400)
+    dlg.cb_auto_k.setChecked(False)
+    assert dlg.k_spin.isEnabled() and dlg.k_spin.value() == 20
+
+
+def test_legacy_embedding_cache_is_removed(qapp, tmp_path):
+    legacy = tmp_path / "posekit" / "embeddings" / "embeddings" / "abc"
+    legacy.mkdir(parents=True)
+    (legacy / "embeddings.npy").write_bytes(b"x")
+    keep = tmp_path / "posekit" / "embeddings" / "current"
+    keep.mkdir(parents=True)
+    dlg = _dialog(tmp_path, ["a.png"])
+    dlg._remove_legacy_embedding_cache()
+    assert not legacy.parent.exists() and keep.exists()
