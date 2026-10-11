@@ -69,6 +69,7 @@ from .project import (
     project_exists,
 )
 from .widgets.color_utils import best_text_color, build_category_color_map, to_hex
+from .widgets.elided_button import ElidedButton
 
 
 class _ClassKitPortableWorker(BaseWorker):
@@ -4354,7 +4355,7 @@ class MainWindow(QMainWindow):
                 class_name, i, scheme_shortcuts
             )
             btn_text = f"[{shortcut}] {class_name}" if shortcut else class_name
-            button = QPushButton(btn_text)
+            button = ElidedButton(btn_text)
             bg = self._resolve_class_button_color(class_color_map, class_name)
             fg = best_text_color(bg)
             button.setStyleSheet(
@@ -4368,7 +4369,7 @@ class MainWindow(QMainWindow):
             button.setProperty("class_name", class_name)
             self.label_buttons_layout.addWidget(button, i // 2, i % 2)
 
-        unknown_btn = QPushButton("[0] unknown")
+        unknown_btn = ElidedButton("[0] unknown")
         unknown_bg = class_color_map.get("unknown")
         unknown_fg = best_text_color(unknown_bg)
         unknown_btn.setStyleSheet(

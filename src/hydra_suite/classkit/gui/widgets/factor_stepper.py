@@ -77,6 +77,7 @@ def _qt_stepper_build_ui(self):  # pragma: no cover
         QHBoxLayout,
         QLabel,
         QPushButton,
+        QSizePolicy,
         QVBoxLayout,
     )
 
@@ -86,6 +87,9 @@ def _qt_stepper_build_ui(self):  # pragma: no cover
 
     self._header = QLabel()
     self._header.setStyleSheet("color: #cccccc; font-weight: bold;")
+    # Wrap long factor names instead of widening the side panel.
+    self._header.setWordWrap(True)
+    self._header.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
     self._outer.addWidget(self._header)
 
     # Value buttons wrap onto rows so long factors never widen the side panel.
@@ -117,7 +121,9 @@ def _qt_stepper_build_ui(self):  # pragma: no cover
 
 
 def _qt_stepper_refresh(self):  # pragma: no cover
-    from PySide6.QtWidgets import QPushButton
+    from html import escape
+
+    from hydra_suite.classkit.gui.widgets.elided_button import ElidedButton
 
     for btn in self._buttons:
         self._btn_row.removeWidget(btn)
@@ -132,21 +138,20 @@ def _qt_stepper_refresh(self):  # pragma: no cover
 
     factor = self._state.current_factor
     idx = self._state.current_factor_index
+    # Zero-width spaces after "_" give word wrap a place to break long names.
+    name = escape(str(factor.name)).replace("_", "_\u200b")
     self._header.setText(
-        f"Factor {idx + 1} of {self._state.total_factors}: <b>{factor.name}</b>"
+        f"Factor {idx + 1} of {self._state.total_factors}: <b>{name}</b>"
     )
-
-    from PySide6.QtWidgets import QSizePolicy
 
     shown = 0
     for i, label in enumerate(factor.labels):
         if str(label).strip() == "unknown":
             continue
-        btn = QPushButton(label.capitalize())
-        btn.setToolTip(str(label))
+        key = factor.shortcut_keys[i] if i < len(factor.shortcut_keys) else None
+        text = label.capitalize()
         # Shrinkable: long names elide instead of widening the panel.
-        btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        btn.setMinimumWidth(40)
+        btn = ElidedButton(f"[{key}] {text}" if key else text)
         btn.setStyleSheet(
             "QPushButton { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555; "
             "border-radius: 4px; padding: 6px 12px; } "
@@ -157,7 +162,6 @@ def _qt_stepper_refresh(self):  # pragma: no cover
         shown += 1
         self._buttons.append(btn)
 
-        key = factor.shortcut_keys[i] if i < len(factor.shortcut_keys) else None
         if key:
             self._shortcut_map[key] = label
             self._shortcut_map[key.lower()] = label

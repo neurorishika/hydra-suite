@@ -12,7 +12,7 @@ The panel only builds widgets; ``MainWindow`` wires their signals.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
@@ -368,7 +368,7 @@ class LabelingOptionsPanel(QWidget):
         header = self.candidate_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
         self.candidate_table.setColumnHidden(1, True)  # file name says enough here
         self.candidate_table.setStyleSheet(
@@ -441,28 +441,54 @@ class PlacementController(QObject):
         if watched is self._splitter and event.type() == QEvent.Resize:
             self.update_placement()
         elif watched is self._panel and event.type() == QEvent.Show:
-            self._placed = False  # fresh decision each time labeling mode opens
+            # Fresh decision each time labeling mode opens.  The splitter
+            # still has its old size here, so keep deciding without
+            # hysteresis until the layout has settled.
+            self._placed = False
             self.update_placement()
+            QTimer.singleShot(0, self, self._settle)
         return False
 
-    def scores(self, width: int, height: int):
+    def _settle(self) -> None:
+        self.update_placement()
+        self._placed = self._panel.isVisible()
+
+    def scores(self, width: int, height: int, panel_width: int | None = None):
         panel = self._panel
-        beside = min(width - panel.DEFAULT_WIDTH, height)
+        if panel_width is None:
+            panel_width = panel.DEFAULT_WIDTH
+        beside = min(width - panel_width, height)
         below = min(width, height - panel.BAND_HEIGHT)
         return beside, below
+
+    def _current_panel_width(self) -> int:
+        """The panel's real width when beside (the user may have dragged it)."""
+        if self._panel.beside and self._splitter.orientation() == Qt.Horizontal:
+            return max(self._panel.DEFAULT_WIDTH, self._splitter.sizes()[1])
+        return self._panel.DEFAULT_WIDTH
 
     def update_placement(self) -> None:
         width, height = self._splitter.width(), self._splitter.height()
         if width <= 0 or height <= 0 or not self._panel.isVisible():
             return
-        beside, below = self.scores(width, height)
+        panel_w = self._current_panel_width()
+        beside, below = self.scores(width, height, panel_w)
+        if self._placed and self._panel.beside and panel_w > self._panel.DEFAULT_WIDTH:
+            # A dragged-wide panel squeezes the plot: give the width back
+            # before considering the band.
+            default_beside, _ = self.scores(width, height)
+            if below > beside * self.HYSTERESIS and not (
+                below > default_beside * self.HYSTERESIS
+            ):
+                default_w = self._panel.DEFAULT_WIDTH
+                self._splitter.setSizes([max(1, width - default_w), default_w])
+                return
         if not self._placed:  # first layout: just take the better one
             want = beside >= below
         elif self._panel.beside:
             want = not (below > beside * self.HYSTERESIS)
         else:
             want = beside > below * self.HYSTERESIS
-        self._placed = True
         if want == self._panel.beside and self._splitter.orientation() == (
             Qt.Horizontal if want else Qt.Vertical
         ):

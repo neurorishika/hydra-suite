@@ -142,3 +142,78 @@ def test_factor_buttons_wrap_and_left_panel_never_scrolls_sideways(qapp):
     grid = stepper._btn_row
     assert grid.columnCount() == 3 and grid.rowCount() >= 3
     assert not win.context_panel.horizontalScrollBar().isVisible()
+
+
+LONG = [
+    "very_long_class_name_alpha",
+    "very_long_class_name_beta",
+    "short",
+    "yet_another_very_very_long_class_name_omega",
+]
+
+
+def _long_window(qapp, factors):
+    scheme = LabelingScheme(name="s", factors=factors, training_modes=[])
+    win = MainWindow()
+    win._load_label_scheme = lambda: (scheme, {})
+    win.classes = LONG
+    win.resize(1440, 900)
+    win._stacked.setCurrentIndex(1)
+    win.rebuild_label_buttons()
+    win.view_mode_combo.setCurrentIndex(win.view_mode_combo.findData("labeling"))
+    win.set_explorer_mode("labeling")
+    win.show()
+    for _ in range(10):
+        qapp.processEvents()
+    return win
+
+
+@pytest.mark.parametrize("multi", [True, False])
+def test_long_names_elide_instead_of_widening_left_panel(qapp, multi):
+    if multi:
+        factors = [
+            Factor("factor_name_that_is_extremely_long_and_has_no_spaces", LONG),
+            Factor("b", ["x", "y"]),
+        ]
+    else:
+        factors = [Factor("cls", LONG)]
+    win = _long_window(qapp, factors)
+    assert win.context_panel.horizontalScrollBar().maximum() == 0
+    buttons = [
+        b
+        for b in win.context_panel.findChildren(QtWidgets.QPushButton)
+        if hasattr(b, "fullText") and "very_long" in b.fullText().lower()
+    ]
+    assert buttons
+    for b in buttons:
+        assert b.text().endswith("…")
+        assert b.text().rstrip("…") and b.fullText().startswith(b.text()[:-1])
+        assert b.toolTip() == b.fullText()
+
+
+def test_placement_same_after_mode_toggle(qapp):
+    win = _window(qapp, 1455, 900)
+    first = win.labeling_panel.beside
+    win.set_explorer_mode("explore")
+    qapp.processEvents()
+    win.set_explorer_mode("labeling")
+    for _ in range(10):
+        qapp.processEvents()
+    assert win.labeling_panel.beside == first
+    w, h = win.explorer_split.width(), win.explorer_split.height()
+    beside, below = win._labeling_placement.scores(w, h)
+    assert first == (beside >= below)
+
+
+def test_dragged_wide_panel_gives_width_back_before_plot_is_crushed(qapp):
+    win = _window(qapp, 2000, 850)
+    win.explorer_split.setSizes([600, 570])
+    qapp.processEvents()
+    for width in range(1990, 1290, -20):
+        win.resize(width, 850)
+        qapp.processEvents()
+        # Never worse than the band would be.
+        w, h = win.explorer_split.width(), win.explorer_split.height()
+        _, below = win._labeling_placement.scores(w, h)
+        if win.labeling_panel.beside:
+            assert min(win.explorer.width(), win.explorer.height()) >= below / 1.2
