@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -18,6 +17,7 @@ from .constants import (
 )
 from .main_window import MainWindow
 from .models import Project
+from .dialogs.utils import exit_after_threads
 from .project import (
     _project_root_from_selection,
     build_image_list,
@@ -27,6 +27,7 @@ from .project import (
     load_project_with_repairs,
     open_project_from_path,
     resolve_dataset_paths,
+    save_project_state,
 )
 from .utils import _resolve_project_path  # noqa: F401  kept for external callers
 
@@ -123,7 +124,7 @@ def main() -> None:
             pass
         win.resize(1500, 860)
         win.showMaximized()
-        sys.exit(app.exec())
+        exit_after_threads(app.exec())
 
     dataset_dir: Optional[Path] = None
     if args.dataset:
@@ -166,14 +167,17 @@ def main() -> None:
                 dataset_dir = dataset_dir_for_cli_project(
                     Path(args.project).expanduser().absolute(), dataset_dir
                 )
-                if dataset_dir is not None:
+                # Repair only stale paths (a project moved between machines);
+                # a project whose images are where it says keeps its own
+                # layout, including where its labels live.
+                if dataset_dir is not None and not Path(proj.images_dir).is_dir():
                     from .project import _repair_project_paths as _rpaths
 
                     if _rpaths(proj, dataset_dir):
-                        proj.project_path.write_text(
-                            json.dumps(proj.to_json(), indent=2),
-                            encoding="utf-8",
-                        )
+                        # The repair can move the project into
+                        # <dataset>/posekit_project, whose state/ folder may
+                        # not exist yet: save through the bundle layout.
+                        save_project_state(proj)
         else:
             print(f"Project file not found: {project_path}", file=sys.stderr)
             sys.exit(2)
@@ -199,7 +203,7 @@ def main() -> None:
         pass
     win.resize(1500, 860)
     win.showMaximized()
-    sys.exit(app.exec())
+    exit_after_threads(app.exec())
 
 
 if __name__ == "__main__":

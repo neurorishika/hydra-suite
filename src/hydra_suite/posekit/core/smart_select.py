@@ -50,6 +50,9 @@ class SmartSelectRequest:
     predictions: Optional[Predictions] = None  # path -> [(x, y, conf), ...] px
     label_paths: Dict[int, Path] = field(default_factory=dict)  # labeled idx -> txt
     num_keypoints: int = 0
+    # Instances without a usable embedding (unreadable images).  They take no
+    # part in clustering or selection; a frame keeps its other individuals.
+    unusable_mask: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -57,7 +60,7 @@ class SmartSelectOutcome:
     """The batch plus what the dialog needs to explain it."""
 
     units: List[List[int]]
-    unit_clusters: np.ndarray
+    unit_clusters: np.ndarray  # -1 for units with no usable embedding
     instance_clusters: np.ndarray
     unit_embeddings: np.ndarray
     unit_labeled: np.ndarray
@@ -68,9 +71,25 @@ class SmartSelectOutcome:
     n_predicted: int = 0  # instances with a cached prediction
     n_error_scored: int = 0  # labeled instances compared to a prediction
 
+    unusable: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))
+
+    @property
+    def usable_units(self) -> np.ndarray:
+        """Units that took part in clustering and selection."""
+        return self.unit_clusters >= 0
+
     def batch_instances(self) -> List[int]:
-        """Instance indices of the batch, unit by unit in pick order."""
-        return [i for u in self.result.indices for i in self.units[u]]
+        """Instance indices of the batch, unit by unit in pick order.
+
+        Unreadable individuals of a picked frame are left out.
+        """
+        bad = self.unusable
+        return [
+            i
+            for u in self.result.indices
+            for i in self.units[u]
+            if not (len(bad) and bad[i])
+        ]
 
 
 def lookup_prediction(predictions: Optional[Predictions], path: Path):
@@ -159,17 +178,34 @@ def run_smart_select(
         raise ValueError("embeddings must have one row per image")
 
     units = build_units(req.unit_keys, n)
-    unit_emb = unit_embeddings(np.asarray(req.embeddings), units)
+    bad = (
+        np.zeros(n, dtype=bool)
+        if req.unusable_mask is None
+        else np.asarray(req.unusable_mask, dtype=bool)
+    )
+    # Units with at least one readable member take part; a frame's embedding
+    # comes from its readable individuals only.
+    use_units = [u for u, m in enumerate(units) if not bad[m].all()]
+    sub_units = [[i for i in units[u] if not bad[i]] for u in use_units]
+    emb_all = np.asarray(req.embeddings)
+    unit_emb = np.zeros((len(units), emb_all.shape[1]), dtype=np.float32)
+    unit_clusters = np.full(len(units), -1, dtype=int)
     unit_labeled = unit_any(req.labeled_mask, units)
-    unit_cand = unit_any(req.candidate_mask, units)
+    if not sub_units:
+        raise ValueError("None of the images could be read.")
+    sub_emb = unit_embeddings(emb_all, sub_units)
+    unit_emb[use_units] = sub_emb
+    sub_labeled = unit_labeled[use_units]
+    sub_cand = unit_any(np.asarray(req.candidate_mask) & ~bad, sub_units)
 
-    k = int(req.n_clusters) or auto_cluster_count(len(units))
-    k = max(1, min(k, len(units)))
-    status(f"Clustering {len(units):,} items into {k} clusters…")
+    k = int(req.n_clusters) or auto_cluster_count(len(sub_units))
+    k = max(1, min(k, len(sub_units)))
+    status(f"Clustering {len(sub_units):,} items into {k} clusters…")
     check()
     clusterer = SKLearnClusterer(n_clusters=k, method=req.cluster_method)
-    unit_clusters = np.asarray(clusterer.fit(unit_emb), dtype=int)
-    instance_clusters = np.zeros(n, dtype=int)
+    sub_clusters = np.asarray(clusterer.fit(sub_emb), dtype=int)
+    unit_clusters[use_units] = sub_clusters
+    instance_clusters = np.full(n, -1, dtype=int)
     for u, members in enumerate(units):
         instance_clusters[members] = unit_clusters[u]
 
@@ -182,15 +218,16 @@ def run_smart_select(
 
     check()
     status("Selecting the batch…")
-    result = select_pose_batch(
-        unit_emb,
-        unit_cand,
-        unit_labeled,
-        unit_clusters,
+    sub_result = select_pose_batch(
+        sub_emb,
+        sub_cand,
+        sub_labeled,
+        sub_clusters,
         req.config,
-        uncertainty=unit_unc,
-        error_scores=unit_err,
+        uncertainty=None if unit_unc is None else unit_unc[use_units],
+        error_scores=None if unit_err is None else unit_err[use_units],
     )
+    result = _remap_result(sub_result, use_units)
     return SmartSelectOutcome(
         units=units,
         unit_clusters=unit_clusters,
@@ -200,7 +237,30 @@ def run_smart_select(
         result=result,
         unit_uncertainty=unit_unc,
         unit_error=unit_err,
-        n_clusters=int(unit_clusters.max()) + 1 if len(unit_clusters) else 0,
+        n_clusters=int(sub_clusters.max()) + 1 if len(sub_clusters) else 0,
         n_predicted=n_pred,
         n_error_scored=n_scored,
+        unusable=bad,
+    )
+
+
+def _remap_result(res: PoseBatchResult, use_units: List[int]) -> PoseBatchResult:
+    """Map a result computed on the usable units back to all unit indices."""
+    m = list(use_units)
+
+    def g(i: int) -> int:
+        return int(m[int(i)])
+
+    info = dict(res.info)
+    if "error_sources" in info:
+        info["error_sources"] = {g(k): g(v) for k, v in info["error_sources"].items()}
+    if "error_severity" in info:
+        info["error_severity"] = {g(k): v for k, v in info["error_severity"].items()}
+    if "uncertainty" in info:
+        info["uncertainty"] = {g(k): v for k, v in info["uncertainty"].items()}
+    return PoseBatchResult(
+        indices=[g(i) for i in res.indices],
+        reasons={g(k): v for k, v in res.reasons.items()},
+        breakdown={r: [g(i) for i in v] for r, v in res.breakdown.items()},
+        info=info,
     )

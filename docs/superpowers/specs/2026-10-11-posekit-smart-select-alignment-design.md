@@ -34,9 +34,11 @@ title-bar close, and the embedding cache key includes device and batch size.
 ### `hydra_suite.core.selection` (shared, Qt/torch-free)
 
 - `clustering.py` — `SKLearnClusterer` (moved from ClassKit), `label_coverage`.
-- `density.py` — kNN density (blockwise numpy fallback instead of the N×N×D
-  broadcast), cluster densities, k-center `select_diverse_samples` with an
-  optional *reference* set (already-labeled points) and a seeded generator.
+- `density.py` — kNN density (exact blockwise numpy up to 20k points, hnswlib
+  above; never an N×N×D broadcast), cluster densities, k-center
+  `select_diverse_samples` (optional *reference* set, seeded generator) and
+  greedy-coverage `select_coverage_samples` (facility location: each pick most
+  reduces the distance from uncovered points to the covered set).
 - `selectors.py` — `UncertaintySelector`, `RepresentativeSelector`,
   `AuditSelector`, `ErrorSet`, `ErrorNeighborSelector`, `RareClusterSelector`,
   all taking an explicit `np.random.Generator`.
@@ -53,11 +55,13 @@ semantics) and becomes deterministic for a given seed.
   take the worst instance). One code path for both modes.
 - **Pose error** (error-neighbour severity): the Evaluation dialog's
   `mean_error_norm` — mean pixel error over visible ground-truth keypoints
-  divided by object scale; a keypoint the model missed counts as error 1.0.
+  divided by object scale — except that a keypoint the model missed counts as
+  error 1.0 instead of being skipped.
 - **Uncertainty:** `1 - mean keypoint confidence` (missed keypoint = 0).
 - **Batch recipe** (defaults): error neighbours 20%, uncertainty 25%,
-  rare clusters 10% (alpha 0.75), diversity 30% (k-center from the labeled
-  set), representative 10%, remainder random audit. Slots without a signal
+  rare clusters 10% (alpha 0.75), fill gaps 30% (greedy coverage from the
+  labeled set; k-center chased outlier crops on real data), representative 10%,
+  remainder random audit. Slot sizes use largest-remainder rounding. Slots without a signal
   (no model predictions, no errors yet) hand their budget to diversity.
 - Predictions come from the main window's prediction cache for the current
   model ("Predict Dataset…"); the dialog reports coverage and never runs
@@ -66,7 +70,8 @@ semantics) and becomes deterministic for a given seed.
 ### Dialog and labeling flow
 
 - Embeddings computed for all frames (needed for coverage), cached with a key
-  that excludes device and batch size.
+  that excludes device and batch size. Unreadable images are skipped and
+  remembered (not fatal), and take no part in clustering or selection.
 - Clustering, prediction scoring and selection run in a background worker.
 - The candidate table shows order, file, cluster, reason and detail.
 - *Add to Labeling Set* / *Start Labeling*: the batch order is stored on the

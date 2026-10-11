@@ -104,7 +104,7 @@ rare-cluster, coverage and representative picks (see the PoseKit user guide).
 
 | Control group | Includes | Guidance |
 |---|---|---|
-| Batch | Pick from (scope), skip labeling-set frames, frames, clusters (Auto ≈ √N), clustering method | Keep scope explicit; Auto clusters suits most datasets. |
+| Batch | Pick from (scope), skip labeling-set frames, frames, clusters (Auto ≈ √N), clustering method | Keep scope explicit; Auto clusters suits most datasets. HDBSCAN treats the count as a minimum cluster size and is slow above ~10,000 frames. |
 | Mix | Near model errors, Model unsure, Rare clusters, Fill gaps, Typical (%), Rarity α, Error above, Skip near-duplicates | The remainder of the mix becomes random checks. Model slots need cached predictions (Predict Dataset…). |
 | Embeddings | Model, device, batch size, max side, enhancement | Device and batch size do not affect the cache; model, max side and enhancement do. |
 | Candidates | Ordered table (frame, cluster, why, detail), preview, Remove, Embedding Explorer, Save clusters CSV | Remove rows with Delete; the Explorer highlights the batch on a UMAP map. |

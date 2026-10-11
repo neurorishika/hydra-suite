@@ -1746,15 +1746,12 @@ class MainWindow(QMainWindow):
             # Authoritative: frames the user removed stay removed, even if
             # they are in the saved Smart Select batch.
             return {i for i in map(self._index_for_path, paths) if i is not None}
-        # Projects saved before paths were stored: indices, plus the batch
-        # (which is always added to the labeling set when picked).
-        frames = {
+        # Projects saved before paths were stored (or with an empty set).
+        return {
             int(i)
             for i in (getattr(project, "labeling_frames", None) or [])
             if 0 <= int(i) < len(self.image_paths)
         }
-        frames.update(self._smart_batch_indices())
-        return frames
 
     # ----- Smart Select batch order -----
     def _smart_batch_indices(self) -> List[int]:
@@ -3550,9 +3547,13 @@ class MainWindow(QMainWindow):
             if item.data(Qt.UserRole) == idx:
                 if trigger_load and self.labeling_list.currentRow() == i:
                     # Same row (e.g. the user since opened a frame from the
-                    # other list): no currentRowChanged, so load it here.
+                    # other list): no currentRowChanged, so load it here and
+                    # restore the highlight the other list's click cleared.
                     if self.current_index != idx:
                         self._on_labeling_frame_selected(i)
+                    self.labeling_list.blockSignals(True)
+                    item.setSelected(True)
+                    self.labeling_list.blockSignals(False)
                 elif trigger_load:
                     self.labeling_list.setCurrentRow(i)
                 else:
@@ -3570,6 +3571,9 @@ class MainWindow(QMainWindow):
                 if trigger_load and self.frame_list.currentRow() == i:
                     if self.current_index != idx:
                         self._on_all_frame_selected(i)
+                    self.frame_list.blockSignals(True)
+                    item.setSelected(True)
+                    self.frame_list.blockSignals(False)
                 elif trigger_load:
                     self.frame_list.setCurrentRow(i)
                 else:
@@ -3627,7 +3631,11 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Done",
-            "No unlabeled frames found in labeling set after current frame.",
+            (
+                "No other unlabeled frames in the labeling set."
+                if self.sort_combo.currentText() == SORT_SMART_BATCH
+                else "No unlabeled frames found in labeling set after current frame."
+            ),
         )
 
     # ----- save / export -----

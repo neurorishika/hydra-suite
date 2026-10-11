@@ -34,7 +34,8 @@ def slot_budgets(
         total = 1.0
     shares = dict(fr)
     shares[remainder] = shares.get(remainder, 0.0) + max(0.0, 1.0 - total)
-    exact = {k: batch_size * v for k, v in shares.items()}
+    # Rounded so float noise (1 - 0.95 = 0.0500...04) can't decide ties.
+    exact = {k: round(batch_size * v, 9) for k, v in shares.items()}
     budgets = {k: int(v) for k, v in exact.items()}
     left = batch_size - sum(budgets.values())
     # Hand the leftovers to the largest fractional parts (ties: recipe order).

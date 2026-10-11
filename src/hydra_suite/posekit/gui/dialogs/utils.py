@@ -34,12 +34,20 @@ def keep_thread_until_finished(thread, *refs, cancel=None) -> None:
     if thread is None or thread.isFinished():
         return
     thread.setParent(None)
-    entry = (thread, refs, cancel)
+    entry = [thread, refs, cancel]
     _LIVE_THREADS.append(entry)
 
     def _release() -> None:
         if entry in _LIVE_THREADS:
             _LIVE_THREADS.remove(entry)
+        # Break thread -> connection -> closure -> entry -> thread, which the
+        # garbage collector can't see through Qt (it kept every worker, and
+        # e.g. its full embedding matrix, alive).
+        try:
+            thread.finished.disconnect(_release)
+        except (RuntimeError, TypeError):
+            pass
+        entry.clear()
 
     thread.finished.connect(_release)
     _hook_quit()
@@ -54,9 +62,18 @@ def _hook_quit() -> None:
     _QUIT_HOOKED = True
 
 
-def drain_live_threads() -> None:
-    """Cancel and wait for every thread a closed dialog left running."""
-    entries = list(_LIVE_THREADS)
+DRAIN_WAIT_MS = 5000
+
+
+def drain_live_threads(wait_ms: int = DRAIN_WAIT_MS) -> int:
+    """Cancel every thread a closed dialog left running and wait for it.
+
+    Each thread gets up to ``wait_ms``; returns how many are still running
+    afterwards (e.g. stuck in a model download).  Those stay referenced: the
+    caller should then end the process without destroying them (see
+    ``exit_after_threads``).
+    """
+    entries = [e for e in _LIVE_THREADS if e]
     for thread, _refs, cancel in entries:
         if cancel is not None:
             try:
@@ -65,8 +82,27 @@ def drain_live_threads() -> None:
                 pass
         thread.quit()
     for thread, _refs, _cancel in entries:
-        thread.wait()
-    _LIVE_THREADS.clear()
+        thread.wait(wait_ms)
+    return sum(1 for e in _LIVE_THREADS if e and not e[0].isFinished())
+
+
+def exit_after_threads(code: int) -> None:
+    """``sys.exit(code)``, unless a background thread is still running.
+
+    Destroying a running QThread aborts the process, so when one is stuck
+    (after the quit-time drain) the process ends with ``os._exit`` instead.
+    """
+    import os
+    import sys
+
+    if any(e and not e[0].isFinished() for e in _LIVE_THREADS):
+        logging.getLogger("pose_label").warning(
+            "Exiting with background work still running."
+        )
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(int(code or 0))
+    sys.exit(code)
 
 
 # Settings helpers

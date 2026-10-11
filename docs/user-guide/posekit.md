@@ -103,6 +103,11 @@ dialog says so.
 The labeling set is saved by image path, so it (and the batch) survives images
 being added or removed between sessions.
 
+Images that can't be read are skipped (the status line counts them) and are never
+picked; they are remembered, so later runs don't retry them until the file
+changes. Choosing HDBSCAN as the clustering method makes the cluster count a
+minimum cluster size; it is slow above ~10,000 frames.
+
 Clustering also writes `posekit/clusters/clusters.csv` for every frame, which the
 *Cluster id* sort and the cluster-stratified export split use.
 

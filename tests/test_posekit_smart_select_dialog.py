@@ -581,6 +581,25 @@ def test_unreadable_images_are_skipped_not_fatal(qapp, tmp_path, monkeypatch):
     assert got["emb"].shape == (7, 8)
     assert not got["emb"][[2, 6]].any() and got["emb"][[0, 1, 3]].any()
 
+    # A second run remembers the unreadable files: no model load at all.
+    loads = []
+    monkeypatch.setattr("timm.create_model", lambda *a, **k: loads.append(1) or _Tiny())
+    again = {}
+    w2 = ext.EmbeddingWorker(
+        image_paths=paths,
+        eligible_indices=list(range(len(paths))),
+        cache_dir=tmp_path / "posekit",
+        model_name="stub",
+        device_pref="cpu",
+        batch_size=4,
+        use_enhance=False,
+        max_side=0,
+    )
+    w2.finished.connect(lambda e, el, m: again.update(emb=e, meta=m))
+    w2.run()
+    assert loads == [] and again["meta"]["unreadable"] == [2, 6]
+    np.testing.assert_array_equal(again["emb"], got["emb"])
+
     # The dialog never picks an unreadable image.
     dlg = _dialog(tmp_path, [p.name for p in paths])
     dlg.cb_scope.setCurrentText("All frames")
@@ -592,3 +611,137 @@ def test_unreadable_images_are_skipped_not_fatal(qapp, tmp_path, monkeypatch):
     _pump_until(qapp, lambda: dlg._sel_worker is None)
     assert dlg.batch_units and not {2, 6} & set(dlg.batch_units)
     assert "2 unreadable images skipped" in dlg.lbl_status.text()
+
+
+def test_released_threads_free_their_workers(qapp):
+    import weakref
+
+    from PySide6.QtCore import QThread
+
+    from hydra_suite.posekit.gui.dialogs import utils as dutils
+
+    class _Sleeper(QThread):
+        def __init__(self):
+            super().__init__()
+            self.payload = np.zeros((1000, 100))
+
+        def run(self):
+            time.sleep(0.2)
+
+    t = _Sleeper()
+    ref = weakref.ref(t)
+    t.start()
+    dutils.keep_thread_until_finished(t, cancel=lambda: None)
+    del t
+    _pump_until(qapp, lambda: not dutils._LIVE_THREADS)
+    gc.collect()
+    qapp.processEvents()
+    gc.collect()
+    assert ref() is None
+
+
+_STUCK_SCRIPT = r"""
+import sys, time, os
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from PySide6.QtCore import QThread, QTimer
+from PySide6.QtWidgets import QApplication
+app = QApplication(sys.argv)
+from hydra_suite.posekit.gui.dialogs import utils as du
+class Stuck(QThread):
+    def run(self):
+        time.sleep(30)  # e.g. a stalled model download: cancel can't stop it
+t = Stuck(); t.start()
+du.keep_thread_until_finished(t, cancel=lambda: None)
+du.DRAIN_WAIT_MS = 300
+import hydra_suite.posekit.gui.dialogs.utils as m
+app.aboutToQuit.disconnect()
+app.aboutToQuit.connect(lambda: m.drain_live_threads(300))
+QTimer.singleShot(50, app.quit)
+t0 = time.monotonic()
+code = app.exec()
+print("returned", round(time.monotonic() - t0, 1), flush=True)
+du.exit_after_threads(code)
+"""
+
+
+def test_quit_does_not_hang_or_abort_on_a_stuck_thread(tmp_path):
+    import subprocess
+
+    script = tmp_path / "stuck.py"
+    script.write_text(_STUCK_SCRIPT)
+    t0 = time.monotonic()
+    out = subprocess.run(
+        [sys.executable, str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=dict(os.environ, QT_QPA_PLATFORM="offscreen"),
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert time.monotonic() - t0 < 20
+    assert "returned" in out.stdout
+
+
+def test_all_unreadable_shows_a_clear_message(qapp, tmp_path, monkeypatch):
+    shown = []
+    monkeypatch.setattr(
+        ss.QMessageBox, "critical", staticmethod(lambda *a, **k: shown.append(a[2]))
+    )
+    dlg = _dialog(tmp_path, ["a.png", "b.png"])
+    dlg._emb_key_pending = dlg._embedding_key()
+    dlg._eligible_indices = [0, 1]
+    dlg._set_busy(True)
+    dlg._on_emb_finished(np.zeros((2, 0), np.float32), [0, 1], {"unreadable": [0, 1]})
+    assert shown and "None of the images could be read" in shown[0]
+    assert not dlg._busy and dlg._sel_worker is None
+
+
+def test_unreadable_images_stay_out_of_clusters_and_explorer(
+    qapp, tmp_path, monkeypatch
+):
+    names = [f"img{i:03d}.png" for i in range(30)]
+    dlg = _dialog(tmp_path, names)
+    dlg.cb_scope.setCurrentText("All frames")
+    dlg.n_spin.setValue(30)
+    emb = _blobs([15, 15])
+    emb[[4, 20]] = 0
+    dlg._emb_key_pending = dlg._embedding_key()
+    dlg._eligible_indices = list(range(30))
+    dlg._set_busy(True)
+    dlg._on_emb_finished(emb, dlg._eligible_indices, {"unreadable": [4, 20]})
+    _pump_until(qapp, lambda: dlg._sel_worker is None)
+    out = dlg._outcome
+    assert out.unit_clusters[[4, 20]].tolist() == [-1, -1]
+    assert not {4, 20} & set(dlg.batch_units) and len(dlg.batch_units) == 28
+
+    seen = {}
+
+    class _Explorer:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+            self.selected_indices = [0]
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog", _Explorer
+    )
+    dlg._open_explorer()
+    assert len(seen["image_paths"]) == 28
+    assert all(p.name not in ("img004.png", "img020.png") for p in seen["image_paths"])
+
+
+def test_frame_mode_leaves_out_unreadable_individuals(qapp, tmp_path):
+    names = [f"did{f * 10000 + k}.jpg" for f in range(1, 11) for k in range(2)]
+    dlg = _dialog(tmp_path, names, frame_mode=True, source_ids=["s"] * len(names))
+    dlg.n_spin.setValue(10)
+    dlg._emb_key_pending = dlg._embedding_key()
+    dlg._eligible_indices = list(range(20))
+    dlg._set_busy(True)
+    emb = np.repeat(_blobs([5, 5]), 2, axis=0)
+    emb[1] = 0
+    dlg._on_emb_finished(emb, dlg._eligible_indices, {"unreadable": [1]})
+    _pump_until(qapp, lambda: dlg._sel_worker is None)
+    picked = dlg.batch_instances()
+    assert 0 in picked and 1 not in picked and len(picked) == 19

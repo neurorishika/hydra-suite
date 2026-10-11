@@ -303,3 +303,18 @@ def test_main_window_keeps_dialog_settings_when_saving(qapp, tmp_path):
     win._save_ui_settings()
     assert _load_dialog_settings("smart_select") == {"n": 17}
     assert "kpt_radius" in gui_utils.load_ui_settings()
+
+
+def test_emptied_labeling_set_stays_empty_after_reopen(qapp, tmp_path, monkeypatch):
+    proj = _project(tmp_path, labeled=())
+    win = _window(proj)
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.SmartSelectDialog", _FakeDialog
+    )
+    _FakeDialog.batch, _FakeDialog.start = [7, 3, 9], True
+    win.open_smart_select()
+    win.labeling_frames.clear()
+    win.save_project()
+    win.close()
+    win2 = _window(Project.from_json(canonical_project_path(proj.out_root)))
+    assert win2.labeling_frames == set()
