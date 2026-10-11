@@ -416,3 +416,55 @@ def test_legacy_embedding_cache_is_removed(qapp, tmp_path):
     dlg = _dialog(tmp_path, ["a.png"])
     dlg._remove_legacy_embedding_cache()
     assert not legacy.parent.exists() and keep.exists()
+
+
+def test_frame_mode_banner_admits_ungrouped_names(qapp, tmp_path):
+    from PySide6.QtWidgets import QLabel
+
+    dlg = _dialog(
+        tmp_path,
+        ["vid__f000644__000.png", "vid__f000644__001.png"],
+        frame_mode=True,
+        source_ids=["s", "s"],
+    )
+    texts = [w.text() for w in dlg.findChildren(QLabel)]
+    assert any("counts as its own frame" in t for t in texts)
+
+
+def test_frame_mode_marks_partly_labeled_frames(qapp, tmp_path):
+    names = [f"did{f * 10000 + k}.jpg" for f in range(1, 21) for k in range(2)]
+    dlg = _dialog(
+        tmp_path,
+        names,
+        labeled=[0],  # frame 1 has one of its two individuals labeled
+        frame_mode=True,
+        source_ids=["src"] * len(names),
+    )
+    dlg.cb_scope.setCurrentText("All frames")
+    dlg.cb_exclude_in_labeling.setChecked(False)
+    dlg.n_spin.setValue(20)
+    _build(qapp, dlg, np.repeat(_blobs([10, 10]), 2, axis=0))
+    row = dlg.batch_units.index(0)
+    assert "(1 of 2 already labeled)" in dlg.table.item(row, 4).text()
+
+
+def test_explorer_cannot_add_frames_outside_scope(qapp, tmp_path, monkeypatch):
+    names = [f"img{i:03d}.png" for i in range(40)]
+    dlg = _dialog(tmp_path, names, labeled=[0, 1])
+    dlg.n_spin.setValue(4)
+    _build(qapp, dlg, _blobs([20, 20]))
+    batch = list(dlg.batch_units)
+
+    class _Explorer:
+        def __init__(self, **kwargs):
+            self.selected_indices = batch + [0]  # 0 is labeled
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog", _Explorer
+    )
+    dlg._open_explorer()
+    assert dlg.batch_units == batch
+    assert "Skipped 1" in dlg.lbl_status.text()

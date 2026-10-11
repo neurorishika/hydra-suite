@@ -731,6 +731,16 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
 
+        # Resume an unfinished Smart Select batch in its order.
+        if any(
+            not self._is_labeled(self.image_paths[i])
+            for i in self._smart_batch_indices()
+            if i in self.labeling_frames
+        ):
+            self.sort_combo.blockSignals(True)
+            self.sort_combo.setCurrentText(SORT_SMART_BATCH)
+            self.sort_combo.blockSignals(False)
+
         # Populate list + load
         self._populate_frames()
         # Don't auto-load a frame on startup to avoid odd zoom; user clicks to load.
@@ -1432,7 +1442,15 @@ class MainWindow(QMainWindow):
             "show_predictions": bool(self.cb_show_preds.isChecked()),
             "show_pred_conf": bool(self.cb_show_pred_conf.isChecked()),
         }
-        save_ui_settings(settings)
+        # Merge into what is stored: dialogs keep their own settings under
+        # "dialogs" in the same file, and a fresh dict would wipe them.
+        try:
+            stored = load_ui_settings()
+        except Exception:
+            stored = {}
+        merged = dict(stored) if isinstance(stored, dict) else {}
+        merged.update(settings)
+        save_ui_settings(merged)
 
     def _apply_display_settings(self, settings):
         if "kpt_radius" in settings:
@@ -1721,22 +1739,20 @@ class MainWindow(QMainWindow):
         """The saved labeling set, by path when the project has paths.
 
         Saved indices point at the wrong frames once images are added or
-        removed between sessions; saved paths do not.  The Smart Select batch
-        is always part of the set (it is added there when picked).
+        removed between sessions; saved paths do not.
         """
-        frames: set = set()
         paths = getattr(project, "labeling_frame_paths", None) or []
         if paths:
-            for p in paths:
-                idx = self._index_for_path(p)
-                if idx is not None:
-                    frames.add(idx)
-        else:
-            frames = {
-                int(i)
-                for i in (getattr(project, "labeling_frames", None) or [])
-                if 0 <= int(i) < len(self.image_paths)
-            }
+            # Authoritative: frames the user removed stay removed, even if
+            # they are in the saved Smart Select batch.
+            return {i for i in map(self._index_for_path, paths) if i is not None}
+        # Projects saved before paths were stored: indices, plus the batch
+        # (which is always added to the labeling set when picked).
+        frames = {
+            int(i)
+            for i in (getattr(project, "labeling_frames", None) or [])
+            if 0 <= int(i) < len(self.image_paths)
+        }
         frames.update(self._smart_batch_indices())
         return frames
 
@@ -3594,10 +3610,16 @@ class MainWindow(QMainWindow):
         except ValueError:
             search_start = 0
 
-        # Search forward in labeling frames
-        for i in range(search_start, len(labeling_indices)):
+        # Search forward in labeling frames (wrapping around while following a
+        # Smart Select batch, so frames before the current one aren't missed).
+        order = list(range(search_start, len(labeling_indices)))
+        if self.sort_combo.currentText() == SORT_SMART_BATCH:
+            order += list(range(0, min(search_start, len(labeling_indices))))
+        for i in order:
             idx = labeling_indices[i]
-            if not self._is_labeled(self.image_paths[idx]):
+            if idx != self.current_index and not self._is_labeled(
+                self.image_paths[idx]
+            ):
                 self._maybe_autosave()
                 self._select_frame_in_list(idx)
                 return
@@ -4233,8 +4255,9 @@ class MainWindow(QMainWindow):
         self._maybe_autosave()
         self._select_frame_in_list(target)
         n_open = sum(1 for i in batch if not self._is_labeled(self.image_paths[i]))
+        noun = "individuals" if self.config.frame_mode else "frames"
         self.statusBar().showMessage(
-            f"Smart Select batch: {n_open} of {len(batch)} frames to label — "
+            f"Smart Select batch: {n_open} of {len(batch)} {noun} to label — "
             "Next / Next unlabeled follow the batch order.",
             6000,
         )

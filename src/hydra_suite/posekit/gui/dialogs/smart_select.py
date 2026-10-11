@@ -223,6 +223,8 @@ class SmartSelectDialog(QDialog):
         self._sel_worker: Optional[SmartSelectWorker] = None
         self._busy = False
         self._cancel_requested = False
+        self._last_labeled = np.zeros(len(self.image_paths), dtype=bool)
+        self._last_candidates = np.zeros(len(self.image_paths), dtype=bool)
 
         # Results read by the caller after accept().
         self.selected_indices: List[int] = []
@@ -242,9 +244,15 @@ class SmartSelectDialog(QDialog):
         layout = QVBoxLayout(self)
 
         if self.frame_mode:
+            grouped = any(len(m) > 1 for m in self._frame_groups.values())
             banner = QLabel(
                 "Frame Mode is on — Smart Select picks whole source frames; "
                 "every individual on a picked frame is added."
+                if grouped
+                else "Frame Mode is on, but these file names don't say which "
+                "source frame each image came from (Frame Mode reads "
+                "did<detection id> crop names), so every image counts as its "
+                "own frame."
             )
             banner.setWordWrap(True)
             banner.setStyleSheet("font-weight: bold;")
@@ -809,6 +817,8 @@ class SmartSelectDialog(QDialog):
         labeled = np.array([bool(self.is_labeled_fn(p)) for p in self.image_paths])
         cand = np.zeros(n, dtype=bool)
         cand[self._eligible_indices] = True
+        self._last_labeled = labeled
+        self._last_candidates = cand
         preds = self.prediction_source.predictions if self.prediction_source else None
         label_paths: Dict[int, Path] = {}
         if preds and self.label_path_fn is not None:
@@ -901,10 +911,13 @@ class SmartSelectDialog(QDialog):
             f"in {outcome.n_clusters} clusters"
         ]
         if outcome.n_predicted:
-            parts.append(f"{outcome.n_predicted:,} with predictions")
+            inst = "individuals" if self.frame_mode else "images"
+            unit = "frames" if self.frame_mode else "images"
+            parts.append(f"{outcome.n_predicted:,} {inst} with predictions")
             parts.append(
-                f"{outcome.n_error_scored:,} labeled compared to the model, "
-                f"{int(info.get('n_errors', 0)):,} above the error threshold"
+                f"{outcome.n_error_scored:,} labeled {inst} compared to the "
+                f"model, {int(info.get('n_errors', 0)):,} {unit} above the "
+                "error threshold"
             )
         if info.get("suppressed"):
             parts.append(f"{int(info['suppressed']):,} near-duplicates skipped")
@@ -1008,12 +1021,17 @@ class SmartSelectDialog(QDialog):
         self.table.setRowCount(len(self.batch_units))
         for row, unit in enumerate(self.batch_units):
             reason = self._unit_reason.get(unit, "")
+            detail = self._detail(unit, reason)
+            members = self._outcome.units[unit]
+            n_lab = int(self._last_labeled[members].sum()) if len(members) > 1 else 0
+            if n_lab:
+                detail += f" ({n_lab} of {len(members)} already labeled)"
             cells = [
                 str(row + 1),
                 self._unit_name(unit),
                 str(int(self._outcome.unit_clusters[unit])),
                 _REASON_TEXT.get(reason, reason),
-                self._detail(unit, reason),
+                detail,
             ]
             for col, text in enumerate(cells):
                 item = QTableWidgetItem(text)
@@ -1097,7 +1115,15 @@ class SmartSelectDialog(QDialog):
         chosen = list(dict.fromkeys(int(i) for i in dialog.selected_indices))
         chosen_set = set(chosen)
         kept = [u for u in self.batch_units if u in chosen_set]
-        added = [u for u in chosen if u not in set(kept)]
+        new = [u for u in chosen if u not in set(kept)]
+        # Only frames the "Pick from" choice allows (e.g. not labeled ones
+        # under "Unlabeled only").
+        added = [u for u in new if self._last_candidates[out.units[u]].any()]
+        if len(added) < len(new):
+            self.lbl_status.setText(
+                f"Skipped {len(new) - len(added)} point(s) outside "
+                f"'{self.cb_scope.currentText()}'."
+            )
         for u in added:
             self._unit_reason[u] = REASON_EXPLORER
         self.batch_units = kept + added

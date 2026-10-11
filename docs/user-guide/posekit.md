@@ -89,11 +89,19 @@ methodology as ClassKit's candidate batches:
    frame on a UMAP map with the batch highlighted and click points in or out.
 4. **Start Labeling** adds the batch to the labeling set, switches the list to the
    *Smart Select batch* sort and opens the first unlabeled frame; Next / Next
-   unlabeled follow the batch order. **Add to Labeling Set** adds it without
-   changing the sort. The batch order is saved with the project.
+   unlabeled follow the batch order (Next unlabeled wraps around to open frames
+   earlier in the batch). **Add to Labeling Set** adds it without changing the
+   sort. The batch order is saved with the project, and reopening a project with
+   an unfinished batch switches back to the batch sort.
 
-In Frame Mode, Smart Select picks whole source frames (a frame counts as labeled
-when any of its individuals is) and adds every individual on each picked frame.
+In Frame Mode, Smart Select picks whole source frames and adds every individual on
+each picked frame; a frame that is partly labeled says so in the Detail column.
+Frame Mode groups images by the `did<detection id>` crop names that FilterKit
+exports; with other file names every image counts as its own frame, and the
+dialog says so.
+
+The labeling set is saved by image path, so it (and the batch) survives images
+being added or removed between sessions.
 
 Clustering also writes `posekit/clusters/clusters.csv` for every frame, which the
 *Cluster id* sort and the cluster-stratified export split use.

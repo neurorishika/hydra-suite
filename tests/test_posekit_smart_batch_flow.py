@@ -255,3 +255,51 @@ def test_re_adding_existing_frames_reports_order_update(qapp, tmp_path, monkeypa
     win.open_smart_select()
     assert "Batch order updated" in win.statusBar().currentMessage()
     assert win._smart_batch_indices() == [3, 7]
+
+
+def test_removed_batch_frames_stay_removed_after_reopen(qapp, tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    win = _window(proj)
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.SmartSelectDialog", _FakeDialog
+    )
+    _FakeDialog.batch, _FakeDialog.start = [7, 3, 9], False
+    win.open_smart_select()
+    win.labeling_frames.discard(3)
+    win.save_project()
+    win.close()
+    win2 = _window(Project.from_json(canonical_project_path(proj.out_root)))
+    names = {win2.image_paths[i].name for i in win2.labeling_frames}
+    assert "img03.png" not in names and {"img07.png", "img09.png"} <= names
+
+
+def test_reopen_resumes_unfinished_batch_and_wraps(qapp, tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    win = _window(proj)
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.SmartSelectDialog", _FakeDialog
+    )
+    _FakeDialog.batch, _FakeDialog.start = [7, 3, 9], False
+    win.open_smart_select()
+    win.save_project()
+    win.close()
+    win2 = _window(Project.from_json(canonical_project_path(proj.out_root)))
+    assert win2.sort_combo.currentText() == SORT_SMART_BATCH
+    # From the last batch frame, Next unlabeled wraps to the first open one.
+    win2._select_frame_in_list(9)
+    win2.next_unlabeled()
+    assert win2.current_index == 7
+
+
+def test_main_window_keeps_dialog_settings_when_saving(qapp, tmp_path):
+    from hydra_suite.posekit.gui.dialogs.utils import (
+        _load_dialog_settings,
+        _save_dialog_settings,
+    )
+
+    proj = _project(tmp_path)
+    win = _window(proj)
+    _save_dialog_settings("smart_select", {"n": 17})
+    win._save_ui_settings()
+    assert _load_dialog_settings("smart_select") == {"n": 17}
+    assert "kpt_radius" in gui_utils.load_ui_settings()

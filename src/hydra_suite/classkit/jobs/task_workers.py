@@ -1401,8 +1401,10 @@ class ALBatchWorker(QRunnable):
                 try:
                     from ..core.al.density import compute_cluster_densities
 
+                    # The AL batch is unseeded anyway; keep the fast
+                    # multi-threaded index build for large datasets.
                     cluster_densities = compute_cluster_densities(
-                        self.embeddings, self.cluster_assignments
+                        self.embeddings, self.cluster_assignments, deterministic=False
                     )
                 except Exception:
                     pass

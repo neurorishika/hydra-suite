@@ -33,6 +33,7 @@ def compute_knn_density(
     embeddings: np.ndarray,
     k: int = 10,
     return_indices: bool = False,
+    deterministic: bool = True,
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """Compute density proxy as mean distance to k nearest neighbors.
 
@@ -43,6 +44,10 @@ def compute_knn_density(
         embeddings: (N, D) embeddings
         k: Number of neighbors
         return_indices: If True, also return neighbor indices
+        deterministic: Above ``EXACT_KNN_MAX`` points the approximate index
+            is built single-threaded so the same input always gives the same
+            densities (about 10x slower to build); pass False when speed
+            matters more than run-to-run reproducibility.
 
     Returns:
         densities: (N,) mean kNN distances
@@ -60,9 +65,10 @@ def compute_knn_density(
         # them) would differ between runs with the same seed.
         idx = hnswlib.Index(space="l2", dim=D)
         idx.init_index(max_elements=N, ef_construction=100, M=16, random_seed=100)
-        idx.add_items(emb, np.arange(N), num_threads=1)
+        idx.add_items(emb, np.arange(N), num_threads=1 if deterministic else -1)
         idx.set_ef(max(k_search, 50))
-        labels, sq = idx.knn_query(emb, k=k_search, num_threads=1)
+        # Queries don't change the graph, so they can always run in parallel.
+        labels, sq = idx.knn_query(emb, k=k_search, num_threads=-1)
         # hnswlib returns squared distances.  Drop self by index (with
         # duplicate points it is not always column 0), else the farthest.
         keep = labels != np.arange(N)[:, None]
@@ -100,7 +106,10 @@ def compute_knn_density(
 
 
 def compute_cluster_densities(
-    embeddings: np.ndarray, cluster_assignments: np.ndarray, k: int = 10
+    embeddings: np.ndarray,
+    cluster_assignments: np.ndarray,
+    k: int = 10,
+    deterministic: bool = True,
 ) -> np.ndarray:
     """
     Compute per-cluster average density.
@@ -118,7 +127,7 @@ def compute_cluster_densities(
     cluster_densities = np.zeros(max(n_clusters, 0))
     if n_clusters <= 0 or len(embeddings) < 2:
         return cluster_densities
-    point_densities = compute_knn_density(embeddings, k=k)
+    point_densities = compute_knn_density(embeddings, k=k, deterministic=deterministic)
 
     for cluster_id in range(n_clusters):
         mask = ids == cluster_id

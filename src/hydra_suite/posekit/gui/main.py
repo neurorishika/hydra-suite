@@ -162,7 +162,10 @@ def main() -> None:
                 if proj is None:
                     sys.exit(2)
                 # For legacy (dataset-anchored) projects, run path repairs
-                dataset_dir = dataset_dir_for_cli_project(project_path, dataset_dir)
+                # The unresolved path keeps a symlinked posekit_project's name.
+                dataset_dir = dataset_dir_for_cli_project(
+                    Path(args.project).expanduser().absolute(), dataset_dir
+                )
                 if dataset_dir is not None:
                     from .project import _repair_project_paths as _rpaths
 
