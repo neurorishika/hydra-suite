@@ -1,10 +1,12 @@
-"""Tests for PoseKit's SmartSelectDialog Frame Mode support."""
+"""Tests for PoseKit's Smart Select dialog (ClassKit-style batch building)."""
 
 from __future__ import annotations
 
+import csv
 import gc
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,9 +17,17 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
-from hydra_suite.posekit.gui.dialogs.exploration import SmartSelectDialog  # noqa: E402
+from hydra_suite.posekit.core.selection import (  # noqa: E402
+    REASON_ERROR,
+    REASON_UNCERTAINTY,
+)
+from hydra_suite.posekit.gui.dialogs import smart_select as ss  # noqa: E402
+from hydra_suite.posekit.gui.dialogs.smart_select import (  # noqa: E402
+    PredictionSource,
+    SmartSelectDialog,
+)
 
 
 @pytest.fixture()
@@ -26,6 +36,18 @@ def qapp():
     if app is None:
         app = QApplication(sys.argv)
     return app
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(monkeypatch):
+    store = {}
+    monkeypatch.setattr(
+        ss, "_load_dialog_settings", lambda key: dict(store.get(key, {}))
+    )
+    monkeypatch.setattr(
+        ss, "_save_dialog_settings", lambda key, val: store.__setitem__(key, dict(val))
+    )
+    return store
 
 
 @pytest.fixture(autouse=True)
@@ -38,170 +60,232 @@ def cleanup_qt_widgets(qapp):
     gc.collect()
 
 
-def _make_dialog(qapp, frame_mode, image_paths, source_ids=None, out_root=None):
+def _blobs(sizes, dim=16, seed=0):
+    rng = np.random.default_rng(seed)
+    centers = rng.normal(size=(len(sizes), dim)) * 3
+    return np.vstack(
+        [
+            centers[c] + rng.normal(scale=0.05, size=(n, dim))
+            for c, n in enumerate(sizes)
+        ]
+    ).astype(np.float32)
+
+
+def _dialog(tmp_path, names, labeled=(), frame_mode=False, source_ids=None, **kw):
     project = SimpleNamespace(
-        enhance_enabled=False, out_root=out_root or Path("/tmp/_unused_out_root")
+        enhance_enabled=False, out_root=tmp_path, keypoint_names=["a", "b"]
     )
+    paths = [tmp_path / "images" / n for n in names]
+    labeled_set = {paths[i] for i in labeled}
     return SmartSelectDialog(
         None,
         project,
-        image_paths,
-        lambda p: False,
+        paths,
+        lambda p: p in labeled_set,
         frame_mode=frame_mode,
-        source_ids=source_ids or [None] * len(image_paths),
+        source_ids=source_ids,
+        labeling_frames=set(labeled),
+        **kw,
     )
 
 
-def test_smart_select_dialog_frame_mode_disables_stratified_controls(qapp):
-    dialog = _make_dialog(
-        qapp, True, [Path("did10000.jpg"), Path("did10001.jpg")], ["src_a", "src_a"]
-    )
-
-    assert dialog.min_per_spin.isEnabled() is False
-    assert dialog.strategy_combo.isEnabled() is False
-    assert dialog.min_per_spin.toolTip() == (
-        "Not used in Frame Mode — frame selection uses greedy "
-        "cluster-coverage instead of per-cluster quotas."
-    )
-
-
-def test_smart_select_dialog_individual_mode_controls_stay_enabled(qapp):
-    dialog = _make_dialog(qapp, False, [Path("a.png"), Path("b.png")])
-
-    assert dialog.min_per_spin.isEnabled() is True
-    assert dialog.strategy_combo.isEnabled() is True
+def _build(qapp, dlg, emb, timeout=30.0):
+    """Run Build Batch with precomputed embeddings and wait for the worker."""
+    dlg._emb_all = emb
+    dlg._emb_key = dlg._embedding_key()
+    dlg._build()
+    deadline = time.monotonic() + timeout
+    while dlg._sel_worker is not None and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+    assert dlg._sel_worker is None, "selection worker did not finish"
 
 
-def test_smart_select_dialog_preview_renders_one_line_per_frame(qapp, tmp_path):
-    dialog = _make_dialog(
-        qapp,
-        True,
-        [Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
-        ["src_a", "src_a", "src_a"],
-        out_root=tmp_path,
-    )
-    dialog._eligible_indices = [0, 1, 2]
-    # Non-degenerate, distinguishable embeddings: idx0/idx2 identical
-    # (frame (src_a, 1) is internally similar), idx1 orthogonal to both
-    # (a distinct, separable cluster) -- avoids NaN cosine distances that
-    # all-zero vectors would produce.
-    dialog._emb = np.array(
-        [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
-        dtype=np.float32,
-    )
-    dialog.n_spin.setValue(1)
-    dialog.k_spin.setValue(2)
+def test_builds_ordered_batch_and_starts_labeling(qapp, tmp_path):
+    names = [f"img{i:03d}.png" for i in range(60)]
+    dlg = _dialog(tmp_path, names, labeled=range(10))
+    dlg.n_spin.setValue(12)
+    assert not dlg.btn_start.isEnabled()
+    _build(qapp, dlg, _blobs([30, 25, 5]))
 
-    dialog._preview()
+    assert len(dlg.batch_units) == 12 == dlg.table.rowCount()
+    assert not set(dlg.batch_units) & set(range(10))  # labeled are not candidates
+    assert dlg.btn_start.isEnabled()
+    # Without predictions the model slots are off and say why.
+    assert not dlg.error_spin.isEnabled()
+    assert "Model signals off" in dlg.model_label.text()
+    assert dlg.summary_label.text().startswith("<b>12 images")
 
-    text = dialog.preview.toPlainText()
-    assert text.startswith("[frame 1] covers clusters")
-    assert "2 instances" in text
-    assert sorted(dialog.selected_indices) == [0, 1]
+    dlg._finish(start=True)
+    assert dlg.result() == QDialog.Accepted
+    assert dlg.start_labeling is True
+    assert dlg.selected_indices == dlg.batch_units  # pick order kept
 
 
-def test_open_explorer_frame_mode_expands_and_confirms(qapp, monkeypatch):
-    dialog = _make_dialog(
-        qapp,
-        True,
-        [Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
-        ["src_a", "src_a", "src_a"],
-    )
-    dialog._eligible_indices = [0, 1, 2]
-    dialog._emb = np.zeros((3, 4), dtype=np.float32)
-    dialog._cluster = np.array([0, 1, 0])
-    dialog.selected_indices = []
+def test_clusters_csv_covers_every_frame(qapp, tmp_path):
+    names = [f"img{i:03d}.png" for i in range(40)]
+    dlg = _dialog(tmp_path, names, labeled=range(5))
+    _build(qapp, dlg, _blobs([20, 20]))
+    csv_path = tmp_path / "posekit" / "clusters" / "clusters.csv"
+    rows = list(csv.DictReader(csv_path.open()))
+    assert len(rows) == 40
+    assert {r["image"] for r in rows} == {str(tmp_path / "images" / n) for n in names}
+
+
+def test_remove_rows_and_explorer_merge(qapp, tmp_path, monkeypatch):
+    names = [f"img{i:03d}.png" for i in range(40)]
+    dlg = _dialog(tmp_path, names)
+    dlg.n_spin.setValue(6)
+    _build(qapp, dlg, _blobs([20, 20]))
+    first = list(dlg.batch_units)
+
+    dlg.table.selectRow(0)
+    dlg._remove_selected_rows()
+    assert dlg.batch_units == first[1:]
+
+    new_unit = next(u for u in range(40) if u not in first)
 
     class _FakeExplorer:
         def __init__(self, **kwargs):
-            pass
+            assert kwargs["initial_selection"] == first[1:]
+            _FakeExplorer.kwargs = kwargs
+            self.selected_indices = [first[2], new_unit]  # drop all but one
 
-        def exec_(self):
+        def exec(self):
             return QDialog.Accepted
-
-        selected_indices = [
-            0
-        ]  # local index 0 -> global index 0 (frame with companion 1)
 
     monkeypatch.setattr(
         "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog",
         _FakeExplorer,
     )
+    dlg._open_explorer()
+    assert dlg.batch_units == [first[2], new_unit]
+    assert dlg._unit_reason[new_unit] == ss.REASON_EXPLORER
+    assert "Picked in Explorer" in dlg.table.item(1, 3).text()
+
+
+def test_frame_mode_picks_whole_frames(qapp, tmp_path):
+    # Two instances per source frame (did = frame * 10000 + instance).
+    names = [f"did{f * 10000 + k}.jpg" for f in range(1, 21) for k in range(2)]
+    dlg = _dialog(tmp_path, names, frame_mode=True, source_ids=["src"] * len(names))
+    dlg.n_spin.setValue(5)
+    emb = np.repeat(_blobs([10, 10]), 2, axis=0)
+    _build(qapp, dlg, emb)
+    assert len(dlg.batch_units) == 5
+    picked = dlg.batch_instances()
+    assert len(picked) == 10
+    frames = {names[i][3:].split(".")[0] for i in picked}
+    assert len({int(f) // 10000 for f in frames}) == 5
+    assert "(+1 on frame)" in dlg.table.item(0, 1).text()
+
+
+def test_scope_labeling_set_reorders_existing_frames(qapp, tmp_path):
+    names = [f"img{i:03d}.png" for i in range(30)]
+    dlg = _dialog(tmp_path, names)
+    dlg.labeling_frames = {3, 4, 5, 20}
+    dlg.cb_scope.setCurrentText("Labeling set")
+    dlg.n_spin.setValue(10)
+    _build(qapp, dlg, _blobs([15, 15]))
+    assert sorted(dlg.batch_units) == [3, 4, 5, 20]
+
+
+def _write_png(path, size=(64, 64)):
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size).save(path)
+
+
+def test_model_signals_drive_error_and_uncertainty_picks(qapp, tmp_path):
+    names = [f"img{i:03d}.png" for i in range(40)]
+    paths = [tmp_path / "images" / n for n in names]
+    labels_dir = tmp_path / "labels"
+    labels_dir.mkdir()
+    labeled = list(range(0, 4)) + list(range(20, 24))
+    for i in labeled:
+        _write_png(paths[i])
+        # bbox covers the image; keypoints at (0.25, 0.25) and (0.75, 0.75)
+        (labels_dir / f"{paths[i].stem}.txt").write_text(
+            "0 0.5 0.5 1.0 1.0 0.25 0.25 2 0.75 0.75 2\n"
+        )
+    preds = {}
+    for i in range(40):
+        conf = 0.9 if i % 2 else 0.2  # even frames: model unsure
+        preds[str(paths[i])] = [(16.0, 16.0, conf), (48.0, 48.0, conf)]
+    for i in range(20, 24):  # blob 1 labels: the model is far off
+        preds[str(paths[i])] = [(60.0, 2.0, 0.9), (2.0, 60.0, 0.9)]
+
+    dlg = _dialog(
+        tmp_path,
+        names,
+        labeled=labeled,
+        label_path_fn=lambda p: labels_dir / f"{p.stem}.txt",
+        prediction_source=PredictionSource("m.pt (yolo)", preds),
+    )
+    assert dlg.error_spin.isEnabled()
+    assert "40 of 40 frames" in dlg.model_label.text()
+    dlg.n_spin.setValue(10)
+    _build(qapp, dlg, _blobs([20, 20]))
+
+    out = dlg._outcome
+    assert out.n_predicted == 40 and out.n_error_scored == 8
+    assert out.result.info["n_errors"] == 4
+    err_picks = out.result.breakdown[REASON_ERROR]
+    assert err_picks and all(20 <= u < 40 for u in err_picks)
+    unc_picks = out.result.breakdown[REASON_UNCERTAINTY]
+    assert unc_picks and all(u % 2 == 0 for u in unc_picks)
+    row = dlg.batch_units.index(err_picks[0])
+    assert dlg.table.item(row, 4).text().startswith("looks like img02")
+    assert "with predictions" in dlg.lbl_status.text()
+
+
+def test_settings_persist_on_any_close(qapp, tmp_path, isolated_settings):
+    dlg = _dialog(tmp_path, ["a.png", "b.png"])
+    dlg.n_spin.setValue(77)
+    dlg.rare_spin.setValue(33)
+    dlg.cluster_method_combo.setCurrentIndex(1)
+    dlg.reject()
+    saved = isolated_settings["smart_select"]
+    assert saved["n"] == 77 and saved["mix"]["rare_spin"] == 33
+    assert saved["cluster_method_v2"] == "minibatch"
+
+    again = _dialog(tmp_path, ["a.png", "b.png"])
+    assert again.n_spin.value() == 77 and again.rare_spin.value() == 33
+    assert again.cluster_method_combo.currentData() == "minibatch"
+
+
+def test_mix_remainder_label(qapp, tmp_path):
+    dlg = _dialog(tmp_path, ["a.png"])
+    assert dlg.remainder_label.text() == "Random checks: 5%"
+    dlg.diversity_spin.setValue(90)
+    assert "scaled down" in dlg.remainder_label.text()
+
+
+def test_nothing_eligible_shows_message(qapp, tmp_path, monkeypatch):
+    shown = []
     monkeypatch.setattr(
-        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes)
+        ss.QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[2]))
     )
-    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
-
-    dialog._open_explorer()
-
-    assert sorted(dialog.selected_indices) == [0, 1]
-
-
-def test_open_explorer_frame_mode_cancel_adds_nothing(qapp, monkeypatch):
-    dialog = _make_dialog(
-        qapp,
-        True,
-        [Path("did10000.jpg"), Path("did10001.jpg")],
-        ["src_a", "src_a"],
-    )
-    dialog._eligible_indices = [0, 1]
-    dialog._emb = np.zeros((2, 4), dtype=np.float32)
-    dialog._cluster = np.array([0, 1])
-    dialog.selected_indices = []
-
-    class _FakeExplorer:
-        def __init__(self, **kwargs):
-            pass
-
-        def exec_(self):
-            return QDialog.Accepted
-
-        selected_indices = [0]
-
-    monkeypatch.setattr(
-        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog",
-        _FakeExplorer,
-    )
-    monkeypatch.setattr(
-        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No)
-    )
-
-    dialog._open_explorer()
-
-    assert dialog.selected_indices == []
+    dlg = _dialog(tmp_path, ["a.png", "b.png"], labeled=[0, 1])
+    dlg._build()
+    assert shown and "No frames match" in shown[0]
+    assert dlg._sel_worker is None
 
 
-def test_open_explorer_individual_mode_unchanged(qapp, monkeypatch):
-    dialog = _make_dialog(qapp, False, [Path("a.png"), Path("b.png")])
-    dialog._eligible_indices = [0, 1]
-    dialog._emb = np.zeros((2, 4), dtype=np.float32)
-    dialog._cluster = np.array([0, 1])
-    dialog.selected_indices = []
+def test_old_import_path_still_works():
+    from hydra_suite.posekit.gui.dialogs.exploration import SmartSelectDialog as Old
 
-    class _FakeExplorer:
-        def __init__(self, **kwargs):
-            pass
+    assert Old is SmartSelectDialog
 
-        def exec_(self):
-            return QDialog.Accepted
 
-        selected_indices = [0]
-
-    monkeypatch.setattr(
-        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog",
-        _FakeExplorer,
-    )
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(
-            lambda *a, **k: (_ for _ in ()).throw(
-                AssertionError("must not confirm outside frame mode")
-            )
-        ),
-    )
-    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
-
-    dialog._open_explorer()
-
-    assert dialog.selected_indices == [0]
+def test_without_predictions_model_share_fills_gaps_not_random(qapp, tmp_path):
+    names = [f"img{i:03d}.png" for i in range(80)]
+    dlg = _dialog(tmp_path, names, labeled=range(10))
+    dlg.n_spin.setValue(20)
+    _build(qapp, dlg, _blobs([40, 30, 10]))
+    bd = dlg._outcome.result.breakdown
+    # Default mix: 5% random checks -> 1 of 20; errors+uncertainty (45%) go
+    # to the diversity top-up.
+    assert len(bd.get(ss.REASON_AUDIT, [])) == 1
+    assert len(bd[ss.REASON_DIVERSITY]) >= 6 + 9

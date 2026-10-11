@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-Exploration dialogs: Smart Select, Embedding Explorer, Frame Metadata.
+Embedding Explorer: a UMAP map of frame embeddings with hover previews.
+
+Smart Select lives in :mod:`.smart_select` (re-exported here for old imports).
 """
 
-import csv
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QDialog,
     QDoubleSpinBox,
-    QFileDialog,
-    QFormLayout,
     QFrame,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -26,8 +23,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPlainTextEdit,
-    QProgressBar,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -35,704 +30,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.posekit.core.frame_grouping import (
-    FRAME_MODE_CONFIRMATION_TEMPLATE,
-    group_indices_by_frame,
-)
-from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
-
-from ...core.extensions import (
-    EmbeddingWorker,
-    cluster_embeddings_cosine,
-    pick_frames_stratified,
-    select_frames_by_cluster_coverage,
-)
-from .utils import _load_dialog_settings, _save_dialog_settings, get_available_devices
-
 logger = logging.getLogger("pose_label.dialogs.exploration")
 
+# UMAP runs still fitting when their explorer closed (thread, worker).
+_RUNNING_UMAP: list = []
 
-class SmartSelectDialog(QDialog):
-    """Dialog for smart frame selection using embeddings and clustering."""
 
-    def __init__(
-        self,
-        parent,
-        project,
-        image_paths: List[Path],
-        is_labeled_fn,
-        frame_mode: bool = False,
-        source_ids: Optional[List[Any]] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Smart Select (Embeddings)")
-        self.setMinimumSize(QSize(720, 420))
-        self.project = project
-        self.image_paths = image_paths
-        self.is_labeled_fn = is_labeled_fn
-        self.frame_mode = frame_mode
-        self._frame_groups = group_indices_by_frame(
-            [p.name for p in image_paths],
-            source_ids if source_ids is not None else [None] * len(image_paths),
-        )
-        self._idx_to_frame_key = {
-            i: key for key, idxs in self._frame_groups.items() for i in idxs
-        }
+def _keep_until_finished(thread, worker) -> None:
+    entry = (thread, worker)
+    _RUNNING_UMAP.append(entry)
 
-        self._emb = None
-        self._eligible_indices = None
-        self._cluster = None
+    def _release() -> None:
+        if entry in _RUNNING_UMAP:
+            _RUNNING_UMAP.remove(entry)
 
-        layout = QVBoxLayout(self)
-
-        if self.frame_mode:
-            lbl_frame_mode = QLabel(
-                "Frame Mode is ON — results grouped by source frame"
-            )
-            lbl_frame_mode.setStyleSheet("font-weight: bold;")
-            layout.addWidget(lbl_frame_mode)
-
-        # --- scope
-        scope_row = QHBoxLayout()
-        scope_row.addWidget(QLabel("Scope"))
-        self.cb_scope = QComboBox()
-        self.cb_scope.addItems(["Unlabeled only", "All frames", "Labeling set"])
-        self.cb_scope.setToolTip(
-            "Which frames to select from:\n"
-            "• Unlabeled only: Only frames not yet labeled\n"
-            "• All frames: All available frames\n"
-            "• Labeling set: Only frames in current labeling set"
-        )
-        scope_row.addWidget(self.cb_scope, 1)
-        self.cb_exclude_in_labeling = QCheckBox("Exclude already in labeling set")
-        self.cb_exclude_in_labeling.setChecked(True)
-        self.cb_exclude_in_labeling.setToolTip(
-            "Don't select frames already being labeled"
-        )
-        scope_row.addWidget(self.cb_exclude_in_labeling)
-        layout.addLayout(scope_row)
-
-        # --- embeddings
-        emb_form = QFormLayout()
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self.model_combo.addItems(
-            [
-                # DINO v2 models (recommended for general image understanding)
-                "timm/vit_base_patch14_dinov2.lvd142m",
-                "timm/vit_small_patch14_dinov2.lvd142m",
-                "timm/vit_large_patch14_dinov2.lvd142m",
-                "timm/vit_giant_patch14_dinov2.lvd142m",
-                # CLIP models
-                "timm/vit_base_patch32_clip_224.openai",
-                "timm/vit_bigG_14_clip_224.laion400M_e32",
-                "timm/convnext_base_w_clip.laion2b_s29B_b131k_ft_in1k",
-                # ResNet models
-                "timm/resnet50.a1_in1k",
-                "timm/resnet18.a1_in1k",
-                "timm/resnet101.a1_in1k",
-                # EfficientNet models
-                "timm/efficientnet_b0.ra_in1k",
-                "timm/efficientnet_b3.ra2_in1k",
-                "timm/efficientnet_b5.sw_in12k_ft_in1k",
-                # MobileNet models
-                "timm/mobilenetv3_small_100.lamb_in1k",
-                "timm/mobilenetv3_large_100.ra_in1k",
-                # ConvNeXt models
-                "timm/convnext_tiny.fb_in1k",
-                "timm/convnext_base.fb_in1k",
-            ]
-        )
-        emb_form.addRow("Embedding model", self.model_combo)
-
-        dev_row = QHBoxLayout()
-        self.dev_combo = QComboBox()
-        self.dev_combo.addItems(get_available_devices())
-        dev_row.addWidget(self.dev_combo)
-        dev_row.addWidget(QLabel("Batch size"))
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(1, 512)
-        self.batch_spin.setValue(32)
-        dev_row.addWidget(self.batch_spin)
-        self.cb_auto_batch = QCheckBox("Auto")
-        self.cb_auto_batch.setChecked(True)
-        dev_row.addWidget(self.cb_auto_batch)
-
-        dev_row.addWidget(QLabel("Max side"))
-        self.max_side_spin = QSpinBox()
-        self.max_side_spin.setRange(0, 2048)
-        self.max_side_spin.setValue(512)
-        dev_row.addWidget(self.max_side_spin)
-        emb_form.addRow("Device and batch size", dev_row)
-
-        self.cb_use_enhance = QCheckBox("Enhance images (CLAHE + unsharp)")
-        self.cb_use_enhance.setChecked(bool(self.project.enhance_enabled))
-        emb_form.addRow("", self.cb_use_enhance)
-
-        layout.addLayout(emb_form)
-
-        # --- compute button + progress
-        row = QHBoxLayout()
-        self.btn_compute = QPushButton("Compute / Load cached embeddings")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setEnabled(False)
-        row.addWidget(self.btn_compute, 1)
-        row.addWidget(self.btn_cancel)
-        layout.addLayout(row)
-
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setTextVisible(True)
-        self.progress.setFormat("%p%  %v / %m")
-        layout.addWidget(self.progress)
-
-        self.lbl_status = QLabel("")
-        self.lbl_status.setWordWrap(True)
-        layout.addWidget(self.lbl_status)
-
-        # --- selection params
-        sel_row = QHBoxLayout()
-        sel_row.addWidget(QLabel("Frames to add"))
-        self.n_spin = QSpinBox()
-        self.n_spin.setRange(1, 50000)
-        self.n_spin.setValue(50)
-        sel_row.addWidget(self.n_spin)
-
-        sel_row.addWidget(QLabel("Clusters"))
-        self.k_spin = QSpinBox()
-        self.k_spin.setRange(1, 5000)
-        self.k_spin.setValue(20)
-        sel_row.addWidget(self.k_spin)
-
-        sel_row.addWidget(QLabel("Min per cluster"))
-        self.min_per_spin = QSpinBox()
-        self.min_per_spin.setRange(1, 1000)
-        self.min_per_spin.setValue(1)
-        sel_row.addWidget(self.min_per_spin)
-
-        self.strategy_combo = QComboBox()
-        self.strategy_combo.addItems(["centroid_then_diverse", "centroid"])
-        sel_row.addWidget(QLabel("Strategy"))
-        sel_row.addWidget(self.strategy_combo, 1)
-
-        layout.addLayout(sel_row)
-
-        if self.frame_mode:
-            self.min_per_spin.setEnabled(False)
-            self.min_per_spin.setToolTip(
-                "Not used in Frame Mode — frame selection uses greedy "
-                "cluster-coverage instead of per-cluster quotas."
-            )
-            self.strategy_combo.setEnabled(False)
-            self.strategy_combo.setToolTip(
-                "Not used in Frame Mode — frame selection uses greedy "
-                "cluster-coverage instead of per-cluster quotas."
-            )
-
-        self.k_spin.valueChanged.connect(self._update_min_frames)
-        self.min_per_spin.valueChanged.connect(self._update_min_frames)
-
-        # --- Sampling options
-        opt_row = QHBoxLayout()
-
-        self.cb_filter_duplicates = QCheckBox("Filter near-duplicates")
-        opt_row.addWidget(self.cb_filter_duplicates)
-
-        opt_row.addWidget(QLabel("Threshold"))
-        self.dup_threshold_spin = QDoubleSpinBox()
-        self.dup_threshold_spin.setRange(0.5, 1.0)
-        self.dup_threshold_spin.setSingleStep(0.05)
-        self.dup_threshold_spin.setValue(0.95)
-        self.dup_threshold_spin.setEnabled(False)
-        opt_row.addWidget(self.dup_threshold_spin)
-        self.cb_filter_duplicates.toggled.connect(self.dup_threshold_spin.setEnabled)
-
-        opt_row.addWidget(QLabel("   "))
-        self.cb_prefer_unlabeled = QCheckBox("Prefer unlabeled")
-        self.cb_prefer_unlabeled.setChecked(True)
-        opt_row.addWidget(self.cb_prefer_unlabeled)
-
-        opt_row.addStretch()
-        layout.addLayout(opt_row)
-
-        # --- clustering method row
-        cluster_row = QHBoxLayout()
-        cluster_row.addWidget(QLabel("Which clustering method should be used?"))
-        self.cluster_method_combo = QComboBox()
-        self.cluster_method_combo.addItems(["hierarchical", "linkage"])
-        self.cluster_method_combo.setCurrentIndex(0)
-        cluster_row.addWidget(self.cluster_method_combo, 1)
-        cluster_row.addStretch(2)
-        layout.addLayout(cluster_row)
-
-        # --- preview text
-        self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
-        layout.addWidget(self.preview, 1)
-
-        # --- bottom buttons
-        # Left group: analysis actions  |  Right group: dialog actions
-        bottom = QHBoxLayout()
-        self.btn_preview = QPushButton("Run Clustering")
-        self.btn_explorer = QPushButton("Embedding Explorer…")
-        self.btn_explorer.setEnabled(False)
-        self.btn_save_csv = QPushButton("Save clusters CSV…")
-        self.btn_add = QPushButton("Add to Labeling Set && Close")
-        self.btn_close = QPushButton("Close")
-        bottom.addWidget(self.btn_preview)
-        bottom.addWidget(self.btn_explorer)
-        bottom.addWidget(self.btn_save_csv)
-        bottom.addStretch(1)
-        bottom.addWidget(self.btn_add)
-        bottom.addWidget(self.btn_close)
-        layout.addLayout(bottom)
-
-        self.btn_preview.setEnabled(False)
-        self.btn_add.setEnabled(False)
-        self.btn_save_csv.setEnabled(False)
-        self.btn_explorer.setEnabled(False)
-
-        # wiring
-        self.btn_close.clicked.connect(self._on_close)
-        self.btn_add.clicked.connect(self._on_add)
-        self.btn_compute.clicked.connect(self._compute)
-        self.btn_cancel.clicked.connect(self._cancel_compute)
-        self.btn_preview.clicked.connect(self._preview)
-        self.btn_save_csv.clicked.connect(self._save_csv)
-        self.btn_explorer.clicked.connect(self._open_explorer)
-
-        self.selected_indices: List[int] = []
-        self._did_add = False
-
-        self._thread = None
-        self._worker = None
-
-        self._update_min_frames()
-        self._apply_settings()
-
-    def _on_add(self):
-        self._did_add = True
-        self.accept()
-
-    def _on_close(self):
-        self.selected_indices = []
-        self._did_add = False
-        self.reject()
-
-    def _apply_settings(self):
-        settings = _load_dialog_settings("smart_select")
-        if not settings:
-            return
-        self.cb_scope.setCurrentText(settings.get("scope", self.cb_scope.currentText()))
-        self.cb_exclude_in_labeling.setChecked(
-            bool(
-                settings.get(
-                    "exclude_labeling", self.cb_exclude_in_labeling.isChecked()
-                )
-            )
-        )
-        self.model_combo.setCurrentText(
-            settings.get("model", self.model_combo.currentText())
-        )
-        self.dev_combo.setCurrentText(
-            settings.get("device", self.dev_combo.currentText())
-        )
-        self.batch_spin.setValue(int(settings.get("batch", self.batch_spin.value())))
-        self.cb_auto_batch.setChecked(
-            bool(settings.get("auto_batch", self.cb_auto_batch.isChecked()))
-        )
-        self.max_side_spin.setValue(
-            int(settings.get("max_side", self.max_side_spin.value()))
-        )
-        self.cb_use_enhance.setChecked(
-            bool(settings.get("use_enhance", self.cb_use_enhance.isChecked()))
-        )
-        self.n_spin.setValue(int(settings.get("n", self.n_spin.value())))
-        self.k_spin.setValue(int(settings.get("k", self.k_spin.value())))
-        self.min_per_spin.setValue(
-            int(settings.get("min_per", self.min_per_spin.value()))
-        )
-        self.strategy_combo.setCurrentText(
-            settings.get("strategy", self.strategy_combo.currentText())
-        )
-        self.cb_filter_duplicates.setChecked(
-            bool(settings.get("filter_dups", self.cb_filter_duplicates.isChecked()))
-        )
-        self.dup_threshold_spin.setValue(
-            float(settings.get("dup_thresh", self.dup_threshold_spin.value()))
-        )
-        self.cb_prefer_unlabeled.setChecked(
-            bool(settings.get("prefer_unlabeled", self.cb_prefer_unlabeled.isChecked()))
-        )
-        self.cluster_method_combo.setCurrentText(
-            settings.get("cluster_method", self.cluster_method_combo.currentText())
-        )
-
-    def _save_settings(self):
-        _save_dialog_settings(
-            "smart_select",
-            {
-                "scope": self.cb_scope.currentText(),
-                "exclude_labeling": bool(self.cb_exclude_in_labeling.isChecked()),
-                "model": self.model_combo.currentText().strip(),
-                "device": self.dev_combo.currentText(),
-                "batch": int(self.batch_spin.value()),
-                "auto_batch": bool(self.cb_auto_batch.isChecked()),
-                "max_side": int(self.max_side_spin.value()),
-                "use_enhance": bool(self.cb_use_enhance.isChecked()),
-                "n": int(self.n_spin.value()),
-                "k": int(self.k_spin.value()),
-                "min_per": int(self.min_per_spin.value()),
-                "strategy": self.strategy_combo.currentText(),
-                "filter_dups": bool(self.cb_filter_duplicates.isChecked()),
-                "dup_thresh": float(self.dup_threshold_spin.value()),
-                "prefer_unlabeled": bool(self.cb_prefer_unlabeled.isChecked()),
-                "cluster_method": self.cluster_method_combo.currentText(),
-            },
-        )
-
-    def closeEvent(self, event) -> None:
-        """Persist smart-select dialog settings to disk before the window closes."""
-        self._save_settings()
-        super().closeEvent(event)
-
-    def _build_eligible_indices(self) -> List[int]:
-        scope = self.cb_scope.currentText()
-        if scope == "All frames":
-            idxs = list(range(len(self.image_paths)))
-        elif scope == "Labeling set":
-            idxs = list(getattr(self.parent(), "labeling_frames", set()))
-        else:
-            # Unlabeled only
-            idxs = [
-                i for i, p in enumerate(self.image_paths) if not self.is_labeled_fn(p)
-            ]
-        if self.cb_exclude_in_labeling.isChecked():
-            in_labeling = set(getattr(self.parent(), "labeling_frames", set()))
-            idxs = [i for i in idxs if i not in in_labeling]
-        return sorted(idxs)
-
-    def _update_min_frames(self):
-        if self.frame_mode:
-            # Frame Mode doesn't use min_per_spin's per-cluster quota, so
-            # the k * min_per lower bound on "frames to add" doesn't apply.
-            return
-        min_frames = self.k_spin.value() * self.min_per_spin.value()
-        self.n_spin.setMinimum(min_frames)
-        if self.n_spin.value() < min_frames:
-            self.n_spin.setValue(min_frames)
-
-    def _compute(self):
-        eligible = self._build_eligible_indices()
-        if not eligible:
-            QMessageBox.information(
-                self, "No frames", "No eligible frames in this scope."
-            )
-            return
-
-        cache_dir = self.project.out_root / "posekit" / "embeddings"
-
-        self.btn_compute.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
-        self.btn_preview.setEnabled(False)
-        self.btn_add.setEnabled(False)
-        self.btn_save_csv.setEnabled(False)
-        self.preview.setPlainText("")
-        self.lbl_status.setText("Starting…")
-        self.progress.setMaximum(100)
-        self.progress.setValue(0)
-        self.progress.setFormat("%p%")
-
-        self._thread = QThread(self)
-        self._worker = EmbeddingWorker(
-            image_paths=self.image_paths,
-            eligible_indices=eligible,
-            cache_dir=cache_dir,
-            model_name=self.model_combo.currentText().strip(),
-            device_pref=self.dev_combo.currentText(),
-            batch_size=int(self.batch_spin.value()),
-            use_enhance=bool(self.cb_use_enhance.isChecked()),
-            max_side=int(self.max_side_spin.value()),
-            cache_ok=True,
-        )
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.status.connect(self._on_status)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.finished.connect(self._on_finished)
-        self._thread.start()
-
-    def _cancel_compute(self):
-        if self._worker:
-            self._worker.cancel()
-
-    def _on_progress(self, done: int, total: int):
-        self.progress.setMaximum(max(1, total))
-        self.progress.setValue(done)
-        self.progress.setFormat(f"%v / {max(1, total)}  (%p%)")
-
-    def _on_status(self, s: str):
-        self.lbl_status.setText(s)
-
-    def _on_failed(self, msg: str):
-        self._cleanup_thread()
-        QMessageBox.critical(self, "Embedding failed", msg)
-        self.btn_compute.setEnabled(True)
-        self.btn_cancel.setEnabled(False)
-
-    def _on_finished(self, emb, eligible_indices, meta):
-        self._cleanup_thread()
-        self._emb = emb
-        self._eligible_indices = eligible_indices
-        self.lbl_status.setText(f"Embeddings ready: {emb.shape[0]} × {emb.shape[1]}")
-        self.progress.setValue(self.progress.maximum())
-        self.btn_compute.setEnabled(True)
-        self.btn_cancel.setEnabled(False)
-        self.btn_preview.setEnabled(True)
-        self.btn_add.setEnabled(True)
-        self.btn_save_csv.setEnabled(True)
-        self.btn_explorer.setEnabled(False)
-
-    def _cleanup_thread(self):
-        if self._thread:
-            self._thread.quit()
-            self._thread.wait(2000)
-        self._thread = None
-        self._worker = None
-        try:
-            import gc
-
-            gc.collect()
-        except Exception:
-            pass
-
-    def _preview(self):
-        if self._emb is None or self._eligible_indices is None:
-            return
-        n = int(self.n_spin.value())
-        k = int(self.k_spin.value())
-        min_per = int(self.min_per_spin.value())
-        strategy = self.strategy_combo.currentText().strip()
-        cluster_method = self.cluster_method_combo.currentText().strip()
-
-        n_frames = len(self._eligible_indices)
-        if cluster_method == "hierarchical" and n_frames > 2500:
-            reply = QMessageBox.warning(
-                self,
-                "Large Dataset Warning",
-                f"You have {n_frames} frames selected.\n\n"
-                "Hierarchical clustering may be slow or memory-intensive for large datasets.\n\n"
-                "Would you like to switch to 'linkage' method instead?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Yes,
-            )
-            if reply == QMessageBox.Yes:
-                self.cluster_method_combo.setCurrentText("linkage")
-                cluster_method = "linkage"
-            elif reply == QMessageBox.Cancel:
-                return
-
-        cluster = cluster_embeddings_cosine(
-            self._emb, k=k, method=cluster_method, seed=0
-        )
-        self._cluster = cluster
-        self._autosave_clusters()
-        self.btn_explorer.setEnabled(True)
-        self.lbl_status.setText("Clusters saved. Use Export → Split method to apply.")
-
-        if self.frame_mode:
-            frame_key_of_index = {
-                idx: self._idx_to_frame_key[idx]
-                for idx in self._eligible_indices
-                if idx in self._idx_to_frame_key
-            }
-            selected_keys = select_frames_by_cluster_coverage(
-                cluster_id=cluster,
-                eligible_indices=self._eligible_indices,
-                frame_key_of_index=frame_key_of_index,
-                want_n_frames=n,
-            )
-            self.selected_indices = sorted(
-                idx for key in selected_keys for idx in self._frame_groups.get(key, [])
-            )
-
-            lines = []
-            for key in selected_keys[:300]:
-                frame_indices = self._frame_groups.get(key, [])
-                cluster_ids_in_frame = sorted(
-                    {
-                        int(cluster[self._eligible_indices.index(i)])
-                        for i in frame_indices
-                        if i in self._eligible_indices
-                    }
-                )
-                labeled_count = sum(
-                    1
-                    for i in frame_indices
-                    if self.is_labeled_fn and self.is_labeled_fn(self.image_paths[i])
-                )
-                cluster_str = ",".join(str(c) for c in cluster_ids_in_frame)
-                lines.append(
-                    f"[frame {key[1]}] covers clusters {{{cluster_str}}} — "
-                    f"{len(frame_indices)} instances ({labeled_count} labeled)"
-                )
-            if len(selected_keys) > 300:
-                lines.append(f"... ({len(selected_keys) - 300} more)")
-            self.preview.setPlainText("\n".join(lines))
-            return
-
-        picked = pick_frames_stratified(
-            emb=self._emb,
-            cluster_id=cluster,
-            want_n=n,
-            eligible_indices=self._eligible_indices,
-            min_per_cluster=min_per,
-            seed=0,
-            strategy=strategy,
-        )
-
-        if self.cb_filter_duplicates.isChecked():
-            try:
-                # Try simple cosine similarity filtering if imported
-                from ...core.extensions import filter_near_duplicates
-
-                threshold = self.dup_threshold_spin.value()
-                embeddings_picked = self._emb[
-                    [self._eligible_indices.index(i) for i in picked]
-                ]
-                picked = filter_near_duplicates(
-                    embeddings_picked,
-                    list(range(len(picked))),
-                    threshold=threshold,
-                )
-                picked = [picked[i] for i in picked]
-            except Exception as e:
-                logger.warning(f"Duplicate filtering failed: {e}")
-
-        if self.cb_prefer_unlabeled.isChecked() and self.is_labeled_fn:
-            labeled = [i for i in picked if self.is_labeled_fn(self.image_paths[i])]
-            unlabeled = [
-                i for i in picked if not self.is_labeled_fn(self.image_paths[i])
-            ]
-            picked = unlabeled + labeled[: max(0, n - len(unlabeled))]
-
-        self.selected_indices = picked[:n]
-
-        lines = []
-        for idx in self.selected_indices[:300]:
-            local = self._eligible_indices.index(idx)
-            cid = int(cluster[local])
-            labeled_str = (
-                " [L]"
-                if self.is_labeled_fn and self.is_labeled_fn(self.image_paths[idx])
-                else ""
-            )
-            lines.append(f"[c{cid:03d}]{labeled_str} {self.image_paths[idx].name}")
-        if len(self.selected_indices) > 300:
-            lines.append(f"... ({len(self.selected_indices) - 300} more)")
-        self.preview.setPlainText("\n".join(lines))
-
-    def _open_explorer(self):
-        if self._emb is None:
-            QMessageBox.warning(self, "No Embeddings", "Compute embeddings first.")
-            return
-
-        dialog = EmbeddingExplorerDialog(
-            embeddings=self._emb,
-            image_paths=[self.image_paths[i] for i in self._eligible_indices],
-            cluster_ids=self._cluster,
-            is_labeled_fn=self.is_labeled_fn if self.is_labeled_fn else lambda p: False,
-            parent=self,
-        )
-
-        if dialog.exec_() == QDialog.Accepted:
-            explorer_selected = dialog.selected_indices
-            if explorer_selected:
-                global_selected = {self._eligible_indices[i] for i in explorer_selected}
-
-                companion_count = 0
-                frame_count = len(global_selected)
-                if self.frame_mode:
-                    keys = {
-                        self._idx_to_frame_key[i]
-                        for i in global_selected
-                        if i in self._idx_to_frame_key
-                    }
-                    expanded = {
-                        idx for key in keys for idx in self._frame_groups.get(key, [])
-                    }
-                    companions = expanded - global_selected
-                    companion_count = len(companions)
-                    frame_count = len(keys)
-                    if companions:
-                        reply = QMessageBox.question(
-                            self,
-                            "Added from Explorer",
-                            FRAME_MODE_CONFIRMATION_TEMPLATE.format(
-                                frame_count=frame_count,
-                                total_count=len(expanded),
-                                companion_count=companion_count,
-                            ),
-                            QMessageBox.Yes | QMessageBox.No,
-                            QMessageBox.Yes,
-                        )
-                        if reply != QMessageBox.Yes:
-                            return
-                    global_selected = expanded
-
-                existing = set(self.selected_indices)
-                for idx in global_selected:
-                    if idx not in existing:
-                        self.selected_indices.append(idx)
-                        existing.add(idx)
-                QMessageBox.information(
-                    self,
-                    "Added from Explorer",
-                    f"Added {len(global_selected)} instance(s) from "
-                    f"{frame_count} frame(s).",
-                )
-
-    def _save_csv(self):
-        if self._cluster is None:
-            QMessageBox.information(self, "No clusters", "Run Clustering first.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save cluster assignments",
-            str(
-                (self.project.out_root / "posekit" / "clusters").resolve()
-                / "clusters.csv"
-            ),
-            "CSV (*.csv)",
-        )
-        if not path:
-            return
-        out = Path(path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with out.open("w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["image", "cluster_id"])
-            for local_pos, idx in enumerate(self._eligible_indices):
-                w.writerow([str(self.image_paths[idx]), int(self._cluster[local_pos])])
-        QMessageBox.information(self, "Saved", f"Wrote cluster CSV:\n{out}")
-
-    def _autosave_clusters(self):
-        if self._cluster is None:
-            return
-        out = self.project.out_root / "posekit" / "clusters" / "clusters.csv"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with out.open("w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["image", "cluster_id"])
-                for local_pos, idx in enumerate(self._eligible_indices):
-                    w.writerow(
-                        [str(self.image_paths[idx]), int(self._cluster[local_pos])]
-                    )
-        except Exception:
-            pass
+    thread.finished.connect(_release)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -928,6 +240,9 @@ class EmbeddingExplorerDialog(QDialog):
         cluster_ids: Optional[np.ndarray] = None,
         is_labeled_fn=None,
         parent=None,
+        labeled_mask: Optional[Sequence[bool]] = None,
+        initial_selection: Optional[Sequence[int]] = None,
+        accept_text: str = "Add to Labeling Set",
     ):
         super().__init__(parent)
         self.setWindowTitle("Embedding Explorer (UMAP)")
@@ -937,11 +252,21 @@ class EmbeddingExplorerDialog(QDialog):
         self.image_paths = image_paths
         self.cluster_ids = cluster_ids
         self.is_labeled_fn = is_labeled_fn or (lambda p: False)
+        # Labeled flags are fixed while the explorer is open; compute them once
+        # instead of re-reading label files on every redraw and hover.
+        if labeled_mask is not None:
+            self._labeled_mask = [bool(v) for v in labeled_mask]
+        else:
+            self._labeled_mask = [bool(self.is_labeled_fn(p)) for p in image_paths]
+        self._accept_text = accept_text
 
         self.umap_projection: Optional[np.ndarray] = None
-        self.selected_indices: List[int] = []
+        self.selected_indices: List[int] = list(
+            dict.fromkeys(int(i) for i in (initial_selection or []))
+        )
         self._umap_thread = None
         self._umap_worker = None
+        self._stale_umap: list = []
         self._pending_preview_idx: Optional[int] = None
 
         self._init_ui()
@@ -1047,7 +372,7 @@ class EmbeddingExplorerDialog(QDialog):
         btn_row = QHBoxLayout()
         self.btn_clear_sel = QPushButton("Clear Selection")
         self.btn_clear_sel.clicked.connect(self._clear_selection)
-        self.btn_add_sel = QPushButton("Add to Labeling Set")
+        self.btn_add_sel = QPushButton(self._accept_text)
         self.btn_add_sel.clicked.connect(self.accept)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.reject)
@@ -1065,6 +390,7 @@ class EmbeddingExplorerDialog(QDialog):
         self._preview_timer.setInterval(60)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._flush_preview)
+        self._update_selection_summary()
 
     # ── UMAP ─────────────────────────────────────────────────────────────────
 
@@ -1086,11 +412,26 @@ class EmbeddingExplorerDialog(QDialog):
         self._umap_worker.progress.connect(self.umap_status.setText)
         self._umap_worker.finished.connect(self._on_umap_finished)
         self._umap_worker.failed.connect(self._on_umap_failed)
+        self._umap_worker.finished.connect(self._umap_thread.quit)
+        self._umap_worker.failed.connect(self._umap_thread.quit)
         self._umap_thread.start()
 
     def _cancel_umap(self):
         if self._umap_worker:
+            # UMAP can't be interrupted mid-fit; the worker drops its result
+            # and the thread ends when the fit returns.
             self._umap_worker.cancel()
+            self._umap_worker.finished.disconnect()
+            self._umap_worker.failed.disconnect()
+        if self._umap_thread:
+            self._umap_thread.quit()
+            # Keep the canceled run referenced until its fit returns.
+            self._stale_umap.append((self._umap_thread, self._umap_worker))
+        self._umap_thread = None
+        self._umap_worker = None
+        self.btn_compute_umap.setEnabled(True)
+        self.btn_cancel_umap.setEnabled(False)
+        self.umap_status.setText("UMAP canceled.")
 
     def _on_umap_finished(self, projection: np.ndarray):
         if self._umap_thread:
@@ -1105,11 +446,10 @@ class EmbeddingExplorerDialog(QDialog):
         )
         self.btn_compute_umap.setEnabled(True)
         self.btn_cancel_umap.setEnabled(False)
-        labeled_mask = [self.is_labeled_fn(p) for p in self.image_paths]
         self.explorer_view.set_data(
             projection,
             cluster_ids=self.cluster_ids,
-            labeled_mask=labeled_mask,
+            labeled_mask=self._labeled_mask,
             selected_set=set(self.selected_indices),
         )
 
@@ -1166,7 +506,9 @@ class EmbeddingExplorerDialog(QDialog):
         cluster_str = "n/a"
         if self.cluster_ids is not None and idx < len(self.cluster_ids):
             cluster_str = str(int(self.cluster_ids[idx]))
-        labeled_str = "yes" if self.is_labeled_fn(path) else "no"
+        labeled_str = (
+            "yes" if idx < len(self._labeled_mask) and self._labeled_mask[idx] else "no"
+        )
         selected_str = "yes" if idx in self.selected_indices else "no"
         self.preview_info.setText(
             f"<div style='line-height:1.6;'>"
@@ -1193,30 +535,43 @@ class EmbeddingExplorerDialog(QDialog):
             self.selection_summary.setText("No points selected.")
         else:
             self.selection_summary.setText(
-                f"{n:,} point(s) selected  \u2014  click \u2018Add to Labeling Set\u2019 to use them."
+                f"{n:,} point(s) selected  \u2014  click "
+                f"\u2018{self._accept_text}\u2019 to use them."
             )
 
     def _clear_selection(self):
         self.selected_indices.clear()
         self._update_selection_summary()
         if self.umap_projection is not None:
-            labeled_mask = [self.is_labeled_fn(p) for p in self.image_paths]
             self.explorer_view.set_data(
                 self.umap_projection,
                 cluster_ids=self.cluster_ids,
-                labeled_mask=labeled_mask,
+                labeled_mask=self._labeled_mask,
                 selected_set=set(),
             )
 
-    def closeEvent(self, event) -> None:
-        """Cancel any running UMAP worker, release embedding memory, and close the dialog."""
+    def _shutdown_umap(self) -> None:
+        """Cancel UMAP and make sure no running thread dies with the dialog."""
         if self._umap_worker:
-            self._umap_worker.cancel()
-        if self._umap_thread:
-            self._umap_thread.quit()
-            self._umap_thread.wait(1000)
+            self._cancel_umap()
+        for thread, worker in self._stale_umap:
+            if not thread.wait(1000):
+                # Still fitting: unparent so the dialog's teardown does not
+                # destroy a running thread; released when it finishes.
+                thread.setParent(None)
+                _keep_until_finished(thread, worker)
+        self._stale_umap = []
+
+    def done(self, result: int) -> None:  # accept, reject, Esc
+        """Stop UMAP work and release the embeddings, however the dialog closes."""
+        self._shutdown_umap()
         self.embeddings = None
-        self._canon_cache.clear()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:
+        """Title-bar close: same cleanup as ``done``."""
+        self._shutdown_umap()
+        self.embeddings = None
         super().closeEvent(event)
 
 
@@ -1271,5 +626,13 @@ class UMAPWorker(QObject):
             self.finished.emit(projection.astype(np.float32))
         except Exception as exc:
             self.failed.emit(str(exc))
-            self.failed.emit(str(exc))
-            self.failed.emit(str(exc))
+
+
+def __getattr__(name):
+    # Smart Select moved to its own module; keep the old import path working
+    # without an import cycle (smart_select imports this module).
+    if name == "SmartSelectDialog":
+        from .smart_select import SmartSelectDialog
+
+        return SmartSelectDialog
+    raise AttributeError(name)

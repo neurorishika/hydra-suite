@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..constants import SORT_SMART_BATCH
+
 
 class PoseSourceBrowserPanel(QWidget):
     """PoseKit left panel with cross-source labeling and current-source browsing."""
@@ -60,6 +62,7 @@ class PoseSourceBrowserPanel(QWidget):
                 "Detected kpts (low to high)",
                 "Cluster id (low to high)",
                 "Cluster id (high to low)",
+                SORT_SMART_BATCH,
             ]
         )
         sort_row.addWidget(self.sort_combo, 1)

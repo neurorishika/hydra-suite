@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal
 
 from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.integrations.sleap.service import PoseInferenceService
+from hydra_suite.widgets.workers import BaseWorker
 
 from .utils import _maybe_empty_cuda_cache
 
@@ -472,3 +473,43 @@ class SleapServiceWorker(QObject):
             self.finished.emit(bool(ok), str(err or ""), str(log_path or ""))
         except Exception as e:
             self.finished.emit(False, str(e), "")
+
+
+class SmartSelectWorker(BaseWorker):
+    """Cluster, score pose signals and build a Smart Select batch off the GUI thread.
+
+    Emits ``result(SmartSelectOutcome)`` on success, ``canceled()`` when
+    :meth:`cancel` stopped it, and the inherited ``error(str)`` on failure.
+    """
+
+    result = Signal(object)
+    canceled = Signal()
+
+    def __init__(self, request, parent=None) -> None:
+        super().__init__(parent)
+        self.request = request
+        self._cancel = False
+
+    def cancel(self) -> None:
+        """Stop at the next step boundary."""
+        self._cancel = True
+
+    def execute(self) -> None:
+        from hydra_suite.posekit.core.smart_select import (
+            SmartSelectCanceled,
+            run_smart_select,
+        )
+
+        try:
+            outcome = run_smart_select(
+                self.request,
+                status=self.status.emit,
+                is_canceled=lambda: self._cancel,
+            )
+        except SmartSelectCanceled:
+            self.canceled.emit()
+            return
+        if self._cancel:
+            self.canceled.emit()
+            return
+        self.result.emit(outcome)

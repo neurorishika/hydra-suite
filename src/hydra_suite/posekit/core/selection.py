@@ -18,8 +18,9 @@ as labeled when any instance is, and its error / uncertainty is its worst
 instance's, so one code path serves both modes.
 
 Slots, in order (``PoseBatchConfig`` defaults): error neighbours 20%,
-uncertainty 25%, rare clusters 10%, diversity 30% (k-center starting from the
-labeled set, so it fills the gaps labeling has left), representative 10%, and
+uncertainty 25%, rare clusters 10%, diversity 30% (greedy coverage: each pick
+most reduces the distance from unlabeled frames to their nearest labeled one,
+so it fills the gaps labeling has left), representative 10%, and
 the remainder as random audits.  Slots without a signal (no predictions, no
 known errors yet) leave their budget to a diversity top-up.
 """
@@ -36,7 +37,7 @@ from hydra_suite.core.selection.batch import SlotBatch, slot_budgets
 from hydra_suite.core.selection.clustering import label_coverage
 from hydra_suite.core.selection.density import (
     compute_cluster_densities,
-    select_diverse_samples,
+    select_coverage_samples,
 )
 from hydra_suite.core.selection.selectors import (
     AuditSelector,
@@ -312,14 +313,19 @@ def select_pose_batch(
         if n_pick <= 0 or not avail.any():
             return
         avail_idx = np.where(avail)[0]
-        ref_mask = labeled.copy()
-        ref_mask[sb.chosen] = True
-        local = select_diverse_samples(
-            emb[avail_idx], n_pick, rng=rng, reference=emb[ref_mask]
+        covered = labeled.copy()
+        covered[sb.chosen] = True
+        local = select_coverage_samples(
+            emb[avail_idx],
+            n_pick,
+            points=emb[~covered],
+            reference=emb[covered],
+            rng=rng,
         )
         sb.claim(reason, avail_idx[np.asarray(local, dtype=int)])
 
-    # 4. Diversity: farthest from everything labeled or already picked.
+    # 4. Diversity: fill the biggest gaps the labeled set (and earlier picks)
+    # leave, weighted by how many unlabeled frames each pick covers.
     diverse(budgets[REASON_DIVERSITY], REASON_DIVERSITY)
 
     # 5. Representative: dense clusters with low label coverage.

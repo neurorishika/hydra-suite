@@ -155,3 +155,31 @@ def test_representative_is_seeded():
         emb, ids, {}, dens, 5, avail, rng=np.random.default_rng(1)
     )
     assert np.array_equal(a, b)
+
+
+def test_coverage_prefers_dense_uncovered_mass_over_outliers():
+    from hydra_suite.core.selection.density import select_coverage_samples
+
+    emb, ids = _blobs([40, 40, 1], spread=0.05)
+    # Blob 0 is labeled; blob 1 is a dense uncovered region; blob 2 is a
+    # single outlier (k-center would grab it first).
+    ref = emb[ids == 0][:5]
+    cand_idx = np.where(ids != 0)[0]
+    picks = select_coverage_samples(
+        emb[cand_idx], 2, points=emb[ids != 0], reference=ref
+    )
+    assert ids[cand_idx[picks[0]]] == 1
+    assert len(set(picks.tolist())) == 2
+    far = select_diverse_samples(emb[cand_idx], 1, reference=ref)
+    assert ids[cand_idx[far[0]]] in (1, 2)  # k-center is outlier-prone
+
+
+def test_coverage_handles_no_reference_and_tiny_pools():
+    from hydra_suite.core.selection.density import select_coverage_samples
+
+    emb, _ = _blobs([10, 10])
+    assert select_coverage_samples(emb, 0, points=emb).size == 0
+    picks = select_coverage_samples(emb, 30, points=emb)
+    assert sorted(picks.tolist()) == list(range(20))
+    one = select_coverage_samples(emb[:1], 3, points=emb[:0])
+    assert one.tolist() == [0]

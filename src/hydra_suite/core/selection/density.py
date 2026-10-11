@@ -178,3 +178,68 @@ def select_diverse_samples(
         )
 
     return np.asarray(selected, dtype=int)
+
+
+def select_coverage_samples(
+    candidates: np.ndarray,
+    n_samples: int,
+    points: np.ndarray,
+    reference: Optional[np.ndarray] = None,
+    rng: Optional[np.random.Generator] = None,
+    max_points: int = 3000,
+    max_elems: int = 40_000_000,
+) -> np.ndarray:
+    """Greedy coverage (facility location): fill the biggest gaps in *mass*.
+
+    Each pick is the candidate that most reduces the summed distance from
+    ``points`` (the data to cover, e.g. every unlabeled sample) to their
+    nearest covered sample (``reference`` plus earlier picks).  Unlike
+    farthest-first, an isolated outlier only covers itself, so the batch goes
+    to where many uncovered samples are, and each pick moves on to the next
+    gap.  ``points`` are subsampled to ``max_points`` (fewer for large
+    candidate pools, so ``candidates x points`` stays under ``max_elems``).
+
+    Returns indices into ``candidates`` in pick order.
+    """
+    cand = np.asarray(candidates, dtype=np.float32)
+    n_c = len(cand)
+    n_samples = min(int(n_samples), n_c)
+    if n_samples <= 0:
+        return np.array([], dtype=int)
+    pts = np.asarray(points, dtype=np.float32)
+    if len(pts) == 0:
+        pts = cand
+    rng = rng if rng is not None else np.random.default_rng(0)
+    m = int(min(len(pts), max_points, max(256, max_elems // max(1, n_c))))
+    if m < len(pts):
+        pts = pts[np.sort(rng.choice(len(pts), m, replace=False))]
+
+    dist = np.empty((n_c, len(pts)), dtype=np.float32)
+    block = max(1, max_elems // max(1, len(pts)))
+    for start in range(0, n_c, block):
+        dist[start : start + block] = _pairwise_l2(cand[start : start + block], pts)
+
+    if reference is not None and len(reference) > 0:
+        ref = np.asarray(reference, dtype=np.float32)
+        cur = np.full(len(pts), np.inf, dtype=np.float32)
+        rblock = max(1, max_elems // max(1, len(pts)))
+        for start in range(0, len(ref), rblock):
+            cur = np.minimum(cur, _pairwise_l2(ref[start : start + rblock], pts).min(0))
+    else:
+        # Nothing covered yet: every point is as far as the farthest pair.
+        cur = np.full(len(pts), float(dist.max()) if dist.size else 0.0, np.float32)
+
+    taken = np.zeros(n_c, dtype=bool)
+    picks = []
+    for _ in range(n_samples):
+        gain = np.maximum(cur[None, :] - dist, 0.0).sum(axis=1)
+        gain[taken] = -1.0
+        best = int(np.argmax(gain))
+        if gain[best] <= 0:
+            # Every sampled point is already covered exactly: no pick helps,
+            # so take the first remaining candidate to keep the slot filled.
+            best = int(np.flatnonzero(~taken)[0])
+        picks.append(best)
+        taken[best] = True
+        cur = np.minimum(cur, dist[best])
+    return np.asarray(picks, dtype=int)

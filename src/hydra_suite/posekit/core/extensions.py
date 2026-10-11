@@ -1405,9 +1405,10 @@ class EmbeddingWorker(QObject):
 
     progress = Signal(int, int)  # done, total
     status = Signal(str)
-    finished = Signal(
-        object, object, object
-    )  # embeddings(np.ndarray), eligible_indices(list[int]), meta(dict)
+    # embeddings for every image_paths entry (np.ndarray), eligible_indices
+    # (list[int]), meta (dict).  Selection needs all rows (labeled frames give
+    # cluster coverage), not just the eligible ones.
+    finished = Signal(object, object, object)
     failed = Signal(str)
 
     def __init__(
@@ -1444,10 +1445,10 @@ class EmbeddingWorker(QObject):
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+            # Only what changes the vectors goes into the cache key: device
+            # and batch size do not, so switching them reuses the cache.
             meta = {
                 "model_name": self.model_name,
-                "device_pref": self.device_pref,
-                "batch_size": int(self.batch_size),
                 "use_enhance": bool(self.use_enhance),
                 "max_side": int(self.max_side),
             }
@@ -1466,10 +1467,9 @@ class EmbeddingWorker(QObject):
                 if emb_all is None:
                     needs_compute = list(range(len(self.image_paths)))
                 else:
-                    emb = emb_all[self.eligible_indices]
                     cached_meta = cache.get_metadata() or {}
                     meta.update(cached_meta)
-                    self.finished.emit(emb, self.eligible_indices, meta)
+                    self.finished.emit(emb_all, self.eligible_indices, meta)
                     return
 
             self.status.emit("Loading model…")
@@ -1528,9 +1528,8 @@ class EmbeddingWorker(QObject):
             if emb_all is None:
                 self.failed.emit("Failed to load embeddings from cache.")
                 return
-            emb = emb_all[self.eligible_indices]
             cache.set_metadata(meta)
-            self.finished.emit(emb, self.eligible_indices, meta)
+            self.finished.emit(emb_all, self.eligible_indices, meta)
 
         except Exception as e:
             self.failed.emit(str(e))

@@ -63,6 +63,41 @@ paths, device, epochs, batch size, and other hyperparameters).
 - Visibility flags encode present/occluded/missing states.
 - Project settings changes can require label migration.
 
+## Smart Select
+
+**Smart Select…** (left panel) picks the next frames to label with the same
+methodology as ClassKit's candidate batches:
+
+1. Every frame is embedded (DINOv2 by default; cached per model, so later runs
+   are instant) and clustered with K-means (about √N clusters by default).
+2. A batch is built from a mix of signals, in this order:
+
+    | Slot | Default | Picks |
+    |---|---|---|
+    | Near model errors | 20% | Unlabeled frames that look like labeled frames the model gets wrong (mean keypoint error / object size above *Error above*, 0.05 by default) |
+    | Model unsure | 25% | Frames with the lowest mean keypoint confidence |
+    | Rare clusters | 10% | Frames from small or barely-labeled clusters (weight `size^-α`) |
+    | Fill gaps | 30% | Frames that most reduce the distance from unlabeled frames to their nearest labeled one |
+    | Typical | 10% | Frames from dense clusters with few labels |
+    | Random checks | the rest | Random frames |
+
+    The model slots use the cached predictions of the model selected in the
+    Model panel (run **Predict Dataset…** first). Without predictions their
+    share goes to *Fill gaps*.
+3. The candidate table lists the batch in order with the reason for each pick.
+   Remove rows with Delete, or open the **Embedding Explorer** to see every
+   frame on a UMAP map with the batch highlighted and click points in or out.
+4. **Start Labeling** adds the batch to the labeling set, switches the list to the
+   *Smart Select batch* sort and opens the first unlabeled frame; Next / Next
+   unlabeled follow the batch order. **Add to Labeling Set** adds it without
+   changing the sort. The batch order is saved with the project.
+
+In Frame Mode, Smart Select picks whole source frames (a frame counts as labeled
+when any of its individuals is) and adds every individual on each picked frame.
+
+Clustering also writes `posekit/clusters/clusters.csv` for every frame, which the
+*Cluster id* sort and the cluster-stratified export split use.
+
 ## Core Hotkeys
 
 - `A/D`: previous/next frame

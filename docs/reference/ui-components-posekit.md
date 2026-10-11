@@ -98,13 +98,17 @@ Manage schema and export artifacts.
 ## Smart Select Dialog
 
 ### Purpose
-Select diverse, high-value unlabeled frames with embedding and clustering support.
+Build an ordered batch of frames to label next, with ClassKit's methodology:
+K-means clusters over every frame plus a mix of model-error, uncertainty,
+rare-cluster, coverage and representative picks (see the PoseKit user guide).
 
 | Control group | Includes | Guidance |
 |---|---|---|
-| Scope/filtering | Scope, exclusion toggles | Keep scope explicit to avoid hidden frame subsets. |
-| Embedding config | Model, device, batch, max side, enhancement | Tune for stable embeddings first, speed second. |
-| Selection config | N frames, clusters, min/cluster, strategy, threshold | Use cluster coverage to avoid redundancy. |
+| Batch | Pick from (scope), skip labeling-set frames, frames, clusters (Auto ≈ √N), clustering method | Keep scope explicit; Auto clusters suits most datasets. |
+| Mix | Near model errors, Model unsure, Rare clusters, Fill gaps, Typical (%), Rarity α, Error above, Skip near-duplicates | The remainder of the mix becomes random checks. Model slots need cached predictions (Predict Dataset…). |
+| Embeddings | Model, device, batch size, max side, enhancement | Device and batch size do not affect the cache; model, max side and enhancement do. |
+| Candidates | Ordered table (frame, cluster, why, detail), preview, Remove, Embedding Explorer, Save clusters CSV | Remove rows with Delete; the Explorer highlights the batch on a UMAP map. |
+| Finish | Add to Labeling Set, Start Labeling | Start Labeling sorts the list by batch and opens the first unlabeled frame. |
 
 ## Dataset Split Dialog
 
@@ -159,6 +163,6 @@ Suggest high-value frames based on uncertainty/disagreement/error signals.
 
 1. Setup project schema and paths.
 2. Label pilot subset and validate consistency.
-3. Run smart selection to expand diverse coverage.
+3. Run Smart Select and Start Labeling to work through the batch in order.
 4. Train baseline and evaluate worst frames.
 5. Iterate with active learning and periodic schema-safe exports.

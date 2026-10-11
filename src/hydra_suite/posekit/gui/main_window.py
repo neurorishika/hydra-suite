@@ -61,7 +61,11 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from .canvas import FrameListDelegate, PoseCanvas
 
 # Local refactored modules
-from .constants import DEFAULT_AUTOSAVE_DELAY_MS, DEFAULT_PROJECT_NAME
+from .constants import (
+    DEFAULT_AUTOSAVE_DELAY_MS,
+    DEFAULT_PROJECT_NAME,
+    SORT_SMART_BATCH,
+)
 from .dialogs.project_wizard import ProjectWizard
 from .dialogs.skeleton import SkeletonEditorDialog
 from .dialogs.source_manager import SourceManagerDialog
@@ -100,7 +104,10 @@ try:
     )
     from hydra_suite.posekit.gui.dialogs.active_learning import ActiveLearningDialog
     from hydra_suite.posekit.gui.dialogs.evaluation import EvaluationDashboardDialog
-    from hydra_suite.posekit.gui.dialogs.exploration import SmartSelectDialog
+    from hydra_suite.posekit.gui.dialogs.smart_select import (
+        PredictionSource,
+        SmartSelectDialog,
+    )
     from hydra_suite.posekit.gui.dialogs.training import TrainingRunnerDialog
 except ImportError:
     # Try alternate path if running standalone script?
@@ -175,6 +182,10 @@ class MainWindow(QMainWindow):
                 for i in project.labeling_frames
                 if 0 <= int(i) < len(image_paths)
             }
+        # Smart Select's last batch, in pick order (image path strings).
+        self._smart_batch_paths: List[str] = [
+            str(p) for p in (getattr(project, "smart_batch", None) or [])
+        ]
         self.metadata_manager = MetadataManager(
             self.project.out_root / "posekit" / "metadata.json"
         )
@@ -1702,6 +1713,41 @@ class MainWindow(QMainWindow):
             labels_dir = self.project.labels_dir
         return labels_dir / (img_path.stem + ".txt")
 
+    # ----- Smart Select batch order -----
+    def _smart_batch_indices(self) -> List[int]:
+        """Smart Select's batch as current frame indices, in pick order."""
+        out: List[int] = []
+        seen: set = set()
+        for p in self._smart_batch_paths:
+            idx = self._path_to_index.get(p)
+            if idx is None:
+                try:
+                    idx = self._path_to_index.get(str(Path(p).resolve()))
+                except OSError:
+                    idx = None
+            if idx is not None and idx not in seen:
+                seen.add(idx)
+                out.append(idx)
+        return out
+
+    def _smart_batch_rank(self) -> Dict[int, int]:
+        return {idx: r for r, idx in enumerate(self._smart_batch_indices())}
+
+    def _labeling_order(self) -> List[int]:
+        """Labeling-set frames in navigation order.
+
+        With the "Smart Select batch" sort, the batch comes first in pick
+        order (matching the list); otherwise frames go in index order.
+        """
+        sort_mode = (
+            self.sort_combo.currentText().strip() if hasattr(self, "sort_combo") else ""
+        )
+        if sort_mode != SORT_SMART_BATCH:
+            return sorted(self.labeling_frames)
+        batch = [i for i in self._smart_batch_indices() if i in self.labeling_frames]
+        in_batch = set(batch)
+        return batch + sorted(i for i in self.labeling_frames if i not in in_batch)
+
     def _is_labeled(self, img_path: Path) -> bool:
         lp = self._label_path_for(img_path)
         if not lp.exists():
@@ -1734,6 +1780,7 @@ class MainWindow(QMainWindow):
                 {int(i) for i in self.labeling_frames}
             )
         self.project.last_index = self.current_index
+        self.project.smart_batch = list(self._smart_batch_paths)
         save_project_state(self.project)
 
     # ----- list / info -----
@@ -1847,6 +1894,9 @@ class MainWindow(QMainWindow):
                     ),
                     reverse=reverse,
                 )
+            elif sort_mode == SORT_SMART_BATCH:
+                rank = self._smart_batch_rank()
+                items.sort(key=lambda it: (rank.get(it["idx"], len(rank)), it["idx"]))
             elif sort_mode.startswith("Cluster id"):
                 items.sort(
                     key=lambda it: (
@@ -3152,7 +3202,7 @@ class MainWindow(QMainWindow):
 
     def _find_next_frame_needing_keypoint(self, kpt_idx: int) -> Optional[int]:
         """Find next frame in labeling set that doesn't have the specified keypoint."""
-        labeling_indices = sorted(self.labeling_frames)
+        labeling_indices = self._labeling_order()
 
         # Start from current frame and wrap around
         try:
@@ -3214,7 +3264,7 @@ class MainWindow(QMainWindow):
 
     def _find_next_frame_with_missing_labels(self) -> Optional[int]:
         """Find next frame in labeling set with any missing keypoints."""
-        labeling_indices = sorted(self.labeling_frames)
+        labeling_indices = self._labeling_order()
         if not labeling_indices:
             return None
 
@@ -3312,7 +3362,7 @@ class MainWindow(QMainWindow):
 
     def prev_frame(self: object) -> object:
         """prev_frame method documentation."""
-        labeling_indices = sorted(self.labeling_frames)
+        labeling_indices = self._labeling_order()
         if not labeling_indices:
             return
 
@@ -3383,7 +3433,7 @@ class MainWindow(QMainWindow):
 
     def next_frame(self: object, prefer_missing: bool = False) -> object:
         """next_frame method documentation."""
-        labeling_indices = sorted(self.labeling_frames)
+        labeling_indices = self._labeling_order()
         logger.debug(
             "next_frame: current=%d labeling_frames=%s cache_size=%d",
             self.current_index,
@@ -3495,7 +3545,7 @@ class MainWindow(QMainWindow):
 
     def next_unlabeled(self: object) -> object:
         """next_unlabeled method documentation."""
-        labeling_indices = sorted(self.labeling_frames)
+        labeling_indices = self._labeling_order()
         if not labeling_indices:
             QMessageBox.information(
                 self, "No labeling frames", "No frames in labeling set."
@@ -4065,8 +4115,27 @@ class MainWindow(QMainWindow):
             f"- {info.get('manifest', '')}",
         )
 
+    def _smart_select_prediction_source(self):
+        """Cached predictions of the current pose model, or ``(None, why)``."""
+        try:
+            backend = self._pred_backend()
+            model = self._pred_cache_model(self._get_pred_model_silent(), backend)
+        except Exception:
+            model = None
+        if model is None:
+            return None, "No pose model is selected in the Model panel."
+        cache_backend = self._pred_cache_backend(backend)
+        try:
+            preds = self.infer.load_cache(model, cache_backend)
+        except Exception:
+            preds = {}
+        if not preds:
+            return None, f"No cached predictions for {Path(model).name}."
+        return PredictionSource(f"{Path(model).name} ({backend})", preds), ""
+
     def open_smart_select(self: object) -> object:
-        """open_smart_select method documentation."""
+        """Build a Smart Select batch; add it to the labeling set in pick order."""
+        source, why = self._smart_select_prediction_source()
         dlg = SmartSelectDialog(
             self,
             self.project,
@@ -4076,18 +4145,57 @@ class MainWindow(QMainWindow):
             source_ids=[
                 self._source_id_for_index(i) for i in range(len(self.image_paths))
             ],
+            labeling_frames=set(self.labeling_frames),
+            label_path_fn=self._label_path_for,
+            prediction_source=source,
+            no_prediction_reason=why,
         )
-        if dlg.exec() != QDialog.Accepted or not getattr(dlg, "_did_add", False):
-            return
-
-        # If they added nothing, ignore
-        picked = getattr(dlg, "selected_indices", None)
+        try:
+            if dlg.exec() != QDialog.Accepted or not getattr(dlg, "_did_add", False):
+                return
+            picked = [int(i) for i in (getattr(dlg, "selected_indices", None) or [])]
+            start = bool(getattr(dlg, "start_labeling", False))
+        finally:
+            dlg.deleteLater()
         if not picked:
             return
 
-        # Smart Select's own preview already discloses the full frame
-        # expansion, so no second confirmation is shown here.
-        self._add_indices_to_labeling(picked, "Smart Select", disclosed=True)
+        # Smart Select's table already shows whole frames in Frame Mode, so
+        # no second confirmation is shown here.
+        if not self._add_indices_to_labeling(
+            picked, "Smart Select", disclosed=True, notify=not start
+        ):
+            return
+        self._smart_batch_paths = [str(self.image_paths[i]) for i in picked]
+        self._ensure_cluster_ids_cache()
+        if start:
+            self._start_smart_batch()
+        elif self.sort_combo.currentText() == SORT_SMART_BATCH:
+            self._populate_frames()
+            self._select_frame_in_list(self.current_index, trigger_load=False)
+        self.save_project()
+
+    def _start_smart_batch(self) -> None:
+        """Show the labeling list in batch order and open its first open frame."""
+        if self.sort_combo.currentText() != SORT_SMART_BATCH:
+            self.sort_combo.setCurrentText(SORT_SMART_BATCH)  # repopulates
+        else:
+            self._populate_frames()
+        batch = self._smart_batch_indices()
+        target = next(
+            (i for i in batch if not self._is_labeled(self.image_paths[i])),
+            batch[0] if batch else None,
+        )
+        if target is None:
+            return
+        self._maybe_autosave()
+        self._select_frame_in_list(target)
+        n_open = sum(1 for i in batch if not self._is_labeled(self.image_paths[i]))
+        self.statusBar().showMessage(
+            f"Smart Select batch: {n_open} of {len(batch)} frames to label — "
+            "Next / Next unlabeled follow the batch order.",
+            6000,
+        )
 
     def _frame_expansion(self, indices: set) -> tuple:
         """Return (expanded_indices, distinct_frame_count) for the frames touched by `indices`."""
@@ -4103,7 +4211,11 @@ class MainWindow(QMainWindow):
         return expanded, len(keys)
 
     def _add_indices_to_labeling(
-        self, indices: List[int], title: str, disclosed: bool = False
+        self,
+        indices: List[int],
+        title: str,
+        disclosed: bool = False,
+        notify: bool = True,
     ) -> bool:
         """Add `indices` to the labeling set.
 
@@ -4144,9 +4256,10 @@ class MainWindow(QMainWindow):
         self.labeling_frames.update(to_add)
         self._populate_frames()
         self._select_frame_in_list(self.current_index)
-        QMessageBox.information(
-            self, title, f"Added {len(to_add)} frame(s) to labeling set."
-        )
+        if notify:
+            QMessageBox.information(
+                self, title, f"Added {len(to_add)} frame(s) to labeling set."
+            )
         return True
 
     def _collect_selected_indices(self) -> List[int]:
