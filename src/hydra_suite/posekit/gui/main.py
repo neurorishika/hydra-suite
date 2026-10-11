@@ -11,10 +11,11 @@ from typing import Optional
 
 from PySide6.QtWidgets import QApplication
 
-from .constants import DEFAULT_DATASET_IMAGES_DIR
+from .constants import DEFAULT_DATASET_IMAGES_DIR, DEFAULT_POSEKIT_PROJECT_DIR
 from .main_window import MainWindow
 from .models import Project
 from .project import (
+    _project_root_from_selection,
     build_image_list,
     create_empty_startup_project,
     create_project_via_wizard,
@@ -40,6 +41,28 @@ def parse_args() -> argparse.Namespace:
         "--new", action="store_true", help="Force setup wizard even if project exists"
     )
     return ap.parse_args()
+
+
+def dataset_dir_for_cli_project(
+    project_path: Path, dataset_dir: Optional[Path]
+) -> Optional[Path]:
+    """Return the dataset root whose layout a ``--project`` file should follow.
+
+    Only a dataset-anchored project (``<dataset>/posekit_project/...`` next to
+    ``<dataset>/images/``) or an explicit dataset argument gets its paths
+    repaired.  A standalone project bundle is opened where it is, like the
+    GUI's Open Project; inferring a dataset from its images folder would move
+    the project under the images' parent.
+    """
+    if dataset_dir is not None:
+        return dataset_dir
+    root = _project_root_from_selection(project_path)
+    if (
+        root.name == DEFAULT_POSEKIT_PROJECT_DIR
+        and (root.parent / DEFAULT_DATASET_IMAGES_DIR).is_dir()
+    ):
+        return root.parent
+    return None
 
 
 def main() -> None:
@@ -112,12 +135,7 @@ def main() -> None:
                 if proj is None:
                     sys.exit(2)
                 # For legacy (dataset-anchored) projects, run path repairs
-                if dataset_dir is None:
-                    try:
-                        images_dir_raw = proj.images_dir
-                        dataset_dir = images_dir_raw.parent.resolve()
-                    except Exception:
-                        pass
+                dataset_dir = dataset_dir_for_cli_project(project_path, dataset_dir)
                 if dataset_dir is not None:
                     from .project import _repair_project_paths as _rpaths
 

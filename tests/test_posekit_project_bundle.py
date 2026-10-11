@@ -158,3 +158,27 @@ def test_posekit_open_project_from_manifest_recovers_using_legacy_file(
     assert loaded.project_path == canonical_project_path(project.out_root)
     assert canonical_project_path(project.out_root).exists()
     assert (project.out_root / "history" / f"legacy_{DEFAULT_PROJECT_NAME}").exists()
+
+
+def test_cli_project_standalone_bundle_is_not_relocated(tmp_path: Path) -> None:
+    """A bundle beside a separate images folder opens where it is."""
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    crops = tmp_path / "crops"
+    (crops / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    bundle = tmp_path / "pose_project"
+    state = bundle / "state" / DEFAULT_PROJECT_NAME
+    state.parent.mkdir(parents=True)
+    state.write_text("{}")
+    for selected in (state, bundle / "hydra_project.json", bundle):
+        assert dataset_dir_for_cli_project(selected, None) is None
+
+
+def test_cli_project_dataset_anchored_project_uses_dataset(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    proj = _make_posekit_project(tmp_path / "ds")
+    path = save_project_state(proj)
+    assert dataset_dir_for_cli_project(path, None) == (tmp_path / "ds").resolve()
+    explicit = tmp_path / "other"
+    assert dataset_dir_for_cli_project(path, explicit) == explicit
