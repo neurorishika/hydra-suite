@@ -44,8 +44,8 @@ With a trained model loaded, labeling mode shows **Approve** / **Reject** (defau
 
 - Pick a label in the list on the left (or step with ↑ / ↓). Each entry shows its image count and, with a model loaded, how many of its images the model disagrees with (⚠).
 - With predictions loaded, images are sorted by the model's probability for the assigned label, **lowest first**, so likely mislabels are on the first pages. Each tile shows that probability, plus the model's own guess in orange when it disagrees. Without a model, images are in project order.
-- Click tiles, or press their keys (`1`–`9` for 3 × 3, `1234 / QWER / ASDF / ZXCV` for 4 × 4), to select them. **Select page** (Ctrl+A) toggles the whole page. Then **Remove label** (Del).
-- Removing only clears the label: the image goes back to unlabeled, and the change is saved right away. **Undo** (Ctrl+Z / Backspace) restores the last removal exactly, including whether it was an unverified machine label.
+- Click tiles, or press their keys (`1`–`9` for 3 × 3, `1234 / QWER / ASDF / ZXCV` for 4 × 4), to select them. **Select page** (Ctrl+A) toggles the whole page. Then **Remove label** (Del, or Backspace / the Mac delete key). Selections apply to the current page only and are dropped when you change page, grid size or label, so nothing off screen is removed.
+- Removing only clears the label: the image goes back to unlabeled, and the change is saved right away. **Undo** (Ctrl+Z / Cmd+Z) restores the last removal exactly, jumping to the page that shows it, including whether it was an unverified machine label.
 - **All labels / Human-verified / Machine (unverified)** filters by provenance; machine labels carry an **M** badge. **Model disagrees only** hides images where the model agrees.
 - Pages: PgUp / PgDn or ← / →.
 

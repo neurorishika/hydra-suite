@@ -155,7 +155,7 @@ def test_filters_source_and_disagreement(qapp, tmp_path):
     dialog.source_combo.setCurrentText("All labels")
     dialog.disagree_check.setChecked(True)
     assert dialog._items == [1, 2]
-    assert dialog._tiles[0].tag == "M" and "model: b_y" in dialog._tiles[0].caption
+    assert dialog._tiles[0].tag == "M" and dialog._tiles[0].caption.startswith("→ b_y")
 
 
 def test_switch_label_with_arrow_keys_clears_selection(qapp, tmp_path):
@@ -253,7 +253,7 @@ def test_main_window_removes_and_restores_with_provenance(qapp, tmp_path, monkey
         dialog._selected = {0, 4}
         _press(dialog, Qt.Key_Delete)
         seen["after_remove"] = ClassKitDB(db_path).get_label_review_status_by_path()
-        _press(dialog, Qt.Key_Backspace)  # undo restores both
+        _press(dialog, Qt.Key_Z, Qt.ControlModifier)  # undo restores both
         dialog._selected = {1}
         _press(dialog, Qt.Key_Delete)
         return 0
@@ -320,4 +320,151 @@ def test_main_window_ranks_with_model(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(LabelReviewDialog, "exec", fake_exec)
     window._open_label_review()
     assert seen["items"][0] == 2 and seen["disagree"]
+    window.close()
+
+
+def test_selection_never_survives_off_screen(qapp, tmp_path):
+    dialog, model, removed, _ = _dialog(tmp_path, ["a_x"] * 40)
+    _press(dialog, Qt.Key_1)
+    _press(dialog, Qt.Key_PageDown)
+    assert not dialog._selected
+    _press(dialog, Qt.Key_Delete)
+    assert removed == []
+    _press(dialog, Qt.Key_PageUp)
+    dialog.size_combo.setCurrentText("6 × 4")
+    _wait_loaded(qapp, dialog)
+    dialog.toggle_slot(20)
+    assert dialog._selected == {20}
+    dialog.size_combo.setCurrentText("3 × 3")  # index 20 is no longer shown
+    _press(dialog, Qt.Key_Delete)
+    assert removed == [] and model.labels[20] == "a_x"
+
+
+def test_backspace_removes_and_only_ctrl_z_undoes(qapp, tmp_path):
+    dialog, model, removed, restored = _dialog(tmp_path, ["a_x"] * 5)
+    _press(dialog, Qt.Key_Backspace)  # nothing selected: no-op, never undo
+    assert removed == [] and restored == []
+    _press(dialog, Qt.Key_2)
+    _press(dialog, Qt.Key_Backspace)
+    assert removed == [[1]]
+    _press(dialog, Qt.Key_Backspace)
+    assert restored == []
+
+
+def test_undo_reveals_restored_image_despite_filters_and_paging(qapp, tmp_path):
+    labels = ["a_x"] * 3 + ["b_y"] * 40
+    machine = [False] * 3 + [True] * 40
+    dialog, model, removed, restored = _dialog(tmp_path, labels, machine=machine)
+    dialog._step_label(1)
+    _press(dialog, Qt.Key_PageDown)
+    _press(dialog, Qt.Key_PageDown)
+    _wait_loaded(qapp, dialog)
+    _press(dialog, Qt.Key_1)
+    _press(dialog, Qt.Key_Delete)
+    assert removed == [[35]]
+    dialog.source_combo.setCurrentText("Human-verified")
+    assert dialog._label == "a_x"
+    _press(dialog, Qt.Key_Z, Qt.ControlModifier)
+    assert restored == [[(35, "b_y")]]
+    assert dialog.source_combo.currentText() == "All labels"
+    assert dialog._label == "b_y" and 35 in dialog._page_items()
+
+
+def test_empty_label_states(qapp, tmp_path):
+    labels = ["a_x"] * 2 + ["b_y"] * 2
+    predicted = ["b_y", "a_x", "b_y", "b_y"]
+    dialog, _, _, _ = _dialog(tmp_path, labels, predicted=predicted)
+    dialog.disagree_check.setChecked(True)
+    assert dialog.label_list.item(1).text() == "b_y   0"
+    dialog._step_label(1)
+    assert "agrees with every image" in dialog.title_label.text()
+    dialog.disagree_check.setChecked(False)
+    dialog._step_label(-1)
+    _press(dialog, Qt.Key_A, Qt.ControlModifier)
+    _press(dialog, Qt.Key_Delete)
+    assert "nothing to show" in dialog.title_label.text()
+    assert dialog._tiles[0].toolTip() == ""
+
+
+def _window(paths, db_path):
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+    from hydra_suite.classkit.gui.main_window import MainWindow
+
+    window = MainWindow()
+    window.db_path = db_path
+    window.image_paths = list(paths)
+    window.image_labels = ClassKitDB(db_path).get_all_labels()
+    window._image_review_status = ClassKitDB(db_path).get_label_review_status_by_path()
+    return window
+
+
+def test_main_window_ctrl_z_does_not_replay_onto_removed_image(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+
+    paths, db_path = _project(tmp_path)
+    window = _window(paths, db_path)
+    window.last_assigned_stack = [{"index": 4, "previous_label": "a_x"}]
+    window.label_history = [{"index": 0, "label": "a_x"}]
+    window.round_labeled_indices = [0]
+
+    def fake_exec(dialog):
+        dialog.show()
+        _wait_loaded(qapp, dialog)
+        dialog._selected = {0, 4}
+        _press(dialog, Qt.Key_Delete)
+        _press(dialog, Qt.Key_Z, Qt.ControlModifier)
+        dialog._selected = {4}
+        _press(dialog, Qt.Key_Delete)
+        return 0
+
+    monkeypatch.setattr(LabelReviewDialog, "exec", fake_exec)
+    window._open_label_review()
+    assert window.last_assigned_stack == []
+    window.undo_last_assignment()
+    assert window.image_labels[4] is None
+    assert (
+        ClassKitDB(db_path).get_label_review_status_by_path()[str(paths[4])]["label"]
+        is None
+    )
+    # Undo in the dialog restored image 0's history and round membership.
+    assert {"index": 0, "label": "a_x"} in window.label_history
+    assert window.round_labeled_indices == [0]
+    window.close()
+
+
+def test_main_window_failed_undo_keeps_label_removed(qapp, tmp_path, monkeypatch):
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+
+    paths, db_path = _project(tmp_path)
+    window = _window(paths, db_path)
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *a, **k: None)
+    seen = {}
+
+    def boom(self, records):
+        raise RuntimeError("database is locked")
+
+    def fake_exec(dialog):
+        dialog.show()
+        _wait_loaded(qapp, dialog)
+        dialog._selected = {0}
+        _press(dialog, Qt.Key_Delete)
+        monkeypatch.setattr(ClassKitDB, "restore_label_records", boom)
+        _press(dialog, Qt.Key_Z, Qt.ControlModifier)
+        seen["model"] = dialog.model.labels[0]
+        seen["status"] = dialog.status_label.text()
+        seen["can_undo"] = bool(dialog.model.history)
+        monkeypatch.undo()  # DB works again: a second undo succeeds
+        monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *a, **k: None)
+        _press(dialog, Qt.Key_Z, Qt.ControlModifier)
+        return 0
+
+    monkeypatch.setattr(LabelReviewDialog, "exec", fake_exec)
+    window._open_label_review()
+    assert seen["model"] is None and seen["can_undo"]
+    assert "Undo failed" in seen["status"]
+    assert window.image_labels[0] == "a_x"
+    row = ClassKitDB(db_path).get_label_review_status_by_path()[str(paths[0])]
+    assert row["label"] == "a_x" and row["verified"] is True
     window.close()

@@ -83,7 +83,8 @@ def label_probabilities(
                 p = p * probs[f][rows, col]
         else:
             continue
-        out[rows] = np.nan_to_num(p, nan=0.0, posinf=0.0, neginf=0.0)
+        # No finite prediction stays NaN (sorted last), not "0% agreement".
+        out[rows] = np.where(np.isfinite(p), p, np.nan)
     return out
 
 
@@ -228,6 +229,13 @@ class LabelReviewModel:
         for i, lab in removal.entries:
             self.labels[i] = lab
         return removal
+
+    def redo_removal(self, entries: Sequence[Tuple[int, str]]) -> None:
+        """Re-apply a removal whose undo could not be saved."""
+        entries = [(int(i), str(lab)) for i, lab in entries]
+        for i, _ in entries:
+            self.labels[i] = None
+        self.history.append(Removal(entries))
 
     def removed_count(self) -> int:
         return sum(len(r.entries) for r in self.history)

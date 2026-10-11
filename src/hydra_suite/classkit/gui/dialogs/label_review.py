@@ -77,6 +77,7 @@ class LabelReviewDialog(BaseDialog):
         self._selected: Set[int] = set()
         self._label: Optional[str] = None
         self._page = 0
+        self._undo_failed = False
         self._cols, self._rows = GRID_SIZES["4 × 4"]
         self._prefetcher = ImagePrefetcher(self)
         self._prefetcher.image_ready.connect(self._on_image_ready)
@@ -183,8 +184,10 @@ class LabelReviewDialog(BaseDialog):
             ("Down", lambda: self._step_label(1)),
             ("Up", lambda: self._step_label(-1)),
             (QKeySequence.SelectAll, self.select_page),
+            # Backspace is the Mac "delete" key, so it removes too; undo is
+            # Ctrl/Cmd+Z only.
+            ("Backspace", self.remove_selected),
             (QKeySequence.Undo, self.undo),
-            ("Backspace", self.undo),
         ):
             self._shortcut(QKeySequence(seq), slot)
 
@@ -215,7 +218,10 @@ class LabelReviewDialog(BaseDialog):
         self._render()
 
     def remove_selected(self) -> None:
-        chosen = [i for i in self._items if i in self._selected]
+        # Only what is on screen right now can be removed.
+        chosen = [
+            i for i in self._page_items() if i in self._selected and self._visible(i)
+        ]
         removal = self.model.remove(chosen)
         self._selected.clear()
         if removal is None:
@@ -235,14 +241,37 @@ class LabelReviewDialog(BaseDialog):
         if removal is None:
             self._set_status("Nothing to undo.")
             return
+        self._undo_failed = False
         self.labels_restored.emit(list(removal.entries))
+        if self._undo_failed:  # the host put the removal back
+            return
         labels = {lab for _, lab in removal.entries}
         n = len(removal.entries)
         self._set_status(
             f"Restored {n} label{'s' if n != 1 else ''} ({', '.join(sorted(labels))})."
         )
-        target = next(iter(labels)) if len(labels) == 1 else None
-        self._fill_label_list(target or self._label)
+        first, target = removal.entries[0]
+        if first not in self.model.items(
+            target, self._source(), self.disagree_check.isChecked()
+        ):
+            # The restored images are hidden by a filter: show everything.
+            for w in (self.source_combo, self.disagree_check):
+                w.blockSignals(True)
+            self.source_combo.setCurrentText("All labels")
+            self.disagree_check.setChecked(False)
+            for w in (self.source_combo, self.disagree_check):
+                w.blockSignals(False)
+        self._fill_label_list(target)
+        if first in self._items:  # jump to the page showing the restored image
+            self._page = self._items.index(first) // self._page_size()
+            self._render()
+
+    def restore_failed(self, entries) -> None:
+        """The host could not save an undo: put the removal back."""
+        self._undo_failed = True
+        self.model.redo_removal(entries)
+        self._set_status("Undo failed: the labels are still removed.")
+        self._refresh_items()
 
     def next_page(self) -> None:
         if self._page + 1 < self._page_count():
@@ -279,18 +308,13 @@ class LabelReviewDialog(BaseDialog):
 
     def _fill_label_list(self, select: Optional[str] = None) -> None:
         summary = self.model.summary(self._source())
-        disagree_only = self.disagree_check.isChecked()
         self.label_list.blockSignals(True)
         self.label_list.clear()
         row_to_select = 0
-        for row, (label, (count, wrong)) in enumerate(summary.items()):
-            text = f"{label}   {count:,}"
-            if self.model.predicted is not None:
-                text += f"   ({wrong:,} ⚠)"
-            item = QListWidgetItem(text)
+        for row, (label, counts) in enumerate(summary.items()):
+            item = QListWidgetItem()
             item.setData(Qt.UserRole, label)
-            if disagree_only and not wrong:
-                item.setForeground(Qt.gray)
+            self._set_list_text(item, *counts)
             self.label_list.addItem(item)
             if label == (select or self._label):
                 row_to_select = row
@@ -321,11 +345,16 @@ class LabelReviewDialog(BaseDialog):
         for row in range(self.label_list.count()):
             item = self.label_list.item(row)
             label = item.data(Qt.UserRole)
-            count, wrong = summary.get(label, (0, 0))
-            text = f"{label}   {count:,}"
-            if self.model.predicted is not None:
-                text += f"   ({wrong:,} ⚠)"
-            item.setText(text)
+            self._set_list_text(item, *summary.get(label, (0, 0)))
+
+    def _set_list_text(self, item: QListWidgetItem, count: int, wrong: int) -> None:
+        label = item.data(Qt.UserRole)
+        shown = wrong if self.disagree_check.isChecked() else count
+        text = f"{label}   {shown:,}"
+        if self.model.predicted is not None and not self.disagree_check.isChecked():
+            text += f"   ({wrong:,} ⚠)"
+        item.setText(text)
+        item.setForeground(Qt.gray if shown == 0 else self.palette().text())
 
     def _on_label_changed(self, current, _previous) -> None:
         self._label = None if current is None else current.data(Qt.UserRole)
@@ -432,16 +461,18 @@ class LabelReviewDialog(BaseDialog):
         tag = "M" if m.machine[idx] else ""
         if not m.has_model:
             return "", "#ddd", tag
-        parts = []
+        p = ""
         if m.agreement is not None and np.isfinite(m.agreement[idx]):
-            parts.append(f"P={m.agreement[idx]:.2f}")
-        pred = None if m.predicted is None else m.predicted[idx]
+            p = f"P={m.agreement[idx]:.2f}"
         if m.disagrees(idx):
-            parts.append(f"model: {pred}")
-            return "  ".join(parts), "#ff8a65", tag
-        return "  ".join(parts) or "", "#8bc34a", tag
+            # The model's guess first: small tiles elide the end.
+            return f"→ {m.predicted[idx]}  {p}".rstrip(), "#ff8a65", tag
+        return p, "#8bc34a", tag
 
     def _render(self) -> None:
+        # Selection never outlives the page it was made on (page change,
+        # grid resize, undo), so Del cannot remove anything off screen.
+        self._selected &= set(self._page_items())
         if self._label is None:
             self.title_label.setText(
                 "<span style='font-size:16px;'>No labeled images"
@@ -450,10 +481,12 @@ class LabelReviewDialog(BaseDialog):
             )
         else:
             n = len(self._items)
+            count = f"{n:,} image{'s' if n != 1 else ''}" if n else "nothing to show"
+            if not n and self.disagree_check.isChecked():
+                count = "the model agrees with every image"
             self.title_label.setText(
                 f"<span style='font-size:16px;'><b>{html.escape(self._label)}</b></span>"
-                f"<span style='color:#aaa;'>  —  {n:,} image{'s' if n != 1 else ''}"
-                "</span>"
+                f"<span style='color:#aaa;'>  —  {count}</span>"
             )
         self.page_label.setText(f"Page {self._page + 1} / {self._page_count()}")
         if self.model.has_model:
@@ -485,6 +518,7 @@ class LabelReviewDialog(BaseDialog):
                 tile.set_image(None, True, " ")
                 tile.set_caption("")
                 tile.set_selected(False)
+                tile.setToolTip("")
                 continue
             failed = self._paths[idx] in self._failed
             tile.set_image(

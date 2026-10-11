@@ -11665,6 +11665,7 @@ class MainWindow(QMainWindow):
         )
         dialog.labels_restored.connect(
             lambda entries: self._restore_labels_for_review(entries, snapshots)
+            or dialog.restore_failed(entries)
         )
         try:
             dialog.exec()
@@ -11691,11 +11692,22 @@ class MainWindow(QMainWindow):
                     "label_source": "human",
                     "verified": True,
                 }
-            snapshots[index] = record
+            snapshots[index] = {
+                "row": record,
+                "history": [
+                    e for e in self.label_history if e.get("index") == index
+                ],
+                "in_round": index in self.round_labeled_indices,
+            }
             self._set_label_for_index(index, None)
             self._remove_history_for_index(index)
             self.round_labeled_indices = [
                 i for i in self.round_labeled_indices if i != index
+            ]
+            # Ctrl+Z in the main window must not replay an older assignment
+            # onto an image whose label was just removed here.
+            self.last_assigned_stack = [
+                e for e in self.last_assigned_stack if e.get("index") != index
             ]
             self._image_review_status[path] = {
                 "label": None,
@@ -11707,24 +11719,41 @@ class MainWindow(QMainWindow):
             }
         self._flush_pending_label_updates(force=True)
 
-    def _restore_labels_for_review(self, entries, snapshots: dict) -> None:
-        """Undo a Label Review removal, restoring each row's provenance."""
+    def _restore_labels_for_review(self, entries, snapshots: dict) -> bool:
+        """Undo a Label Review removal, restoring each row's provenance.
+
+        Writes the DB first; on failure nothing changes and False is returned
+        so the dialog keeps the removal (and can undo it again).
+        """
         rows = {}
         for index, label in entries:
-            index = int(index)
-            path = str(self.image_paths[index])
-            record = dict(snapshots.pop(index, None) or {})
+            snap = snapshots.get(int(index)) or {}
+            record = dict(snap.get("row") or {})
             record["label"] = label
-            rows[path] = record
-            # A failed autosave must not later overwrite the restored label.
-            self._pending_label_updates.pop(path, None)
-            self.image_labels[index] = label
-            self._image_review_status[path] = record
+            rows[str(self.image_paths[int(index)])] = record
         if self.db_path and rows:
             from ..core.store.db import ClassKitDB
 
-            ClassKitDB(self.db_path).restore_label_records(rows)
+            try:
+                ClassKitDB(self.db_path).restore_label_records(rows)
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Review Labels", f"Could not restore the labels: {exc}"
+                )
+                return False
+        for index, label in entries:
+            index = int(index)
+            path = str(self.image_paths[index])
+            snap = snapshots.pop(index, None) or {}
+            # A failed autosave must not later overwrite the restored label.
+            self._pending_label_updates.pop(path, None)
+            self.image_labels[index] = label
+            self._image_review_status[path] = rows[path]
+            self.label_history.extend(snap.get("history") or [])
+            if snap.get("in_round") and index not in self.round_labeled_indices:
+                self.round_labeled_indices.append(index)
         self._invalidate_infinite_labeling_cache()
+        return True
 
     def _collect_error_mining_inputs(self):
         """Head-aware predictions + which labels are trustworthy, for AL error mining.

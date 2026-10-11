@@ -91,3 +91,18 @@ def test_remove_and_undo_round_trip():
 def test_model_length_mismatch_raises():
     with pytest.raises(ValueError):
         LabelReviewModel(["a"], machine_mask=[True, False])
+
+
+def test_rows_without_prediction_stay_unscored():
+    fa = np.array([[0.2, 0.8], [np.nan, np.nan], [0.9, 0.1]])
+    p = label_probabilities(["a", "a", "a"], [fa], [["a", "b"]])
+    assert p[0] == pytest.approx(0.2) and np.isnan(p[1])
+    assert LabelReviewModel(["a"] * 3, agreement=p).items("a") == [0, 2, 1]
+
+
+def test_redo_removal_after_failed_undo():
+    m = LabelReviewModel(["a", "b"])
+    removal = m.remove([0])
+    m.undo()
+    m.redo_removal(removal.entries)
+    assert m.labels == [None, "b"] and m.undo().entries == [(0, "a")]
