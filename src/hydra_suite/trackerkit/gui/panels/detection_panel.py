@@ -68,10 +68,11 @@ SLICE_SOURCE_BY_RESOLUTION = {
 #: Direct-model checkpoint tasks -> combo indices (combo_yolo_direct_task is the
 #: hidden serialized state holder; the visible label is auto-inferred).
 # Folders (under the models root) where an unregistered checkpoint may still be
-# offered as a direct detector: the legacy repos and the publish targets. The
-# direct combo scans the whole root, which also holds SAM, pose, classifier and
-# cropped-model weights that are not direct detectors.
+# offered as a direct detector: the root itself, the legacy repos and the
+# publish targets. The direct combo scans the whole root, which also holds SAM,
+# pose, classifier and cropped-model weights that are not direct detectors.
 DIRECT_UNREGISTERED_MODEL_DIRS = (
+    ".",
     "obb",
     "YOLO-obb",
     "detection",

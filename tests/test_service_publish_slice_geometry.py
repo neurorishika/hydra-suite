@@ -197,6 +197,7 @@ def test_direct_model_combo_skips_unregistered_non_detector_weights(
     )
 
     for rel in (
+        "root.pt",
         "obb/direct.pt",
         "YOLO-segment/seg.pt",
         "obb/cropped/crop.pt",
@@ -240,4 +241,9 @@ def test_direct_model_combo_skips_unregistered_non_detector_weights(
         for i in range(combo.count())
         if combo.itemData(i) != "__add_new__"
     }
-    assert listed == {"obb/direct.pt", "YOLO-segment/seg.pt", "custom/registered.pt"}
+    assert listed == {
+        "root.pt",
+        "obb/direct.pt",
+        "YOLO-segment/seg.pt",
+        "custom/registered.pt",
+    }
