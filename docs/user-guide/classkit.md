@@ -61,8 +61,10 @@ defaults tuned for canonical animal crops:
 | Saturation / brightness / contrast | 0.10 | Mild lighting variation. |
 | Scale jitter | 0.20 | Window size varies 0.8x-1.2x about the crop centre, so the model tolerates the animal appearing larger or smaller. |
 | Aspect ratio jitter | 0.20 | The crop window's width:height ratio varies 0.83x-1.2x at constant area. The crop centre never moves and the animal is never stretched. |
+| Rotation jitter | 0 (off) | Rotates each crop about its centre by up to ±d degrees, so the model tolerates heading-estimation error in canonical crops. 10-15 is a good starting point. Corners are filled by reflection. |
+| Blur / compression robustness | off | Mild blur, JPEG compression, sub-pixel warp jitter and a swapped resampling kernel, matching real video degradation. |
 
-Scale and aspect jitter apply to train samples only. For YOLO-classify they are
+Scale, aspect and rotation jitter apply to train samples only. For YOLO-classify they are
 written as extra pre-fitted copies per training image
 (`canonical_aug_copies`, default 3); validation and test images stay clean.
 

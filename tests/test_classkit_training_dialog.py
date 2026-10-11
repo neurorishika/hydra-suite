@@ -660,3 +660,18 @@ def test_lr_default_migrates_old_saved_default_but_keeps_edited_values(
     old._set_combo_value(old._custom_fine_tune_method_combo, "head_only")
     assert old.lr_spin.value() == pytest.approx(0.0003)
     assert old.get_settings()["lr_user_set"] is True
+
+
+def test_training_dialog_rotation_and_blur_compression_round_trip(qapp) -> None:
+    default = ClassKitTrainingDialog(n_labeled=8, class_choices=["a", "b"])
+    assert default.get_settings()["rotate"] == pytest.approx(0.0)
+    assert default.get_settings()["canonical_aug"] is False
+
+    dialog = ClassKitTrainingDialog(
+        n_labeled=8,
+        class_choices=["a", "b"],
+        initial_settings={"rotate": 12.0, "canonical_aug": True},
+    )
+    settings = dialog.get_settings()
+    assert settings["rotate"] == pytest.approx(12.0)
+    assert settings["canonical_aug"] is True

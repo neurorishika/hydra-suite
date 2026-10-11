@@ -110,3 +110,39 @@ def test_prefit_writes_augmented_copies_for_train_only(tmp_path):
         "a.png",
     ]
     assert [p.name for p in (dest / "val" / "cls0").iterdir()] == ["a.png"]
+
+
+def test_rotation_keeps_shape_rotates_content_and_is_seeded():
+    # A horizontal bar through the centre; rotation tilts it.
+    img = np.zeros((64, 96, 3), dtype=np.uint8)
+    img[30:34, :, :] = 255
+    aug = ScaleCropAug(rotate_degrees=20.0, seed=3)
+    out = aug(img)
+    assert out.shape == img.shape and out.dtype == np.uint8
+    assert not np.array_equal(out, img)
+    # Centre pixel stays on the bar (rotation is about the centre).
+    assert out[32, 48].min() > 200
+    np.testing.assert_array_equal(ScaleCropAug(rotate_degrees=20.0, seed=3)(img), out)
+
+
+def test_rotation_angle_stays_within_range():
+    img = np.zeros((101, 101, 3), dtype=np.uint8)
+    img[49:52, 20:81, :] = 255  # centred horizontal bar
+    yy, xx = np.mgrid[:101, :101]
+    disk = (yy - 50) ** 2 + (xx - 50) ** 2 <= 35**2  # ignore reflected corners
+    aug = ScaleCropAug(rotate_degrees=10.0, seed=0)
+    angles = []
+    for _ in range(30):
+        w = aug(img)[..., 0].astype(float) * disk
+        y, x = yy - 50, xx - 50
+        mu20, mu02, mu11 = (w * x * x).sum(), (w * y * y).sum(), (w * x * y).sum()
+        angles.append(np.degrees(0.5 * np.arctan2(2 * mu11, mu20 - mu02)))
+    angles = np.abs(angles)
+    assert angles.max() <= 10.5
+    assert angles.max() > 3.0  # it does rotate
+
+
+def test_builder_enables_rotation_alone():
+    aug = _build_scale_crop_aug(AugmentationProfile(enabled=True, rotate=12.0), 1)
+    assert aug is not None and aug.rotate_degrees == 12.0
+    assert aug.scale_jitter == 0.0 and aug.aspect_jitter == 0.0

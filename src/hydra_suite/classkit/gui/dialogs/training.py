@@ -432,6 +432,7 @@ class ClassKitTrainingDialog(QDialog):
             (self.flip_lr_spin, "fliplr"),
             (self.scale_jitter_spin, "scale_jitter"),
             (self.aspect_jitter_spin, "aspect_jitter"),
+            (self.rotate_spin, "rotate"),
             (self.decode_color_spin, "decode_color_sim"),
             (self.resample_spin, "resample_sim"),
         ):
@@ -448,6 +449,8 @@ class ClassKitTrainingDialog(QDialog):
             self._lr_user_set = abs(saved_lr - DEFAULT_LR) > 1e-12
         if "monochrome" in settings:
             self.monochrome_check.setChecked(bool(settings.get("monochrome")))
+        if "canonical_aug" in settings:
+            self.canonical_aug_check.setChecked(bool(settings.get("canonical_aug")))
 
         label_expansion = settings.get("label_expansion")
         if isinstance(label_expansion, dict) and label_expansion:
@@ -1692,6 +1695,20 @@ class ClassKitTrainingDialog(QDialog):
         )
         aug_form.addRow("<b>Aspect Ratio Jitter:</b>", self.aspect_jitter_spin)
 
+        self.rotate_spin = QDoubleSpinBox()
+        self.rotate_spin.setRange(0.0, 45.0)
+        self.rotate_spin.setSingleStep(1.0)
+        self.rotate_spin.setDecimals(1)
+        self.rotate_spin.setSuffix("°")
+        self.rotate_spin.setValue(0.0)
+        self.rotate_spin.setToolTip(
+            "Rotation jitter: each training crop is rotated about its centre by an "
+            "angle drawn from U(-d, d). Crops are aligned to the estimated heading, "
+            "which is off by a few degrees at inference; 10-15° covers that. "
+            "Corners are filled by reflection. Train samples only. 0 = off."
+        )
+        aug_form.addRow("<b>Rotation Jitter (±):</b>", self.rotate_spin)
+
         self.decode_color_spin = QDoubleSpinBox()
         self.decode_color_spin.setRange(0.0, 1.0)
         self.decode_color_spin.setSingleStep(0.05)
@@ -1715,6 +1732,15 @@ class ClassKitTrainingDialog(QDialog):
             "training-vs-inference crop geometry gap. 0 = off."
         )
         aug_form.addRow("Resample Robustness:", self.resample_spin)
+
+        self.canonical_aug_check = QCheckBox("Blur / compression robustness")
+        self.canonical_aug_check.setToolTip(
+            "Randomly degrades training crops the way real video does: mild blur "
+            "(motion / defocus), JPEG compression, sub-pixel warp jitter and a "
+            "swapped resampling kernel. Train samples only. For YOLO modes it "
+            "writes extra augmented copies of each training image."
+        )
+        aug_form.addRow("", self.canonical_aug_check)
 
         self.monochrome_check = QCheckBox("Force monochrome derived dataset")
         self.monochrome_check.setToolTip(
@@ -1835,6 +1861,12 @@ class ClassKitTrainingDialog(QDialog):
         )
         self.aspect_jitter_spin.valueChanged.connect(
             lambda _value: self._refresh_data_summary()
+        )
+        self.rotate_spin.valueChanged.connect(
+            lambda _value: self._refresh_data_summary()
+        )
+        self.canonical_aug_check.toggled.connect(
+            lambda _checked: self._refresh_data_summary()
         )
         self.monochrome_check.toggled.connect(
             lambda _checked: self._refresh_data_summary()
@@ -2181,12 +2213,16 @@ class ClassKitTrainingDialog(QDialog):
             enabled_augments.append(
                 f"aspect ratio {self.aspect_jitter_spin.value():.2f}"
             )
+        if self.rotate_spin.value() > 0:
+            enabled_augments.append(f"rotation +/-{self.rotate_spin.value():.0f} deg")
         if self.decode_color_spin.value() > 0:
             enabled_augments.append(
                 f"decode-color {self.decode_color_spin.value():.2f}"
             )
         if self.resample_spin.value() > 0:
             enabled_augments.append(f"resample {self.resample_spin.value():.2f}")
+        if self.canonical_aug_check.isChecked():
+            enabled_augments.append("blur/compression")
         if self.monochrome_check.isChecked():
             enabled_augments.append("monochrome")
 
@@ -2517,6 +2553,8 @@ class ClassKitTrainingDialog(QDialog):
             "contrast": contrast_value,
             "scale_jitter": self.scale_jitter_spin.value(),
             "aspect_jitter": self.aspect_jitter_spin.value(),
+            "rotate": self.rotate_spin.value(),
+            "canonical_aug": bool(self.canonical_aug_check.isChecked()),
             "decode_color_sim": self.decode_color_spin.value(),
             "resample_sim": self.resample_spin.value(),
             "monochrome": monochrome_value,

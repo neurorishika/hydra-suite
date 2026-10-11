@@ -527,11 +527,14 @@ def _build_scale_crop_aug(profile, seed):
         return None
     scale = float(getattr(profile, "scale_jitter", 0.0) or 0.0)
     aspect = float(getattr(profile, "aspect_jitter", 0.0) or 0.0)
-    if scale <= 0.0 and aspect <= 0.0:
+    rotate = float(getattr(profile, "rotate", 0.0) or 0.0)
+    if scale <= 0.0 and aspect <= 0.0 and rotate <= 0.0:
         return None
     from .scale_crop_aug import ScaleCropAug
 
-    return ScaleCropAug(scale_jitter=scale, aspect_jitter=aspect, seed=seed)
+    return ScaleCropAug(
+        scale_jitter=scale, aspect_jitter=aspect, seed=seed, rotate_degrees=rotate
+    )
 
 
 def _apply_tiny_augmentation(img, augment, profile, rng=None):
