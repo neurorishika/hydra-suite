@@ -1696,7 +1696,10 @@ class ClassKitTrainingDialog(QDialog):
         aug_form.addRow("<b>Aspect Ratio Jitter:</b>", self.aspect_jitter_spin)
 
         self.rotate_spin = QDoubleSpinBox()
-        self.rotate_spin.setRange(0.0, 45.0)
+        # Capped at 30 degrees: corners are filled by reflection, and past ~20
+        # degrees those mirrored corners grow large enough to show reflected
+        # copies of neighbouring animals (and their tags).
+        self.rotate_spin.setRange(0.0, 30.0)
         self.rotate_spin.setSingleStep(1.0)
         self.rotate_spin.setDecimals(1)
         self.rotate_spin.setSuffix("°")
@@ -1705,7 +1708,12 @@ class ClassKitTrainingDialog(QDialog):
             "Rotation jitter: each training crop is rotated about its centre by an "
             "angle drawn from U(-d, d). Crops are aligned to the estimated heading, "
             "which is off by a few degrees at inference; 10-15° covers that. "
-            "Corners are filled by reflection. Train samples only. 0 = off."
+            "Corners are filled by reflection; above ~20° the mirrored corners can "
+            "show reflected copies of neighbouring animals, so the maximum is 30°. "
+            "Train samples only. 0 = off.\n"
+            "YOLO modes: applied through 3 extra augmented copies of each training "
+            "image (about 4x the epoch time). Scale/aspect jitter already create "
+            "those copies, so with either on this adds no time."
         )
         aug_form.addRow("<b>Rotation Jitter (±):</b>", self.rotate_spin)
 
@@ -1735,10 +1743,14 @@ class ClassKitTrainingDialog(QDialog):
 
         self.canonical_aug_check = QCheckBox("Blur / compression robustness")
         self.canonical_aug_check.setToolTip(
-            "Randomly degrades training crops the way real video does: mild blur "
-            "(motion / defocus), JPEG compression, sub-pixel warp jitter and a "
-            "swapped resampling kernel. Train samples only. For YOLO modes it "
-            "writes extra augmented copies of each training image."
+            "Light image-quality robustness. Every training crop gets a small "
+            "resize round-trip through a random resampling kernel and a sub-pixel "
+            "shift/tilt; 30% also get either a slight Gaussian blur (3x3, sigma "
+            "0.3-0.8) or JPEG re-compression (quality 85-100). It does not simulate "
+            "strong motion blur or heavy compression. Train samples only.\n"
+            "YOLO modes: applied through 3 extra augmented copies of each training "
+            "image (about 4x the epoch time). Scale/aspect jitter already create "
+            "those copies, so with either on this adds no time."
         )
         aug_form.addRow("", self.canonical_aug_check)
 

@@ -675,3 +675,11 @@ def test_training_dialog_rotation_and_blur_compression_round_trip(qapp) -> None:
     settings = dialog.get_settings()
     assert settings["rotate"] == pytest.approx(12.0)
     assert settings["canonical_aug"] is True
+
+
+def test_rotation_jitter_is_capped_at_30_degrees(qapp) -> None:
+    dialog = ClassKitTrainingDialog(
+        n_labeled=8, class_choices=["a", "b"], initial_settings={"rotate": 45.0}
+    )
+    assert dialog.rotate_spin.maximum() == pytest.approx(30.0)
+    assert dialog.get_settings()["rotate"] == pytest.approx(30.0)
