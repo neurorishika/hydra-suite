@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Set
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -78,6 +78,7 @@ class LabelReviewDialog(BaseDialog):
         self._label: Optional[str] = None
         self._page = 0
         self._undo_failed = False
+        self._unsaved = False
         self._cols, self._rows = GRID_SIZES["4 × 4"]
         self._prefetcher = ImagePrefetcher(self)
         self._prefetcher.image_ready.connect(self._on_image_ready)
@@ -122,6 +123,9 @@ class LabelReviewDialog(BaseDialog):
         head = QHBoxLayout()
         self.title_label = QLabel()
         self.title_label.setTextFormat(Qt.RichText)
+        # Long label names are elided instead of widening the dialog.
+        self.title_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.title_label.setMinimumWidth(0)
         head.addWidget(self.title_label, 1)
         self.page_label = QLabel()
         self.page_label.setStyleSheet("color: #aaa;")
@@ -174,6 +178,8 @@ class LabelReviewDialog(BaseDialog):
         main.addWidget(self.status_label)
         outer.addLayout(main, 1)
         self.add_content(root)
+        for combo in (self.source_combo, self.size_combo):
+            combo.installEventFilter(self)  # no silent changes from the wheel
 
         for seq, slot in (
             ("Delete", self.remove_selected),
@@ -228,11 +234,17 @@ class LabelReviewDialog(BaseDialog):
             self._set_status("Select images first: click them or press their keys.")
             return
         indices = [i for i, _ in removal.entries]
+        self._unsaved = False
         self.labels_removed.emit(indices)
         n = len(indices)
         self._set_status(
             f"Removed the label from {n} image{'s' if n != 1 else ''} "
-            "(now unlabeled)."
+            + (
+                "but it is not saved yet: the project database is busy "
+                "(ClassKit keeps retrying)."
+                if self._unsaved
+                else "(now unlabeled)."
+            )
         )
         self._refresh_items()
 
@@ -251,9 +263,10 @@ class LabelReviewDialog(BaseDialog):
             f"Restored {n} label{'s' if n != 1 else ''} ({', '.join(sorted(labels))})."
         )
         first, target = removal.entries[0]
-        if first not in self.model.items(
-            target, self._source(), self.disagree_check.isChecked()
-        ):
+        shown = set(
+            self.model.items(target, self._source(), self.disagree_check.isChecked())
+        )
+        if any(i not in shown for i, _ in removal.entries):
             # The restored images are hidden by a filter: show everything.
             for w in (self.source_combo, self.disagree_check):
                 w.blockSignals(True)
@@ -265,6 +278,10 @@ class LabelReviewDialog(BaseDialog):
         if first in self._items:  # jump to the page showing the restored image
             self._page = self._items.index(first) // self._page_size()
             self._render()
+
+    def removal_unsaved(self) -> None:
+        """The host could not save a removal yet (autosave retries)."""
+        self._unsaved = True
 
     def restore_failed(self, entries) -> None:
         """The host could not save an undo: put the removal back."""
@@ -318,9 +335,10 @@ class LabelReviewDialog(BaseDialog):
             self.label_list.addItem(item)
             if label == (select or self._label):
                 row_to_select = row
-        self.label_list.blockSignals(False)
         if self.label_list.count():
             self.label_list.setCurrentRow(row_to_select)
+        self.label_list.blockSignals(False)
+        if self.label_list.count():
             self._on_label_changed(self.label_list.currentItem(), None)
         else:
             self._label = None
@@ -354,6 +372,7 @@ class LabelReviewDialog(BaseDialog):
         if self.model.predicted is not None and not self.disagree_check.isChecked():
             text += f"   ({wrong:,} ⚠)"
         item.setText(text)
+        item.setToolTip(text)
         # Default role data keeps the stylesheet's text color for normal rows.
         item.setData(Qt.ForegroundRole, QColor("#777") if shown == 0 else None)
 
@@ -485,10 +504,12 @@ class LabelReviewDialog(BaseDialog):
             count = f"{n:,} image{'s' if n != 1 else ''}" if n else "nothing to show"
             if not n and self.disagree_check.isChecked():
                 count = "the model agrees with every image"
+            name = self._label if len(self._label) <= 60 else self._label[:59] + "…"
             self.title_label.setText(
-                f"<span style='font-size:16px;'><b>{html.escape(self._label)}</b></span>"
+                f"<span style='font-size:16px;'><b>{html.escape(name)}</b></span>"
                 f"<span style='color:#aaa;'>  —  {count}</span>"
             )
+            self.title_label.setToolTip(self._label)
         self.page_label.setText(f"Page {self._page + 1} / {self._page_count()}")
         if self.model.has_model:
             self.order_label.setText(
@@ -515,6 +536,10 @@ class LabelReviewDialog(BaseDialog):
         page = self._page_items()
         for slot, tile in enumerate(self._tiles):
             idx = page[slot] if slot < len(page) else None
+            if tile.property("review_index") != idx:
+                # A press made on the previous image must not click this one.
+                tile.setDown(False)
+                tile.setProperty("review_index", idx)
             if idx is None:
                 tile.set_image(None, True, " ")
                 tile.set_caption("")
@@ -531,6 +556,14 @@ class LabelReviewDialog(BaseDialog):
             tile.set_selected(idx in self._selected)
             tile.setToolTip(Path(self._paths[idx]).name)
 
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() == QEvent.Wheel and watched in (
+            self.source_combo,
+            self.size_combo,
+        ):
+            return True
+        return super().eventFilter(watched, event)
+
     def done(self, result: int) -> None:  # noqa: D401 - Qt override
-        self._prefetcher.shutdown()
+        self._prefetcher.shutdown(wait_ms=0)  # never freeze closing on slow disks
         super().done(result)

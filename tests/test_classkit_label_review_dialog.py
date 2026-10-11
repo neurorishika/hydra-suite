@@ -476,3 +476,134 @@ def test_list_rows_use_default_color_unless_empty(qapp, tmp_path):
     dialog.disagree_check.setChecked(True)
     assert dialog.label_list.item(0).data(Qt.ForegroundRole) is not None
     assert dialog.label_list.item(1).data(Qt.ForegroundRole) is None
+
+
+def test_long_label_does_not_widen_dialog(qapp, tmp_path):
+    dialog, _, _, _ = _dialog(tmp_path, ["x" * 250, "x" * 250])
+    assert dialog.minimumSizeHint().width() < 1400
+    assert dialog.title_label.toolTip() == "x" * 250
+
+
+def test_press_spanning_a_page_change_does_not_select(qapp, tmp_path):
+    dialog, _, _, _ = _dialog(tmp_path, ["a_x"] * 40)
+    tile = dialog._tiles[1]
+    QTest.mousePress(tile, Qt.LeftButton)
+    _press(dialog, Qt.Key_PageDown)
+    _wait_loaded(qapp, dialog)
+    QTest.mouseRelease(tile, Qt.LeftButton)
+    assert not dialog._selected
+
+
+def test_wheel_does_not_change_grid_or_filter(qapp, tmp_path):
+    dialog, _, _, _ = _dialog(tmp_path, ["a_x"] * 5)
+    for combo in (dialog.size_combo, dialog.source_combo):
+        before = combo.currentText()
+        ev = QtGui.QWheelEvent(
+            QtCore.QPointF(5, 5),
+            combo.mapToGlobal(QtCore.QPointF(5, 5)),
+            QtCore.QPoint(0, 0),
+            QtCore.QPoint(0, -120),
+            Qt.NoButton,
+            Qt.NoModifier,
+            Qt.NoScrollPhase,
+            False,
+        )
+        QApplication.sendEvent(combo, ev)
+        assert combo.currentText() == before
+
+
+def test_undo_resets_filter_when_any_restored_image_is_hidden(qapp, tmp_path):
+    labels = ["a_x"] * 8
+    machine = [i % 2 == 1 for i in range(8)]
+    dialog, _, _, restored = _dialog(tmp_path, labels, machine=machine)
+    _press(dialog, Qt.Key_A, Qt.ControlModifier)
+    _press(dialog, Qt.Key_Delete)
+    dialog.source_combo.setCurrentText("Human-verified")
+    _press(dialog, Qt.Key_Z, Qt.ControlModifier)
+    assert len(restored[0]) == 8
+    assert dialog.source_combo.currentText() == "All labels"
+    assert sorted(dialog._items) == list(range(8))
+
+
+def test_main_window_deletes_dialog_after_close(qapp, tmp_path, monkeypatch):
+    paths, db_path = _project(tmp_path)
+    window = _window(paths, db_path)
+    opened = []
+
+    def fake_exec(dialog):
+        opened.append(dialog)
+        return 0
+
+    monkeypatch.setattr(LabelReviewDialog, "exec", fake_exec)
+    window._open_label_review()
+    QApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+    qapp.processEvents()
+    assert window.findChildren(LabelReviewDialog) == []
+    window.close()
+
+
+def test_open_refused_while_labels_are_unsaved(qapp, tmp_path, monkeypatch):
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+
+    paths, db_path = _project(tmp_path)
+    window = _window(paths, db_path)
+    window._set_label_for_index(4, "b_y")  # human relabel of the machine label
+    monkeypatch.setattr(
+        ClassKitDB,
+        "update_labels_batch",
+        lambda self, u: (_ for _ in ()).throw(RuntimeError("locked")),
+    )
+    warned, opened = [], []
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *a: warned.append(a))
+    monkeypatch.setattr(LabelReviewDialog, "exec", lambda d: opened.append(d))
+    window._open_label_review()
+    assert warned and not opened
+    window.close()
+
+
+def test_unsaved_relabel_snapshot_stays_human(qapp, tmp_path, monkeypatch):
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+
+    paths, db_path = _project(tmp_path)
+    window = _window(paths, db_path)
+    # Memory says b_y (a human relabel); the status cache still holds the
+    # old machine row, as after a failed save.
+    window.image_labels[4] = "b_y"
+    snapshots = {}
+    window._remove_labels_for_review([4], snapshots)
+    assert snapshots[4]["row"]["label_source"] == "human"
+    assert window._restore_labels_for_review([(4, "b_y")], snapshots)
+    row = ClassKitDB(db_path).get_label_review_status_by_path()[str(paths[4])]
+    assert row["label"] == "b_y" and row["verified"] is True
+    assert row["label_source"] == "human"
+    window.close()
+
+
+def test_unsaved_removal_is_reported(qapp, tmp_path, monkeypatch):
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+
+    paths, db_path = _project(tmp_path)
+    window = _window(paths, db_path)
+    seen = {}
+
+    def fake_exec(dialog):
+        dialog.show()
+        _wait_loaded(qapp, dialog)
+        monkeypatch.setattr(
+            ClassKitDB,
+            "update_labels_batch",
+            lambda self, u: (_ for _ in ()).throw(RuntimeError("locked")),
+        )
+        dialog._selected = {0}
+        _press(dialog, Qt.Key_Delete)
+        seen["status"] = dialog.status_label.text()
+        monkeypatch.undo()
+        return 0
+
+    monkeypatch.setattr(LabelReviewDialog, "exec", fake_exec)
+    window._open_label_review()
+    assert "not saved yet" in seen["status"]
+    # The closing flush retried and saved it.
+    row = ClassKitDB(db_path).get_label_review_status_by_path()[str(paths[0])]
+    assert row["label"] is None
+    window.close()

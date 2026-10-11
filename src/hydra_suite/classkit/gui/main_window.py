@@ -11560,6 +11560,7 @@ class MainWindow(QMainWindow):
         try:
             dialog.exec()
         finally:
+            dialog.deleteLater()  # frees its pixmap cache
             self._flush_pending_label_updates(force=True)
             self.request_refresh_label_history_strip()
             self.request_update_explorer_plot()
@@ -11624,6 +11625,14 @@ class MainWindow(QMainWindow):
 
         # Read provenance from the DB so in-session labels are classified right.
         self._flush_pending_label_updates(force=True)
+        if self._pending_label_updates:
+            QMessageBox.warning(
+                self,
+                "Review Labels",
+                "Recent labels could not be saved yet (the project database is "
+                "busy). Try again in a moment.",
+            )
+            return
         records = self._image_review_status
         if self.db_path:
             from ..core.store.db import ClassKitDB
@@ -11662,6 +11671,7 @@ class MainWindow(QMainWindow):
         )
         dialog.labels_removed.connect(
             lambda indices: self._remove_labels_for_review(indices, snapshots)
+            or dialog.removal_unsaved()
         )
         dialog.labels_restored.connect(
             lambda entries: self._restore_labels_for_review(entries, snapshots)
@@ -11670,23 +11680,34 @@ class MainWindow(QMainWindow):
         try:
             dialog.exec()
         finally:
+            dialog.deleteLater()  # frees its pixmap cache
             self._flush_pending_label_updates(force=True)
             self._refresh_review_candidate_indices()
             self.request_refresh_label_history_strip()
             self.request_update_explorer_plot()
             self.request_update_context_panel()
             n = model.removed_count()
+            unsaved = (
+                "; some changes are not saved yet (autosave will retry)"
+                if self._pending_label_updates
+                else ""
+            )
             self.status.showMessage(
-                f"Review Labels: {n} label{'s' if n != 1 else ''} removed"
+                f"Review Labels: {n} label{'s' if n != 1 else ''} removed{unsaved}"
             )
 
-    def _remove_labels_for_review(self, indices, snapshots: dict) -> None:
-        """Clear labels picked in Label Review and save at once."""
+    def _remove_labels_for_review(self, indices, snapshots: dict) -> bool:
+        """Clear labels picked in Label Review and save at once.
+
+        Returns False when the save failed (autosave keeps retrying).
+        """
         for index in indices:
             index = int(index)
             path = str(self.image_paths[index])
             record = dict(self._image_review_status.get(path) or {})
-            if not record.get("label"):
+            if record.get("label") != self.image_labels[index]:
+                # Not the row on disk (e.g. an unsaved relabel): it is the
+                # user's own label.
                 record = {
                     "label": self.image_labels[index],
                     "label_source": "human",
@@ -11718,6 +11739,10 @@ class MainWindow(QMainWindow):
                 "auto_label_metadata": {},
             }
         self._flush_pending_label_updates(force=True)
+        return not any(
+            str(self.image_paths[int(i)]) in self._pending_label_updates
+            for i in indices
+        )
 
     def _restore_labels_for_review(self, entries, snapshots: dict) -> bool:
         """Undo a Label Review removal, restoring each row's provenance.
