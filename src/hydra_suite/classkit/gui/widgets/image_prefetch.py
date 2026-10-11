@@ -79,6 +79,6 @@ class ImagePrefetcher(QObject):
             queued += 1
         return queued
 
-    def shutdown(self) -> None:
+    def shutdown(self, wait_ms: int = 2000) -> None:
         self._pool.clear()
-        self._pool.waitForDone(2000)
+        self._pool.waitForDone(wait_ms)

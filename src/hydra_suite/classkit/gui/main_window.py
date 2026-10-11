@@ -896,6 +896,14 @@ class MainWindow(QMainWindow):
         nav_row.addWidget(self.next_btn)
         layout_labeling.addLayout(nav_row)
 
+        self.review_labels_btn = QPushButton("▦  Review Labels…")
+        self.review_labels_btn.setToolTip(
+            "Browse every image of each label in a grid (likely mislabels first "
+            "when a model is loaded) and remove wrong labels."
+        )
+        self.review_labels_btn.clicked.connect(self._open_label_review)
+        layout_labeling.addWidget(self.review_labels_btn)
+
         # Shortcut reference inside labeling group
         self.shortcut_help = QLabel()
         self.shortcut_help.setWordWrap(True)
@@ -11552,6 +11560,7 @@ class MainWindow(QMainWindow):
         try:
             dialog.exec()
         finally:
+            dialog.deleteLater()  # frees its pixmap cache
             self._flush_pending_label_updates(force=True)
             self.request_refresh_label_history_strip()
             self.request_update_explorer_plot()
@@ -11591,6 +11600,185 @@ class MainWindow(QMainWindow):
         ]
         if label:
             self.label_history.append({"index": int(index), "label": label})
+
+    def _open_label_review(self):
+        """Open the Label Review grid: browse each label, remove mislabels."""
+        if len(self.image_labels) != len(self.image_paths):
+            QMessageBox.warning(
+                self,
+                "Review Labels",
+                "Labels are out of sync with the image list; reload the project.",
+            )
+            return
+        if not any(self.image_labels):
+            QMessageBox.information(
+                self, "Review Labels", "There are no labeled images to review yet."
+            )
+            return
+
+        from ..core.al.label_review import (
+            LabelReviewModel,
+            label_probabilities,
+            predicted_labels,
+        )
+        from .dialogs.label_review import LabelReviewDialog
+
+        # Read provenance from the DB so in-session labels are classified right.
+        self._flush_pending_label_updates(force=True)
+        if self._pending_label_updates:
+            QMessageBox.warning(
+                self,
+                "Review Labels",
+                "Recent labels could not be saved yet (the project database is "
+                "busy). Try again in a moment.",
+            )
+            return
+        records = self._image_review_status
+        if self.db_path:
+            from ..core.store.db import ClassKitDB
+
+            records = ClassKitDB(self.db_path).get_label_review_status_by_path()
+            self._image_review_status = records
+        machine = [
+            bool(records.get(str(p), {}).get("label"))
+            and not records.get(str(p), {}).get("verified")
+            for p in self.image_paths
+        ]
+
+        agreement = predicted = None
+        factor_probs, factor_labels = self._collect_combination_inputs()
+        if factor_probs is not None:
+            joint = self._composite_joint_probs()
+            try:
+                agreement = label_probabilities(
+                    self.image_labels, factor_probs, factor_labels, joint
+                )
+                predicted = predicted_labels(factor_probs, factor_labels, joint)
+            except ValueError as exc:
+                agreement = predicted = None
+                self.status.showMessage(f"Review Labels: model ignored ({exc})")
+
+        model = LabelReviewModel(self.image_labels, machine, agreement, predicted)
+        current = None
+        selected = self.selected_point_index
+        if selected is not None and 0 <= selected < len(self.image_labels):
+            current = self.image_labels[selected]
+
+        # Original DB rows of removed images, so undo restores provenance exactly.
+        snapshots: dict[int, dict] = {}
+        dialog = LabelReviewDialog(
+            model, self.image_paths, initial_label=current, parent=self
+        )
+        dialog.labels_removed.connect(
+            lambda indices: self._remove_labels_for_review(indices, snapshots)
+            or dialog.removal_unsaved()
+        )
+        dialog.labels_restored.connect(
+            lambda entries: self._restore_labels_for_review(entries, snapshots)
+            or dialog.restore_failed(entries)
+        )
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()  # frees its pixmap cache
+            self._flush_pending_label_updates(force=True)
+            self._refresh_review_candidate_indices()
+            self.request_refresh_label_history_strip()
+            self.request_update_explorer_plot()
+            self.request_update_context_panel()
+            n = model.removed_count()
+            unsaved = (
+                "; some changes are not saved yet (autosave will retry)"
+                if self._pending_label_updates
+                else ""
+            )
+            self.status.showMessage(
+                f"Review Labels: {n} label{'s' if n != 1 else ''} removed{unsaved}"
+            )
+
+    def _remove_labels_for_review(self, indices, snapshots: dict) -> bool:
+        """Clear labels picked in Label Review and save at once.
+
+        Returns False when the save failed (autosave keeps retrying).
+        """
+        for index in indices:
+            index = int(index)
+            path = str(self.image_paths[index])
+            record = dict(self._image_review_status.get(path) or {})
+            if record.get("label") != self.image_labels[index]:
+                # Not the row on disk (e.g. an unsaved relabel): it is the
+                # user's own label.
+                record = {
+                    "label": self.image_labels[index],
+                    "label_source": "human",
+                    "verified": True,
+                }
+            snapshots[index] = {
+                "row": record,
+                "history": [
+                    e for e in self.label_history if e.get("index") == index
+                ],
+                "in_round": index in self.round_labeled_indices,
+            }
+            self._set_label_for_index(index, None)
+            self._remove_history_for_index(index)
+            self.round_labeled_indices = [
+                i for i in self.round_labeled_indices if i != index
+            ]
+            # Ctrl+Z in the main window must not replay an older assignment
+            # onto an image whose label was just removed here.
+            self.last_assigned_stack = [
+                e for e in self.last_assigned_stack if e.get("index") != index
+            ]
+            self._image_review_status[path] = {
+                "label": None,
+                "confidence": None,
+                "label_source": None,
+                "verified": False,
+                "verified_at": None,
+                "auto_label_metadata": {},
+            }
+        self._flush_pending_label_updates(force=True)
+        return not any(
+            str(self.image_paths[int(i)]) in self._pending_label_updates
+            for i in indices
+        )
+
+    def _restore_labels_for_review(self, entries, snapshots: dict) -> bool:
+        """Undo a Label Review removal, restoring each row's provenance.
+
+        Writes the DB first; on failure nothing changes and False is returned
+        so the dialog keeps the removal (and can undo it again).
+        """
+        rows = {}
+        for index, label in entries:
+            snap = snapshots.get(int(index)) or {}
+            record = dict(snap.get("row") or {})
+            record["label"] = label
+            rows[str(self.image_paths[int(index)])] = record
+        if self.db_path and rows:
+            from ..core.store.db import ClassKitDB
+
+            try:
+                ClassKitDB(self.db_path).restore_label_records(rows)
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Review Labels", f"Could not restore the labels: {exc}"
+                )
+                return False
+        for index, label in entries:
+            index = int(index)
+            path = str(self.image_paths[index])
+            snap = snapshots.pop(index, None) or {}
+            # A failed autosave must not later overwrite the restored label.
+            self._pending_label_updates.pop(path, None)
+            self.image_labels[index] = label
+            self._image_review_status[path] = rows[path]
+            self.label_history.extend(snap.get("history") or [])
+            if snap.get("in_round") and index not in self.round_labeled_indices:
+                self.round_labeled_indices.append(index)
+        self._invalidate_infinite_labeling_cache()
+        return True
 
     def _collect_error_mining_inputs(self):
         """Head-aware predictions + which labels are trustworthy, for AL error mining.
