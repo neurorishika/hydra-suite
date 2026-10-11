@@ -206,3 +206,24 @@ def test_cli_project_symlinked_posekit_project_dir(tmp_path: Path) -> None:
     (ds / DEFAULT_POSEKIT_PROJECT_DIR).symlink_to(real, target_is_directory=True)
     selected = ds / DEFAULT_POSEKIT_PROJECT_DIR / "state" / DEFAULT_PROJECT_NAME
     assert dataset_dir_for_cli_project(selected, None) == ds
+
+
+def test_repair_keeps_legacy_labels_dir(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.project import _repair_project_paths
+
+    ds = tmp_path / "ds"
+    (ds / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    (ds / "labels").mkdir()
+    (ds / "labels" / "a.txt").write_text("0 0.5 0.5 1 1 0.1 0.1 2 0.2 0.2 2\n")
+    proj = Project(
+        images_dir=Path("/old/machine/ds/images"),
+        out_root=Path("/old/machine/ds"),
+        labels_dir=Path("/old/machine/ds/labels"),
+        project_path=Path("/old/machine/ds/pose_project.json"),
+        class_names=["ant"],
+        keypoint_names=["head", "tail"],
+        skeleton_edges=[(0, 1)],
+    )
+    assert _repair_project_paths(proj, ds)
+    assert proj.images_dir == (ds / DEFAULT_DATASET_IMAGES_DIR).resolve()
+    assert proj.labels_dir == (ds / "labels").resolve()  # labels not hidden

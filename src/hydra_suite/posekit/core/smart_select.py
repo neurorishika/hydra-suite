@@ -213,6 +213,9 @@ def run_smart_select(
     if req.predictions:
         status("Scoring model predictions…")
     unc, err, n_pred, n_scored = score_instances(req, check)
+    if unc is not None:  # stale predictions of unreadable images don't count
+        unc[bad] = np.nan
+        err[bad] = np.nan
     unit_unc = unit_max(unc, units)
     unit_err = unit_max(err, units)
 

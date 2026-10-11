@@ -634,7 +634,8 @@ class SmartSelectDialog(QDialog):
         new = [u for u in chosen if u not in set(kept)]
         # Only frames the "Pick from" choice allows (e.g. not labeled ones
         # under "Unlabeled only").
-        added = [u for u in new if self._last_candidates[out.units[u]].any()]
+        pickable = self._last_candidates & ~out.unusable
+        added = [u for u in new if pickable[out.units[u]].any()]
         if len(added) < len(new):
             self.lbl_status.setText(
                 f"Skipped {len(new) - len(added)} point(s) outside "

@@ -30,13 +30,16 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
+# Re-exported: these moved to the shared core.
 from hydra_suite.core.selection.selectors import (  # noqa: F401
     ErrorNeighborResult,
     ErrorNeighborSelector,
     ErrorSet,
     RareClusterSelector,
+    l2_normalize,
 )
-from hydra_suite.core.selection.selectors import l2_normalize as _l2_normalize  # noqa: F401
+
+_l2_normalize = l2_normalize  # old private name
 
 # Predictions that mean "the model abstained", not "the model said X".
 _ABSTAIN = {"", "unknown", "n/a", "none"}

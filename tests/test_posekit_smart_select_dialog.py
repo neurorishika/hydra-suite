@@ -600,6 +600,28 @@ def test_unreadable_images_are_skipped_not_fatal(qapp, tmp_path, monkeypatch):
     assert loads == [] and again["meta"]["unreadable"] == [2, 6]
     np.testing.assert_array_equal(again["emb"], got["emb"])
 
+    # When the model loads anyway (a new image), remembered failures are
+    # retried: a file fixed without changing mtime/size is picked up.
+    Image.new("RGB", (16, 16), (9, 9, 9)).save(images / "new.png")
+    st = paths[2].stat()
+    Image.new("RGB", (16, 16), (1, 2, 3)).save(paths[2])
+    os.utime(paths[2], (st.st_atime, st.st_mtime))
+    third = {}
+    w3 = ext.EmbeddingWorker(
+        image_paths=paths + [images / "new.png"],
+        eligible_indices=list(range(len(paths) + 1)),
+        cache_dir=tmp_path / "posekit",
+        model_name="stub",
+        device_pref="cpu",
+        batch_size=4,
+        use_enhance=False,
+        max_side=0,
+    )
+    w3.finished.connect(lambda e, el, m: third.update(emb=e, meta=m))
+    w3.run()
+    assert loads == [1] and third["meta"]["unreadable"] == [6]
+    assert third["emb"][2].any()
+
     # The dialog never picks an unreadable image.
     dlg = _dialog(tmp_path, [p.name for p in paths])
     dlg.cb_scope.setCurrentText("All frames")
@@ -745,3 +767,36 @@ def test_frame_mode_leaves_out_unreadable_individuals(qapp, tmp_path):
     _pump_until(qapp, lambda: dlg._sel_worker is None)
     picked = dlg.batch_instances()
     assert 0 in picked and 1 not in picked and len(picked) == 19
+
+
+def test_frame_mode_counts_and_explorer_ignore_unreadable(qapp, tmp_path, monkeypatch):
+    names = [f"did{f * 10000 + k}.jpg" for f in range(1, 11) for k in range(2)]
+    dlg = _dialog(
+        tmp_path, names, labeled=[0], frame_mode=True, source_ids=["s"] * len(names)
+    )
+    dlg.n_spin.setValue(10)
+    dlg._emb_key_pending = dlg._embedding_key()
+    dlg._eligible_indices = [i for i in range(20) if i != 0]
+    dlg._set_busy(True)
+    emb = np.repeat(_blobs([5, 5]), 2, axis=0)
+    emb[1] = 0
+    dlg._on_emb_finished(emb, dlg._eligible_indices, {"unreadable": [1]})
+    _pump_until(qapp, lambda: dlg._sel_worker is None)
+    # Frame 1: instance 0 labeled, instance 1 unreadable -> never pickable.
+    assert 0 not in dlg.batch_units
+    text = dlg.summary_label.text()
+    assert "(18 individuals)" in text  # 9 frames x 2, no unreadable counted
+
+    class _Explorer:
+        def __init__(self, **kwargs):
+            self.selected_indices = list(range(len(kwargs["image_paths"])))
+
+        def exec(self):
+            return QDialog.Accepted
+
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog", _Explorer
+    )
+    dlg._open_explorer()
+    assert 0 not in dlg.batch_units
+    assert 0 not in dlg.batch_instances() and 1 not in dlg.batch_instances()

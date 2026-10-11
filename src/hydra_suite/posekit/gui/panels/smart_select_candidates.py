@@ -128,11 +128,14 @@ class SmartSelectCandidatesPanel(QWidget):
         first = next((i for i in members if i not in self._unreadable), members[0])
         return self.image_paths[first]
 
+    def _readable(self, unit: int) -> List[int]:
+        return [i for i in self._outcome.units[unit] if i not in self._unreadable]
+
     def unit_name(self, unit: int) -> str:
-        members = self._outcome.units[unit]
         name = self.unit_path(unit).name
-        if len(members) > 1:
-            name += f"  (+{len(members) - 1} on frame)"
+        n = len(self._readable(unit))
+        if n > 1:
+            name += f"  (+{n - 1} on frame)"
         return name
 
     def _detail(self, unit: int, reason: str) -> str:
@@ -216,7 +219,7 @@ class SmartSelectCandidatesPanel(QWidget):
             counts[r] = counts.get(r, 0) + 1
         order = list(REASONS) + [REASON_EXPLORER]
         parts = [f"{REASON_TEXT[r]} ×{counts[r]}" for r in order if counts.get(r)]
-        n_inst = sum(len(self._outcome.units[u]) for u in self._batch)
+        n_inst = sum(len(self._readable(u)) for u in self._batch)
         unit_word = "frames" if self.frame_mode else "images"
         extra = f" ({n_inst} individuals)" if self.frame_mode else ""
         self.summary_label.setText(

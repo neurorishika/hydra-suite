@@ -15,9 +15,9 @@ from .constants import (
     DEFAULT_POSEKIT_PROJECT_DIR,
     DEFAULT_PROJECT_NAME,
 )
+from .dialogs.utils import exit_after_threads
 from .main_window import MainWindow
 from .models import Project
-from .dialogs.utils import exit_after_threads
 from .project import (
     _project_root_from_selection,
     build_image_list,

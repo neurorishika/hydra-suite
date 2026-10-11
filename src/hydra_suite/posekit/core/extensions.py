@@ -1268,6 +1268,12 @@ class EmbeddingWorker(QObject):
             # are skipped up front, so they don't force a model load each run.
             known_bad = _unchanged_unreadable(self.image_paths, stored_bad)
             needs_compute = [i for i in needs_compute if i not in known_bad]
+            if needs_compute and known_bad:
+                # The model loads anyway: retry them (a permission or network
+                # error leaves mtime and size unchanged, so "unchanged" alone
+                # would skip a file that has become readable).
+                needs_compute = sorted(set(needs_compute) | known_bad)
+                known_bad = set()
 
             if not needs_compute:
                 self.status.emit("Loading cached embeddings…")
