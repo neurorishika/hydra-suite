@@ -18,7 +18,7 @@ from typing import List, Optional, Sequence, Set
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -354,7 +354,8 @@ class LabelReviewDialog(BaseDialog):
         if self.model.predicted is not None and not self.disagree_check.isChecked():
             text += f"   ({wrong:,} ⚠)"
         item.setText(text)
-        item.setForeground(Qt.gray if shown == 0 else self.palette().text())
+        # Default role data keeps the stylesheet's text color for normal rows.
+        item.setData(Qt.ForegroundRole, QColor("#777") if shown == 0 else None)
 
     def _on_label_changed(self, current, _previous) -> None:
         self._label = None if current is None else current.data(Qt.UserRole)

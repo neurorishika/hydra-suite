@@ -468,3 +468,11 @@ def test_main_window_failed_undo_keeps_label_removed(qapp, tmp_path, monkeypatch
     row = ClassKitDB(db_path).get_label_review_status_by_path()[str(paths[0])]
     assert row["label"] == "a_x" and row["verified"] is True
     window.close()
+
+
+def test_list_rows_use_default_color_unless_empty(qapp, tmp_path):
+    dialog, _, _, _ = _dialog(tmp_path, ["a_x", "b_y"], predicted=["a_x", "a_x"])
+    assert dialog.label_list.item(0).data(Qt.ForegroundRole) is None
+    dialog.disagree_check.setChecked(True)
+    assert dialog.label_list.item(0).data(Qt.ForegroundRole) is not None
+    assert dialog.label_list.item(1).data(Qt.ForegroundRole) is None
