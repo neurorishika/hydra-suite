@@ -195,6 +195,9 @@ class SKLearnClusterer:
             )
 
         min_cs = max(5, len(emb) // max(self.n_clusters, 1))
+        if len(emb) <= min_cs:
+            # Too few points to find a dense group of min_cs (HDBSCAN raises).
+            return self._fit_kmeans(emb, "kmeans")
         clf = HDBSCAN(min_cluster_size=min_cs)
         labels = clf.fit_predict(emb)
 

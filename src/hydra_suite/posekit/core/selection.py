@@ -5,8 +5,8 @@ Built from the same selectors as ClassKit's active-learning batch
 
 * **Pose error** — on frames that have both a human label and a model
   prediction, the mean keypoint error over visible ground-truth keypoints,
-  divided by the object's scale (the Evaluation dialog's ``mean_error_norm``).
-  A keypoint the model missed counts as ``miss_penalty``.  Frames above
+  divided by the object's scale (the Evaluation dialog's ``mean_error_norm``,
+  except that a keypoint the model missed counts as ``miss_penalty``).  Frames above
   ``error_threshold`` are *known failures*; unlabeled frames that look like
   them are picked by the error-neighbour slot.
 * **Uncertainty** — ``1 - mean keypoint confidence`` of the model's
@@ -64,6 +64,9 @@ REASONS = (
     REASON_REPRESENTATIVE,
     REASON_AUDIT,
 )
+# Uncertainty at or below this is "fully confident": no signal for the slot.
+UNCERTAINTY_FLOOR = 1e-6
+
 REASON_LABELS = {
     REASON_ERROR: "Near a model error",
     REASON_UNCERTAINTY: "Model unsure",
@@ -103,9 +106,11 @@ def pose_error_norm(
 
     ``gt_kpts`` are ``(x, y, v)`` in normalised image coordinates (YOLO pose
     labels); ``preds`` are ``(x, y, conf)`` in pixels.  Only visible
-    ground-truth keypoints (``v > 0``) count.  A visible keypoint the model
-    did not predict (no entry, confidence ``<= 0`` or non-finite position)
-    counts as ``miss_penalty``.  Returns NaN when nothing is visible.
+    ground-truth keypoints (``v > 0``) count.  This is the Evaluation dialog's
+    ``mean_error_norm`` with one difference: a visible keypoint the model did
+    not predict (no entry, confidence ``<= 0`` or non-finite position) counts
+    as ``miss_penalty`` instead of being skipped, since a miss is an error.
+    Returns NaN when nothing is visible.
     """
     if width <= 0 or height <= 0:
         return float("nan")
@@ -124,8 +129,7 @@ def pose_error_norm(
         if not (math.isfinite(px) and math.isfinite(py)) or not conf > 0:
             errs.append(miss_penalty)
             continue
-        err = math.hypot(px - gx * width, py - gy * height) / scale
-        errs.append(min(err, miss_penalty) if miss_penalty > 0 else err)
+        errs.append(math.hypot(px - gx * width, py - gy * height) / scale)
     if not errs:
         return float("nan")
     return float(np.mean(errs))
@@ -283,8 +287,10 @@ def select_pose_batch(
             int(i): float(s) for i, s in zip(errors.indices, errors.severity)
         }
         if len(errors):
+            # Never the failures themselves (or other labeled frames, which
+            # can be candidates under "All frames" or in Frame Mode).
             res = ErrorNeighborSelector().select(
-                emb, errors, avail, budgets[REASON_ERROR]
+                emb, errors, avail & ~labeled, budgets[REASON_ERROR]
             )
             sb.claim(REASON_ERROR, res.indices)
             info["error_sources"] = {
@@ -296,7 +302,10 @@ def select_pose_batch(
     # 2. Uncertainty: the model's least confident predictions.
     if uncertainty is not None and budgets[REASON_UNCERTAINTY] > 0:
         unc = np.asarray(uncertainty, dtype=np.float64)
-        picked = top_scores(unc, budgets[REASON_UNCERTAINTY], avail)
+        # A fully confident prediction carries no signal; ties are broken at
+        # random so equal scores don't all come from the start of the list.
+        unc = np.where(unc > UNCERTAINTY_FLOOR, unc, np.nan)
+        picked = top_scores(unc, budgets[REASON_UNCERTAINTY], avail, rng=rng)
         taken = sb.claim(REASON_UNCERTAINTY, picked)
         info["uncertainty"] = {int(i): float(unc[i]) for i in taken}
 
@@ -350,11 +359,16 @@ def select_pose_batch(
             REASON_AUDIT, AuditSelector().select(budgets[REASON_AUDIT], avail, rng=rng)
         )
 
-    # 7. Top-up: slots with no signal hand their budget to diversity.
-    short = batch_size - len(sb)
-    if short > 0 and avail.any():
-        before = len(sb)
-        diverse(short, REASON_DIVERSITY)
+    # 7. Top-up: slots with no signal hand their budget to diversity.  Loop:
+    # with near-duplicate suppression a pick can knock out later picks of
+    # the same call, so one pass may still leave the batch short.
+    before = len(sb)
+    while len(sb) < batch_size and avail.any():
+        n_before = len(sb)
+        diverse(batch_size - len(sb), REASON_DIVERSITY)
+        if len(sb) == n_before:
+            break
+    if len(sb) > before:
         info["topped_up"] = len(sb) - before
     info["suppressed"] = sb.suppressed
 

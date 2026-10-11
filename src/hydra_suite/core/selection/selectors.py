@@ -48,10 +48,17 @@ def _rng(rng: Optional[np.random.Generator]) -> np.random.Generator:
     return rng if rng is not None else np.random.default_rng()
 
 
-def top_scores(scores: np.ndarray, n_samples: int, mask: np.ndarray) -> np.ndarray:
+def top_scores(
+    scores: np.ndarray,
+    n_samples: int,
+    mask: np.ndarray,
+    rng: Optional[np.random.Generator] = None,
+) -> np.ndarray:
     """Indices of the ``n_samples`` highest finite scores inside ``mask``.
 
-    NaN / -inf scores (no signal) are never selected.  Ties keep index order.
+    NaN / -inf scores (no signal) are never selected.  Ties keep index order,
+    or are broken at random with ``rng`` (so equal scores don't all come from
+    the start of the dataset, e.g. consecutive video frames).
     """
     s = np.asarray(scores, dtype=np.float64).copy()
     valid = np.asarray(mask, dtype=bool) & np.isfinite(s)
@@ -59,7 +66,10 @@ def top_scores(scores: np.ndarray, n_samples: int, mask: np.ndarray) -> np.ndarr
     if k <= 0:
         return np.array([], dtype=int)
     cand = np.where(valid)[0]
-    order = np.argsort(-s[cand], kind="stable")[:k]
+    if rng is None:
+        order = np.argsort(-s[cand], kind="stable")[:k]
+    else:
+        order = np.lexsort((rng.random(len(cand)), -s[cand]))[:k]
     return cand[order]
 
 

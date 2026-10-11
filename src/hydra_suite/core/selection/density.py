@@ -16,6 +16,10 @@ import numpy as np
 # Cap on the elements of one (queries x points) distance block.
 _MAX_BLOCK_ELEMS = 20_000_000
 
+# Up to this many points kNN is exact (blockwise numpy): deterministic and fast
+# enough; above it hnswlib (approximate) is used when installed.
+EXACT_KNN_MAX = 20_000
+
 
 def _pairwise_l2(queries: np.ndarray, points: np.ndarray) -> np.ndarray:
     """Euclidean distances ``(len(queries), len(points))`` via dot products."""
@@ -48,17 +52,24 @@ def compute_knn_density(
     emb = np.ascontiguousarray(embeddings.astype(np.float32))
     k_search = min(k + 1, N)  # +1 to exclude self
 
-    if importlib.util.find_spec("hnswlib") is not None:
+    if N > EXACT_KNN_MAX and importlib.util.find_spec("hnswlib") is not None:
         import hnswlib
 
+        # Single-threaded build and query: hnswlib's multi-threaded insert
+        # order changes the graph, so densities (and the batches built from
+        # them) would differ between runs with the same seed.
         idx = hnswlib.Index(space="l2", dim=D)
-        idx.init_index(max_elements=N, ef_construction=100, M=16)
-        idx.add_items(emb)
+        idx.init_index(max_elements=N, ef_construction=100, M=16, random_seed=100)
+        idx.add_items(emb, np.arange(N), num_threads=1)
         idx.set_ef(max(k_search, 50))
-        indices, distances = idx.knn_query(emb, k=k_search)
-        # hnswlib returns (labels, squared distances); exclude self (col 0)
-        distances = np.sqrt(np.maximum(distances[:, 1:], 0.0))
-        indices = indices[:, 1:]
+        labels, sq = idx.knn_query(emb, k=k_search, num_threads=1)
+        # hnswlib returns squared distances.  Drop self by index (with
+        # duplicate points it is not always column 0), else the farthest.
+        keep = labels != np.arange(N)[:, None]
+        extra = keep.sum(axis=1) > k_search - 1
+        keep[extra, -1] = False
+        indices = labels[keep].reshape(N, k_search - 1)
+        distances = np.sqrt(np.maximum(sq[keep].reshape(N, k_search - 1), 0.0))
     else:
         block = max(1, _MAX_BLOCK_ELEMS // max(1, N))
         idx_parts, dist_parts = [], []

@@ -215,3 +215,72 @@ def test_audit_remainder_fills_batch():
     res = select_pose_batch(emb, cand, labeled, ids, cfg)
     assert res.breakdown == {REASON_AUDIT: res.indices} and len(res.indices) == 10
     assert REASON_DIVERSITY not in res.breakdown
+
+
+def test_error_neighbours_never_pick_labeled_frames():
+    emb, ids, labeled, cand = _problem()
+    labeled[200:210] = True
+    cand = np.ones(len(ids), bool)  # "All frames": labeled are candidates too
+    errors = np.full(len(ids), np.nan)
+    errors[200:210] = 0.5
+    cfg = PoseBatchConfig(
+        batch_size=20,
+        error_fraction=0.5,
+        uncertainty_fraction=0,
+        rare_fraction=0,
+        diversity_fraction=0,
+        representative_fraction=0,
+    )
+    res = select_pose_batch(emb, cand, labeled, ids, cfg, error_scores=errors)
+    near = res.breakdown[REASON_ERROR]
+    assert near and not any(labeled[i] for i in near)
+    assert all(res.info["error_sources"][p] != p for p in near)
+
+
+def test_dedup_top_up_fills_the_batch():
+    rng = np.random.default_rng(0)
+    groups = rng.normal(size=(30, 16)).astype(np.float32)
+    emb = np.repeat(groups, 4, axis=0)  # 30 groups of 4 identical images
+    ids = np.repeat(np.arange(30) % 6, 4)
+    labeled = np.zeros(len(emb), bool)
+    labeled[::4] = True
+    res = select_pose_batch(
+        emb,
+        ~labeled,
+        labeled,
+        ids,
+        PoseBatchConfig(batch_size=20, dedup_threshold=0.99),
+    )
+    assert len(res.indices) == 20
+    assert len({i // 4 for i in res.indices}) == 20
+
+
+def test_fully_confident_predictions_are_not_model_unsure():
+    emb, ids, labeled, cand = _problem()
+    unc = np.zeros(len(ids))  # model confident everywhere
+    cfg = PoseBatchConfig(batch_size=10)
+    res = select_pose_batch(emb, cand, labeled, ids, cfg, uncertainty=unc)
+    assert REASON_UNCERTAINTY not in res.breakdown
+    assert len(res.indices) == 10
+
+
+def test_uncertainty_ties_are_not_index_order():
+    emb, ids, labeled, cand = _problem()
+    unc = np.full(len(ids), 0.5)
+    cfg = PoseBatchConfig(
+        batch_size=10,
+        error_fraction=0,
+        uncertainty_fraction=1.0,
+        rare_fraction=0,
+        diversity_fraction=0,
+        representative_fraction=0,
+    )
+    res = select_pose_batch(emb, cand, labeled, ids, cfg, uncertainty=unc)
+    picks = res.breakdown[REASON_UNCERTAINTY]
+    assert len(picks) == 10 and picks != list(range(20, 30))
+
+
+def test_pose_error_is_not_capped():
+    gt = [(0.5, 0.5, 2)]
+    preds = [(500.0, 50.0, 0.9)]  # 450 px off on a 100 px image
+    assert pose_error_norm(gt, preds, 100, 100) == pytest.approx(4.5)

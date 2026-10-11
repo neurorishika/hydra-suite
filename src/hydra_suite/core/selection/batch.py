@@ -21,19 +21,28 @@ def slot_budgets(
     """Number of samples per slot.
 
     Negative fractions count as 0; an over-subscribed recipe (fractions
-    summing past 1) is scaled down evenly.  Each slot gets
-    ``int(batch_size * fraction)`` and the ``remainder`` slot gets whatever is
-    left, so the budgets always sum to ``batch_size``.
+    summing past 1) is scaled down evenly.  Whatever the recipe leaves goes to
+    the ``remainder`` slot.  Counts use largest-remainder rounding, so they
+    always sum to ``batch_size`` and small batches keep the recipe's shape
+    instead of pushing every rounding loss into the remainder slot.
     """
     batch_size = max(0, int(batch_size))
     fr = {k: max(0.0, float(v)) for k, v in fractions.items()}
     total = sum(fr.values())
     if total > 1.0:
         fr = {k: v / total for k, v in fr.items()}
-    budgets = {k: int(batch_size * v) for k, v in fr.items()}
-    budgets[remainder] = budgets.get(remainder, 0) + max(
-        0, batch_size - sum(budgets.values())
+        total = 1.0
+    shares = dict(fr)
+    shares[remainder] = shares.get(remainder, 0.0) + max(0.0, 1.0 - total)
+    exact = {k: batch_size * v for k, v in shares.items()}
+    budgets = {k: int(v) for k, v in exact.items()}
+    left = batch_size - sum(budgets.values())
+    # Hand the leftovers to the largest fractional parts (ties: recipe order).
+    order = sorted(
+        shares, key=lambda k: (-(exact[k] - budgets[k]), list(shares).index(k))
     )
+    for k in order[: max(0, left)]:
+        budgets[k] += 1
     return budgets
 
 

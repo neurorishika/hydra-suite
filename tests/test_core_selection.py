@@ -187,3 +187,29 @@ def test_coverage_handles_no_reference_and_tiny_pools():
     assert sorted(picks.tolist()) == list(range(20))
     one = select_coverage_samples(emb[:1], 3, points=emb[:0])
     assert one.tolist() == [0]
+
+
+def test_slot_budgets_small_batches_keep_the_recipe():
+    fr = {"e": 0.2, "u": 0.25, "r": 0.1, "d": 0.3, "t": 0.1}
+    for n in range(0, 60):
+        b = slot_budgets(n, fr, remainder="audit")
+        assert sum(b.values()) == n
+        assert b["audit"] <= max(1, round(n * 0.05) + 1)
+    assert slot_budgets(3, fr, remainder="audit")["audit"] == 0
+
+
+def test_hdbscan_falls_back_on_tiny_sets():
+    pytest.importorskip("sklearn.cluster", minversion=None)
+    emb, _ = _blobs([2, 1])
+    ids = SKLearnClusterer(n_clusters=5, method="hdbscan").fit(emb)
+    assert len(ids) == 3
+
+
+def test_knn_density_is_deterministic_above_exact_limit(monkeypatch):
+    pytest.importorskip("hnswlib")
+    monkeypatch.setattr(density_mod, "EXACT_KNN_MAX", 100)
+    emb, _ = _blobs([300, 300], dim=16)
+    emb = np.vstack([emb, emb[:50]])  # exact duplicates
+    a = compute_knn_density(emb, k=5)
+    b = compute_knn_density(emb, k=5)
+    assert np.array_equal(a, b)
