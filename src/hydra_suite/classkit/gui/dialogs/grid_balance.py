@@ -16,19 +16,9 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import List, Optional, Sequence, Set
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QImage,
-    QImageReader,
-    QKeySequence,
-    QPainter,
-    QPixmap,
-    QShortcut,
-)
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractButton,
     QComboBox,
     QDialogButtonBox,
     QGridLayout,
@@ -45,99 +35,14 @@ from hydra_suite.classkit.core.al.grid_balance import GridBalanceSession
 from hydra_suite.widgets.dialogs import BaseDialog
 
 from ..widgets.image_prefetch import ImagePrefetcher
+from ..widgets.image_tile import ImageTile as _Tile
+from ..widgets.image_tile import load_scaled as _load_scaled
 
 # Tile keys in reading order; the 4x4 layout uses the left-hand key block.
 KEYS_3X3 = list("123456789")
 KEYS_4X4 = list("1234QWERASDFZXCV")
 GRID_SIZES = {"3 × 3": 9, "4 × 4": 16}
 _PIXMAP_CACHE_LIMIT = 512
-
-
-def _load_scaled(path: str, edge: int) -> Optional[QImage]:
-    reader = QImageReader(path)
-    reader.setAutoTransform(True)
-    size = reader.size()
-    if size.isValid() and max(size.width(), size.height()) > edge:
-        reader.setScaledSize(size.scaled(QSize(edge, edge), Qt.KeepAspectRatio))
-    image = reader.read()
-    return None if image.isNull() else image
-
-
-class _Tile(QAbstractButton):
-    """One grid cell: image, key badge and a short green flash on click."""
-
-    def __init__(self, key: str, edge: int, parent=None) -> None:
-        super().__init__(parent)
-        self.key = key
-        self.pixmap: Optional[QPixmap] = None
-        self.empty = True
-        self.note = ""
-        self._flash = False
-        self.setFixedSize(edge, edge)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.NoFocus)
-
-    def set_image(self, pixmap: Optional[QPixmap], empty: bool, note: str = "") -> None:
-        self.pixmap, self.empty, self.note = pixmap, empty, note
-        self.setEnabled(not empty)
-        self.update()
-
-    def flash(self) -> None:
-        self._flash = True
-        self.update()
-        QTimer.singleShot(180, self._end_flash)
-
-    def _end_flash(self) -> None:
-        self._flash = False
-        self.update()
-
-    def mouseDoubleClickEvent(self, event) -> None:
-        # The second press of a double-click would label the replacement tile
-        # the user has not seen yet.
-        event.accept()
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        r = self.rect()
-        p.fillRect(r, QColor("#121212"))
-        if self.empty or self.pixmap is None:
-            p.setPen(QColor("#555" if self.empty else "#666"))
-            text = self.note or ("no more\ncandidates" if self.empty else "loading…")
-            p.drawText(r, Qt.AlignCenter, text)
-        else:
-            # Fit in logical pixels so HiDPI pixmaps stay sharp.
-            src = self.pixmap.deviceIndependentSize()
-            scale = min(r.width() / src.width(), r.height() / src.height())
-            w, h = src.width() * scale, src.height() * scale
-            target = QRectF((r.width() - w) / 2, (r.height() - h) / 2, w, h)
-            p.drawPixmap(target, self.pixmap, QRectF(self.pixmap.rect()))
-        border = (
-            "#4ec943"
-            if self._flash
-            else ("#0e639c" if self.underMouse() and self.isEnabled() else "#3e3e42")
-        )
-        p.setPen(QColor(border))
-        p.drawRect(r.adjusted(0, 0, -1, -1))
-        if self._flash:
-            p.fillRect(r, QColor(78, 201, 67, 90))
-        if not self.empty and self.key:
-            badge = QRectF(4, 4, 20, 20)
-            p.fillRect(badge, QColor(0, 0, 0, 170))
-            p.setPen(QColor("#ddd"))
-            font = QFont(p.font())
-            font.setBold(True)
-            p.setFont(font)
-            p.drawText(badge, Qt.AlignCenter, self.key)
-        p.end()
-
-    def enterEvent(self, event) -> None:
-        self.update()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.update()
-        super().leaveEvent(event)
 
 
 class GridBalanceDialog(BaseDialog):

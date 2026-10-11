@@ -601,6 +601,45 @@ class ClassKitDB:
             )
             conn.commit()
 
+    def restore_label_records(self, records: Dict[str, Dict[str, Any]]) -> int:
+        """Write label rows back exactly as ``get_label_review_status_by_path``
+        returned them (provenance, verification time and metadata included).
+
+        Used to undo a label removal without turning a machine label into a
+        human one.  Returns the number of rows updated.
+        """
+        if not records:
+            return 0
+        updated_count = 0
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            for path, rec in records.items():
+                meta = rec.get("auto_label_metadata")
+                c.execute(
+                    """
+                    UPDATE images
+                    SET label = ?,
+                        confidence = ?,
+                        label_source = ?,
+                        verified = ?,
+                        verified_at = ?,
+                        auto_label_metadata_json = ?
+                    WHERE file_path = ?
+                    """,
+                    (
+                        rec.get("label"),
+                        rec.get("confidence"),
+                        rec.get("label_source"),
+                        int(bool(rec.get("verified"))),
+                        rec.get("verified_at"),
+                        json.dumps(meta) if meta else None,
+                        path,
+                    ),
+                )
+                updated_count += c.rowcount
+            conn.commit()
+        return updated_count
+
     def clear_all_labels(self) -> None:
         """Set label=NULL and confidence=NULL for all images."""
         with sqlite3.connect(self.db_path) as conn:
