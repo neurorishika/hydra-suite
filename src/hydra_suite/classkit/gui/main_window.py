@@ -7442,6 +7442,8 @@ class MainWindow(QMainWindow):
             contrast=settings.get("contrast", 0.0),
             scale_jitter=settings.get("scale_jitter", 0.0),
             aspect_jitter=settings.get("aspect_jitter", 0.0),
+            rotate=settings.get("rotate", 0.0),
+            canonical_aug=bool(settings.get("canonical_aug", False)),
             decode_color_sim=settings.get("decode_color_sim", 0.0),
             resample_sim=settings.get("resample_sim", 0.0),
             monochrome=bool(settings.get("monochrome", False)),
@@ -11715,9 +11717,7 @@ class MainWindow(QMainWindow):
                 }
             snapshots[index] = {
                 "row": record,
-                "history": [
-                    e for e in self.label_history if e.get("index") == index
-                ],
+                "history": [e for e in self.label_history if e.get("index") == index],
                 "in_round": index in self.round_labeled_indices,
             }
             self._set_label_for_index(index, None)
@@ -12449,7 +12449,9 @@ class MainWindow(QMainWindow):
         """Dismiss the proposed label, ask for the right one and advance."""
         label = self._labeling_prediction_for_selected()
         if label is None:
-            self.status.showMessage("No model prediction to reject for this image", 3000)
+            self.status.showMessage(
+                "No model prediction to reject for this image", 3000
+            )
             return
         replacement = self._prompt_review_relabel_choice({"label": label})
         if replacement is None:

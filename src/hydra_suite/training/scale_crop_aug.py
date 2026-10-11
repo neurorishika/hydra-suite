@@ -13,6 +13,12 @@ It re-crops the image about its CENTRE (the centre is never moved):
   fit-to-input step; ``k < 1`` is a tighter crop).
 * ``aspect_jitter`` -- the window's width:height ratio, log-uniform in
   ``[1/(1+a), 1+a]`` while keeping the window area fixed.
+* ``rotate_degrees`` -- an in-plane rotation of the window about the centre,
+  angle ``~ U(-d, d)``.  Canonical crops are aligned to the estimated heading,
+  and that estimate is off by a few degrees at inference; this teaches the
+  model to tolerate it.  Rotation resamples (bilinear) and fills the corners
+  by reflection; with ``rotate_degrees == 0`` the code path below is the
+  unrotated pure translation and its output is byte-identical to before.
 
 The window is cut out by a pure translation (no resampling, no stretching of
 the animal) and edge-replicated where it extends past the image. The output
@@ -45,6 +51,8 @@ class ScaleCropAug:
             ``0`` disables.
         aspect_jitter: window aspect-ratio range; ratio drawn log-uniformly from
             ``[1/(1+a), 1+a]`` at constant window area. ``0`` disables.
+        rotate_degrees: maximum in-plane rotation; angle drawn from
+            ``U(-d, d)``. ``0`` disables.
         seed: seed for the instance RNG.
     """
 
@@ -53,17 +61,23 @@ class ScaleCropAug:
         scale_jitter: float = 0.0,
         aspect_jitter: float = 0.0,
         seed: int | None = None,
+        rotate_degrees: float = 0.0,
     ) -> None:
         self.scale_jitter = float(min(max(scale_jitter, 0.0), 0.9))
         self.aspect_jitter = float(min(max(aspect_jitter, 0.0), 1.0))
+        self.rotate_degrees = float(min(max(rotate_degrees, 0.0), 180.0))
         self.seed = seed
         self._rng = np.random.default_rng(seed)
         self._worker_checked = False
 
     @property
     def active(self) -> bool:
-        """True when at least one of size / aspect jitter is enabled."""
-        return self.scale_jitter > 0.0 or self.aspect_jitter > 0.0
+        """True when at least one of size / aspect / rotation jitter is enabled."""
+        return (
+            self.scale_jitter > 0.0
+            or self.aspect_jitter > 0.0
+            or self.rotate_degrees > 0.0
+        )
 
     def _maybe_decorrelate_worker(self) -> None:
         if self._worker_checked:
@@ -113,6 +127,20 @@ class ScaleCropAug:
             arr = arr.astype(np.uint8)
         h, w = arr.shape[:2]
         out_w, out_h = self.sample_window(h, w)
+        if self.rotate_degrees > 0.0:
+            angle = float(self._rng.uniform(-self.rotate_degrees, self.rotate_degrees))
+            # Rotate about the source centre, then move it to the window centre.
+            m = cv2.getRotationMatrix2D(((w - 1) / 2.0, (h - 1) / 2.0), angle, 1.0)
+            m[0, 2] += (out_w - w) / 2.0
+            m[1, 2] += (out_h - h) / 2.0
+            out = cv2.warpAffine(
+                arr,
+                m,
+                (out_w, out_h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT_101,
+            )
+            return np.ascontiguousarray(out)
         # Pure translation that puts the source centre on the window centre.
         tx = (out_w - w) / 2.0
         ty = (out_h - h) / 2.0
