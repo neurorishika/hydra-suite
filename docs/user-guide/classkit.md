@@ -61,12 +61,14 @@ defaults tuned for canonical animal crops:
 | Saturation / brightness / contrast | 0.10 | Mild lighting variation. |
 | Scale jitter | 0.20 | Window size varies 0.8x-1.2x about the crop centre, so the model tolerates the animal appearing larger or smaller. |
 | Aspect ratio jitter | 0.20 | The crop window's width:height ratio varies 0.83x-1.2x at constant area. The crop centre never moves and the animal is never stretched. |
-| Rotation jitter | 0 (off) | Rotates each crop about its centre by up to ±d degrees, so the model tolerates heading-estimation error in canonical crops. 10-15 is a good starting point. Corners are filled by reflection. |
-| Blur / compression robustness | off | Mild blur, JPEG compression, sub-pixel warp jitter and a swapped resampling kernel, matching real video degradation. |
+| Rotation jitter | 0 (off) | Rotates each crop about its centre by up to ±d degrees (maximum 30), so the model tolerates heading-estimation error in canonical crops. 10-15 is a good starting point. Corners are filled by reflection; above about 20 degrees they can show mirrored copies of neighbouring animals. |
+| Blur / compression robustness | off | Light image-quality robustness: every crop gets a small resampling round-trip and a sub-pixel shift/tilt; 30% also get a slight Gaussian blur (sigma 0.3-0.8) or JPEG re-compression (quality 85-100). It does not simulate strong motion blur or heavy compression. |
 
-Scale, aspect and rotation jitter apply to train samples only. For YOLO-classify they are
-written as extra pre-fitted copies per training image
-(`canonical_aug_copies`, default 3); validation and test images stay clean.
+Scale, aspect and rotation jitter and blur/compression apply to train samples
+only; validation and test images stay clean. For YOLO-classify they are written
+as extra pre-fitted copies per training image (`canonical_aug_copies`, default
+3), so enabling any of them makes each epoch about 4x longer. The copies are
+shared: with scale or aspect jitter already on, the others add no time.
 
 ## Active Learning Batches
 
