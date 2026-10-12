@@ -49,7 +49,14 @@ def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
             "is unavailable.",
             resolved.backend,
         )
-    backend = ClassifierBackend(config.model_path, resolved)
+    # Size the TensorRT profile to the stage's own crop chunk (the stage never
+    # sends more per call); the backend's 512 default can exceed the builder
+    # workspace and fail the engine build outright.
+    backend = ClassifierBackend(
+        config.model_path,
+        resolved,
+        trt_profile_max_batch=getattr(config, "batch_size", None),
+    )
     if getattr(runtime, "cuda_mode", False) and not backend.supports_cuda_forward():
         backend.close()
         raise RuntimeError(

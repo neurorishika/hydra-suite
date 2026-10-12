@@ -681,6 +681,13 @@ class ClassifierBackend:
 
         return _native_accelerator_available(self._resolved)
 
+    def _can_fall_back_to_native_after_onnx_failure(self) -> bool:
+        """True when a failed ONNX/TensorRT build can be replaced by the native
+        checkpoint on the same accelerator (a ``.pth`` flat classifier)."""
+        if Path(self._model_path).suffix.lower() != ".pth":
+            return False
+        return _native_accelerator_available(self._resolved)
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
@@ -701,8 +708,26 @@ class ClassifierBackend:
                     if native_device.startswith("cuda"):
                         self._warmup_native_cuda_model()
                 else:
-                    self._load_onnx()
-                    self._active_execution_backend = "onnx"
+                    try:
+                        self._load_onnx()
+                        self._active_execution_backend = "onnx"
+                    except Exception as trt_exc:
+                        if not self._can_fall_back_to_native_after_onnx_failure():
+                            raise
+                        native_device = self._resolved.device
+                        logger.error(
+                            "ClassifierBackend: TensorRT/ONNX session for %s could not "
+                            "be built (%s); falling back to native %s execution for "
+                            "this model. Results are unaffected but this stage runs "
+                            "slower than gpu_fast.",
+                            self._model_path,
+                            trt_exc,
+                            native_device,
+                        )
+                        self._model = self._loader.load(self._model_path, native_device)
+                        self._active_execution_backend = "native"
+                        if native_device.startswith("cuda"):
+                            self._warmup_native_cuda_model()
             else:
                 loader_target = (
                     self._resolved
