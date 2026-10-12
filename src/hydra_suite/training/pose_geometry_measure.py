@@ -216,3 +216,108 @@ def measure_pose_geometry(
         suggested_hw=[snapped_h, snapped_w],
         clamped=clamped,
     )
+
+
+# ── crop-size sizing ────────────────────────────────────────────────────────
+#
+# PoseKit trains and predicts on whole crops: ViTPose fits the crop's full
+# extent (times its box padding) into the model input, and YOLO letterboxes the
+# crop to ``imgsz``.  So the natural input size follows the crop size, not the
+# animal: at "detail 1" each crop pixel maps to about one input pixel.
+
+# Mirrors ``core.individual.pose.vitpose.config.PADDING_FACTOR`` (box2cs scales
+# the box by it); copied because importing the ViTPose package pulls in torch.
+VITPOSE_BOX_PADDING = 1.25
+YOLO_STRIDE = 32
+YOLO_MIN_IMGSZ = 64
+# Ultralytics' own default; larger crops are downscaled rather than trained at
+# a size several times slower.
+YOLO_MAX_SUGGESTED_IMGSZ = 640
+
+
+@dataclass(frozen=True)
+class CropSizeStats:
+    images_measured: int
+    images_skipped: int
+    median_w: float
+    median_h: float
+    p90_long_px: float
+    vitpose_hw: List[int]  # [H, W] ViTPose input
+    vitpose_clamped: bool
+    yolo_imgsz: int
+
+
+def _even_sample(items: Sequence[Path], limit: int) -> List[Path]:
+    """Up to ``limit`` items spread evenly over the list (deterministic)."""
+    items = list(items)
+    if len(items) <= limit:
+        return items
+    step = len(items) / float(limit)
+    return [items[int(i * step)] for i in range(limit)]
+
+
+def suggest_yolo_imgsz(long_px: float, detail: float = 1.0) -> int:
+    """Smallest stride multiple holding a crop's long side, within YOLO's range."""
+    size = int(np.ceil(long_px * detail / YOLO_STRIDE)) * YOLO_STRIDE
+    return int(min(YOLO_MAX_SUGGESTED_IMGSZ, max(YOLO_MIN_IMGSZ, size)))
+
+
+def suggest_vitpose_hw(w_px: float, h_px: float, detail: float = 1.0):
+    """ViTPose ``[H, W]`` for a ``w_px`` x ``h_px`` crop, and whether it was clamped."""
+    raw_w = w_px * VITPOSE_BOX_PADDING * detail
+    raw_h = h_px * VITPOSE_BOX_PADDING * detail
+    snapped_w, snapped_h, clamped = _reduce_pair(raw_w, raw_h)
+    return [snapped_h, snapped_w], clamped
+
+
+def measure_crop_geometry(
+    image_paths: Sequence[Path],
+    *,
+    detail: float = 1.0,
+    max_images: int = 400,
+) -> CropSizeStats:
+    """Suggest YOLO ``imgsz`` and a ViTPose input from the crops' pixel sizes.
+
+    Reads image headers only.  The ViTPose input keeps the median crop's aspect
+    ratio; YOLO's square ``imgsz`` covers the 90th-percentile long side.
+    """
+    if detail <= 0:
+        raise ValueError(f"detail must be positive; got {detail}")
+    sample = _even_sample([Path(p) for p in image_paths], max_images)
+    widths: List[float] = []
+    heights: List[float] = []
+    skipped = 0
+    for path in sample:
+        try:
+            with Image.open(path) as im:
+                w_px, h_px = im.size
+        except (OSError, ValueError, UnidentifiedImageError):
+            skipped += 1
+            continue
+        if w_px <= 0 or h_px <= 0:
+            skipped += 1
+            continue
+        widths.append(float(w_px))
+        heights.append(float(h_px))
+    if not widths:
+        raise ValueError(
+            f"none of the {len(sample)} image(s) sampled could be read"
+            if sample
+            else "no images"
+        )
+    w_arr = np.asarray(widths)
+    h_arr = np.asarray(heights)
+    median_w = float(np.median(w_arr))
+    median_h = float(np.median(h_arr))
+    p90_long = float(np.percentile(np.maximum(w_arr, h_arr), 90))
+    hw, clamped = suggest_vitpose_hw(median_w, median_h, detail)
+    return CropSizeStats(
+        images_measured=len(widths),
+        images_skipped=skipped,
+        median_w=median_w,
+        median_h=median_h,
+        p90_long_px=p90_long,
+        vitpose_hw=hw,
+        vitpose_clamped=clamped,
+        yolo_imgsz=suggest_yolo_imgsz(p90_long),
+    )

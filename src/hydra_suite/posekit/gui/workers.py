@@ -86,7 +86,7 @@ class PosePredictWorker(QObject):
         runtime_flavor: str = "auto",
         exported_model_path: Optional[Path] = None,
         device: str = "auto",
-        imgsz: int = 640,
+        imgsz: int = 0,  # 0: the size the model was trained at
         conf: float = 0.25,
         yolo_batch: int = 4,
         sleap_env: Optional[str] = None,
@@ -270,7 +270,7 @@ class BulkPosePredictWorker(QObject):
         runtime_flavor: str = "auto",
         exported_model_path: Optional[Path] = None,
         device: str = "auto",
-        imgsz: int = 640,
+        imgsz: int = 0,  # 0: the size the model was trained at
         conf: float = 0.25,
         batch: int = 16,
         sleap_env: Optional[str] = None,

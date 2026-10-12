@@ -14,7 +14,7 @@ from ..decode import decode_udp_cv2
 from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import transform_preds
 from .config import RunConfig
-from .dataset import CocoKeypointsDataset, load_coco_index
+from .dataset import CocoKeypointsDataset, image_path, load_coco_index
 from .loss import JointsMSELoss
 from .model_setup import build_finetune_model, build_param_groups, load_finetune_init
 from .validate import run_validation
@@ -60,6 +60,9 @@ def train(cfg: RunConfig) -> dict:
         scale_jitter=cfg.scale_jitter,
         aspect_jitter=cfg.aspect_jitter,
         seed=cfg.seed,
+        flip_pairs=cfg.flip_pairs,
+        fliplr=cfg.fliplr,
+        flipud=cfg.flipud,
     )
     val_ds = CocoKeypointsDataset(
         cfg.dataset_dir, val_ids, cfg.sigma, augment=False, geom=geom
@@ -189,7 +192,11 @@ def _write_val_overlays(
                 coords[0], s["center"].numpy(), s["scale"].numpy(), geom.heatmap_size_wh
             )
             img = cv2.imread(
-                str(val_ds.dir / "images" / val_ds.index[val_ds.ids[i]][1]["file_name"])
+                str(
+                    image_path(
+                        val_ds.dir, val_ds.index[val_ds.ids[i]][1]["file_name"]
+                    )
+                )
             )
             for j in range(k):
                 cv2.circle(img, (int(pred[j, 0]), int(pred[j, 1])), 3, (0, 0, 255), -1)

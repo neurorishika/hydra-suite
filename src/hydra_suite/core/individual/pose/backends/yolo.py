@@ -30,6 +30,11 @@ from hydra_suite.core.individual.pose.utils import (
     resolve_device,
     summarize_keypoints,
 )
+from hydra_suite.core.pose_instances import (
+    MAX_POSES_PER_CROP,
+    central_instance_index,
+    instance_centers,
+)
 from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, TENSORRT_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -129,7 +134,7 @@ class YoloNativeBackend:
         keypoint_names: Optional[Sequence[str]] = None,
         conf: float = 1e-4,
         iou: float = 0.7,
-        max_det: int = 1,
+        max_det: int = MAX_POSES_PER_CROP,
         batch_size: int = 4,
     ):
         os.environ.setdefault("YOLO_AUTOINSTALL", "false")
@@ -253,8 +258,7 @@ class YoloNativeBackend:
 
         if conf is None:
             conf = np.zeros((xy.shape[0], xy.shape[1]), dtype=np.float32)
-        mean_per_instance = np.nanmean(conf, axis=1)
-        best_idx = int(np.nanargmax(mean_per_instance)) if len(mean_per_instance) else 0
+        best_idx = self._central_index(result, xy, conf)
         pred_xy = np.asarray(xy[best_idx], dtype=np.float32)
         pred_conf = np.asarray(conf[best_idx], dtype=np.float32)
 
@@ -266,6 +270,25 @@ class YoloNativeBackend:
 
         kpts = np.column_stack((pred_xy, pred_conf)).astype(np.float32)
         return summarize_keypoints(kpts, self.min_valid_conf)
+
+    @staticmethod
+    def _central_index(result, xy: np.ndarray, conf: np.ndarray) -> int:
+        """The pose of the crop's own animal: nearest the crop centre."""
+        if xy.shape[0] <= 1:
+            return 0
+        boxes = None
+        try:
+            b = result.boxes.xywh
+            boxes = b.cpu().numpy() if hasattr(b, "cpu") else np.asarray(b)
+        except Exception:
+            boxes = None
+        scores = np.nanmean(conf, axis=1)
+        try:
+            h, w = result.orig_shape[:2]
+        except Exception:
+            return int(np.nanargmax(scores)) if len(scores) else 0
+        centers = instance_centers(xy, conf, boxes)
+        return central_instance_index(centers, (w, h), scores)
 
     def _warn_conf_out_of_range(self, pred_conf: np.ndarray) -> None:
         """Log a one-time warning if confidence values are outside [0, 1]."""

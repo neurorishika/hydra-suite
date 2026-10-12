@@ -27,6 +27,9 @@ _FIELDS = {
     "input_size",
     "scale_jitter",
     "aspect_jitter",
+    "flip_pairs",
+    "fliplr",
+    "flipud",
 }
 
 
@@ -55,6 +58,11 @@ class RunConfig:
     # [1/(1+a), 1+a] at constant area. The crop centre never moves.
     scale_jitter: float | None = None
     aspect_jitter: float = 0.0
+    # Mirror augmentation: probability of a left-right / up-down flip, and the
+    # left/right keypoint pairs swapped by a flip (0-based index pairs).
+    flip_pairs: list[list[int]] | None = None
+    fliplr: float = 0.0
+    flipud: float = 0.0
 
     def to_json(self, path: Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
@@ -84,6 +92,26 @@ def validate_run_config(d: dict) -> RunConfig:
         raise ValueError("scale_jitter must be in [0, 0.9] or null")
     if not (0.0 <= float(d.get("aspect_jitter", 0.0)) <= 1.0):
         raise ValueError("aspect_jitter must be in [0, 1]")
+    for key in ("fliplr", "flipud"):
+        if not (0.0 <= float(d.get(key, 0.0)) <= 1.0):
+            raise ValueError(f"{key} must be in [0, 1]")
+    pairs = d.get("flip_pairs")
+    if pairs is not None:
+        k = int(d.get("num_keypoints", 0))
+        ok = isinstance(pairs, (list, tuple)) and all(
+            isinstance(p, (list, tuple))
+            and len(p) == 2
+            and all(isinstance(i, int) and 0 <= i < k for i in p)
+            and p[0] != p[1]
+            for p in pairs
+        )
+        flat = [i for p in pairs for i in p] if ok else []
+        if not ok or len(flat) != len(set(flat)):
+            raise ValueError(
+                "flip_pairs must be disjoint [a, b] pairs of keypoint indices"
+            )
+        d = dict(d)
+        d["flip_pairs"] = [[int(a), int(b)] for a, b in pairs]
     size = d.get("input_size")
     if size is not None:
         if not isinstance(size, (list, tuple)) or len(size) != 2:

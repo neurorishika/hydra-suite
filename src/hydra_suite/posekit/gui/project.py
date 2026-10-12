@@ -362,6 +362,7 @@ def create_project_via_wizard(dataset_dir: Path) -> Optional[Project]:
     class_names = wiz.get_classes()
     kpt_names = wiz.get_keypoints()
     edges = wiz.get_edges()
+    flip_pairs = wiz.get_flip_pairs()
     autosave, pad = wiz.get_options()
 
     out_root.mkdir(parents=True, exist_ok=True)
@@ -376,6 +377,7 @@ def create_project_via_wizard(dataset_dir: Path) -> Optional[Project]:
         class_names=class_names,
         keypoint_names=kpt_names,
         skeleton_edges=edges,
+        flip_pairs=flip_pairs,
         autosave=autosave,
         bbox_pad_frac=pad,
     )
@@ -403,6 +405,7 @@ def create_standalone_project_via_wizard(parent_widget=None) -> Optional[Project
     class_names = dlg.get_classes()
     kpt_names = dlg.get_keypoints()
     edges = dlg.get_edges()
+    flip_pairs = dlg.get_flip_pairs()
     autosave, pad = dlg.get_options()
 
     out_root = project_location
@@ -420,6 +423,7 @@ def create_standalone_project_via_wizard(parent_widget=None) -> Optional[Project
         class_names=class_names,
         keypoint_names=kpt_names,
         skeleton_edges=edges,
+        flip_pairs=flip_pairs,
         autosave=autosave,
         bbox_pad_frac=pad,
     )

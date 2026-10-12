@@ -430,7 +430,7 @@ def _run_pose_predict_subprocess(
     image_paths: List[Path],
     out_json: Path,
     device: str = "auto",
-    imgsz: int = 640,
+    imgsz: int = 0,  # 0: the size the model was trained at
     conf: float = 0.25,
     batch: int = 16,
     progress_cb=None,
@@ -455,6 +455,7 @@ def _run_pose_predict_subprocess(
         "import json,sys,os\n"
         "from pathlib import Path\n"
         "import numpy as np\n"
+        "from hydra_suite.core.pose_instances import MAX_POSES_PER_CROP, central_instance_index, instance_centers\n"
         "os.environ.setdefault('YOLO_AUTOINSTALL','false')\n"
         "os.environ.setdefault('ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS','1')\n"
         "def _is_cuda_device(d):\n"
@@ -472,13 +473,14 @@ def _run_pose_predict_subprocess(
         "from ultralytics import YOLO\n"
         "model=YOLO(cfg['weights'])\n"
         "pred_kwargs={\n"
-        "  'imgsz': int(cfg['imgsz']),\n"
         "  'conf': float(cfg['conf']),\n"
-        "  'max_det': 1,\n"
+        "  'max_det': MAX_POSES_PER_CROP,\n"
         "  'stream': True,\n"
         "  'verbose': False,\n"
         "  'batch': int(cfg['batch']),\n"
         "}\n"
+        "if int(cfg.get('imgsz') or 0) > 0:\n"
+        "  pred_kwargs['imgsz']=int(cfg['imgsz'])\n"
         "if cfg.get('device') and cfg.get('device')!='auto':\n"
         "  pred_kwargs['device']=cfg['device']\n"
         "if _is_cuda_device(cfg.get('device')):\n"
@@ -503,11 +505,13 @@ def _run_pose_predict_subprocess(
         "      continue\n"
         "    raise\n"
         "  for ri, r in enumerate(results):\n"
+        "    # Results come back in source order; Ultralytics names list sources\n"
+        "    # image0.jpg, image1.jpg, ... so r.path is not the file.\n"
         "    path = None\n"
-        "    if r is not None and getattr(r, 'path', None):\n"
-        "      path = r.path\n"
-        "    elif ri < len(chunk):\n"
+        "    if ri < len(chunk):\n"
         "      path = chunk[ri]\n"
+        "    elif r is not None and getattr(r, 'path', None):\n"
+        "      path = r.path\n"
         "    if path is None:\n"
         "      continue\n"
         "    if r is None or r.keypoints is None:\n"
@@ -548,6 +552,14 @@ def _run_pose_predict_subprocess(
         "      if scores is None:\n"
         "        scores=np.zeros((xy.shape[0],),dtype=np.float32)\n"
         "    best=int(np.argmax(scores)) if len(scores)>0 else 0\n"
+        "    if xy.shape[0]>1:\n"
+        "      try:\n"
+        "        bx=r.boxes.xywh\n"
+        "        bx=bx.cpu().numpy() if hasattr(bx,'cpu') else np.asarray(bx)\n"
+        "      except Exception:\n"
+        "        bx=None\n"
+        "      oh,ow=r.orig_shape[:2]\n"
+        "      best=central_instance_index(instance_centers(xy,conf,bx),(ow,oh),scores)\n"
         "    pred_xy=xy[best]\n"
         "    pred_conf=conf[best] if conf is not None else np.zeros((pred_xy.shape[0],),dtype=np.float32)\n"
         "    pred_conf=np.clip(np.asarray(pred_conf,dtype=np.float32),0.0,1.0)\n"

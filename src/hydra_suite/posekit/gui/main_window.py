@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.pose_flip import normalize_flip_pairs
 from hydra_suite.posekit.config.schemas import PoseKitConfig
 from hydra_suite.posekit.core.frame_grouping import (
     FRAME_MODE_CONFIRMATION_TEMPLATE,
@@ -416,6 +417,7 @@ class MainWindow(QMainWindow):
         )
         self.combo_pred_backend = QComboBox()
         self.combo_pred_backend.addItems(["YOLO", "SLEAP", "ViTPose"])
+        self.combo_pred_backend.setCurrentText("ViTPose")
         backend_row.addWidget(self.combo_pred_backend, 1)
         model_layout.addLayout(backend_row)
 
@@ -1513,13 +1515,28 @@ class MainWindow(QMainWindow):
             self.pred_weights_edit.setText(str(settings["pred_weights"]))
         if "pred_vitpose" in settings:
             self.pred_vitpose_edit.setText(str(settings["pred_vitpose"]))
-        if "pred_backend" in settings:
-            backend = str(settings["pred_backend"])
-            if backend:
-                self.combo_pred_backend.setCurrentText(backend)
+        backend = str(settings.get("pred_backend") or "")
+        if backend and self._saved_backend_has_model(backend, settings):
+            self.combo_pred_backend.setCurrentText(backend)
         self._apply_pred_runtime_setting(settings)
         self.pred_exported_edit.setText("")
         self._apply_pred_batch_setting(settings)
+
+    @staticmethod
+    def _saved_backend_has_model(backend: str, settings) -> bool:
+        """Restore a saved prediction backend only once a model was set for it.
+
+        Older sessions saved "YOLO" (then the default) with no model; restoring
+        that would hide the ViTPose default from anyone who never chose YOLO.
+        """
+        key = {
+            "yolo": "pred_weights",
+            "sleap": "sleap_model_dir",
+            "vitpose": "pred_vitpose",
+        }.get(backend.strip().lower())
+        if key is None:
+            return False
+        return bool(str(settings.get(key) or "").strip())
 
     def _apply_sleap_settings(self, settings):
         if "sleap_env" in settings:
@@ -1540,12 +1557,17 @@ class MainWindow(QMainWindow):
         if "show_pred_conf" in settings:
             self.cb_show_pred_conf.setChecked(bool(settings["show_pred_conf"]))
             self.show_pred_conf = bool(self.cb_show_pred_conf.isChecked())
-        if not self.pred_weights_edit.text().strip():
-            if (
-                self.project.latest_pose_weights
-                and Path(self.project.latest_pose_weights).exists()
-            ):
-                self.pred_weights_edit.setText(str(self.project.latest_pose_weights))
+        latest = self.project.latest_pose_weights
+        if latest and Path(latest).exists():
+            # ViTPose runs live under <training runs>/vitpose/; anything else
+            # is a YOLO run.  Fill the matching (empty) model field.
+            field = (
+                self.pred_vitpose_edit
+                if "vitpose" in Path(latest).parts
+                else self.pred_weights_edit
+            )
+            if not field.text().strip():
+                field.setText(str(latest))
 
     def _load_ui_settings(self):
         """Load UI settings from persistent storage and apply defaults."""
@@ -3773,9 +3795,11 @@ class MainWindow(QMainWindow):
             self.project.skeleton_edges,
             self,
             default_dir=get_default_skeleton_dir(),
+            flip_pairs=self.project.flip_pairs,
         )
         if dlg.exec() == QDialog.Accepted:
             names, edges = dlg.get_result()
+            flip_pairs = dlg.get_flip_pairs()
 
             if names != old_kpts:
                 resp = QMessageBox.question(
@@ -3810,6 +3834,7 @@ class MainWindow(QMainWindow):
             self.project.skeleton_edges = [
                 (a, b) for (a, b) in edges if 0 <= a < k and 0 <= b < k and a != b
             ]
+            self.project.flip_pairs = normalize_flip_pairs(flip_pairs, k)
             self.infer = PoseInferenceService(
                 self.project.out_root,
                 self.project.keypoint_names,
@@ -3835,6 +3860,7 @@ class MainWindow(QMainWindow):
         new_classes = wiz.get_classes()
         new_kpts = wiz.get_keypoints()
         new_edges = wiz.get_edges()
+        new_flip_pairs = wiz.get_flip_pairs()
         autosave, pad = wiz.get_options()
         do_mig, mig_mode = wiz.get_migration()
 
@@ -3870,6 +3896,7 @@ class MainWindow(QMainWindow):
         self.project.skeleton_edges = [
             (a, b) for (a, b) in new_edges if 0 <= a < k and 0 <= b < k and a != b
         ]
+        self.project.flip_pairs = normalize_flip_pairs(new_flip_pairs, k)
         self.infer = PoseInferenceService(
             self.project.out_root,
             self.project.keypoint_names,
@@ -5384,7 +5411,7 @@ class MainWindow(QMainWindow):
             runtime_flavor=runtime_flavor,
             exported_model_path=None,
             device="auto",
-            imgsz=640,
+            imgsz=0,
             conf=self._last_pred_conf or 0.0,
             yolo_batch=int(self.spin_pred_batch.value()),
             sleap_env=sleap_env,
@@ -5696,7 +5723,7 @@ class MainWindow(QMainWindow):
                 runtime_flavor=runtime_flavor,
                 exported_model_path=None,
                 device="auto",
-                imgsz=640,
+                imgsz=0,
                 conf=self._pred_conf_default() if backend == "yolo" else 0.0,
                 batch=pred_batch,
                 sleap_env=sleap_env,
@@ -5804,16 +5831,29 @@ class MainWindow(QMainWindow):
         """open_training_runner method documentation."""
         dlg = TrainingRunnerDialog(self, self.project, self.image_paths)
         try:
-            backend = self._pred_backend()
-            if backend == "sleap":
-                dlg.backend_combo.setCurrentText("SLEAP")
-            else:
-                dlg.backend_combo.setCurrentText("YOLO Pose")
+            dlg.backend_combo.setCurrentText(
+                {"sleap": "SLEAP", "yolo": "YOLO Pose"}.get(
+                    self._pred_backend(), "ViTPose"
+                )
+            )
             if hasattr(dlg, "_update_backend_ui"):
                 dlg._update_backend_ui()
         except Exception:
             pass
         dlg.exec()
+        self._use_trained_weights(dlg)
+
+    def _use_trained_weights(self, dlg) -> None:
+        """Point the Inference panel at the model just trained in ``dlg``."""
+        weights = str(getattr(dlg, "_last_weights", "") or "").strip()
+        if not weights or not Path(weights).is_file():
+            return
+        if dlg.backend_combo.currentText() == "ViTPose":
+            self.pred_vitpose_edit.setText(weights)
+            self.combo_pred_backend.setCurrentText("ViTPose")
+        elif dlg.backend_combo.currentText() == "YOLO Pose":
+            self.pred_weights_edit.setText(weights)
+            self.combo_pred_backend.setCurrentText("YOLO")
 
     def open_evaluation_dashboard(self: object) -> object:
         """open_evaluation_dashboard method documentation."""
@@ -5832,9 +5872,13 @@ class MainWindow(QMainWindow):
         )
         try:
             backend = self._pred_backend()
-            dlg.backend_combo.setCurrentText("SLEAP" if backend == "sleap" else "YOLO")
+            dlg.backend_combo.setCurrentText(
+                {"sleap": "SLEAP", "vitpose": "ViTPose"}.get(backend, "YOLO")
+            )
             if backend == "sleap":
                 model_path = self.sleap_model_edit.text().strip()
+            elif backend == "vitpose":
+                model_path = self.pred_vitpose_edit.text().strip()
             else:
                 model_path = self.pred_weights_edit.text().strip()
             if model_path:

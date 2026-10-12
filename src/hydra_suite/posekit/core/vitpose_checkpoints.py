@@ -56,6 +56,21 @@ def fetch_pinned(repo_id: str, filename: str, sha256: str, dest: Path) -> Path:
 # BEFORE the entry ships. If an animal asset cannot be pinned, omit it (COCO-only
 # catalog + Browse is the spec's accepted fallback).
 CATALOG: dict[str, CatalogEntry] = {
+    # First entry = the Training Runner's default init checkpoint.  AP-10K is
+    # animal pose (54 species, 17 keypoints): a closer start for animal crops
+    # than human COCO.  The upstream ViTPose release hosts it on OneDrive only;
+    # this is the easy_ViTPose mirror of the same checkpoint, pinned by hash
+    # and checked to load backbone- and deconv-strict (only the 17-keypoint
+    # final layer is re-initialised, as for any fine-tune).
+    "vitpose-b-ap10k": CatalogEntry(
+        name="ViTPose-B (AP-10K animal)",
+        repo_id="JunkyByte/easy_ViTPose",
+        filename="torch/ap10k/vitpose-b-ap10k.pth",
+        sha256="33e76039deea7acfb438e576db7f189b296bf7b7dc202cb32976c0ccd3cd950a",
+        variant="B",
+        num_keypoints=17,
+        description="ViTPose-B, animal AP-10K-17. Default start for animals.",
+    ),
     "vitpose-b-coco": CatalogEntry(
         name="ViTPose-B (COCO)",
         repo_id="nielsr/vitpose-original-checkpoints",
@@ -65,7 +80,7 @@ CATALOG: dict[str, CatalogEntry] = {
         num_keypoints=17,
         description="ViTPose-B, human COCO-17. General-purpose start.",
     ),
-    # "vitpose-l-coco", "vitpose-h-coco", "vitpose-b-ap10k" (animal), ... added likewise.
+    # "vitpose-l-coco", "vitpose-h-coco", ... added likewise.
 }
 
 

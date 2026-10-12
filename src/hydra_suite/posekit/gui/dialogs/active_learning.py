@@ -371,8 +371,14 @@ class ActiveLearningDialog(QDialog):
         common_layout.addRow("Device", self.device_combo)
 
         self.imgsz_spin = QSpinBox()
-        self.imgsz_spin.setRange(64, 4096)
-        self.imgsz_spin.setValue(640)
+        self.imgsz_spin.setRange(0, 4096)
+        self.imgsz_spin.setSingleStep(32)
+        self.imgsz_spin.setSpecialValueText("Model's training size")
+        self.imgsz_spin.setValue(0)
+        self.imgsz_spin.setToolTip(
+            "YOLO prediction size. The default uses the size the model was "
+            "trained at; predicting at another size lowers accuracy."
+        )
         common_layout.addRow("Image size", self.imgsz_spin)
 
         self.conf_spin = QDoubleSpinBox()

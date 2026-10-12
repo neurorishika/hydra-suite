@@ -836,8 +836,13 @@ def _write_dataset_yaml(
     keypoint_names: List[str],
     class_names: List[str],
     manifest_rows: list,
+    flip_idx: Optional[List[int]] = None,
 ) -> Path:
-    """Write ``dataset.yaml`` and ``manifest.json``; return the yaml path."""
+    """Write ``dataset.yaml`` and ``manifest.json``; return the yaml path.
+
+    ``flip_idx`` (the keypoint permutation for a mirror) is required by
+    Ultralytics before it applies ``fliplr`` / ``flipud`` to a pose dataset.
+    """
     import yaml
 
     k = len(keypoint_names)
@@ -849,6 +854,10 @@ def _write_dataset_yaml(
         "names": {i: n for i, n in enumerate(class_names)},
         "kpt_names": {0: keypoint_names},
     }
+    if flip_idx is not None:
+        if sorted(int(i) for i in flip_idx) != list(range(k)):
+            raise ValueError(f"flip_idx {flip_idx} is not a permutation of {k}")
+        data["flip_idx"] = [int(i) for i in flip_idx]
     yaml_path = output_dir / "dataset.yaml"
     yaml_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     (output_dir / "manifest.json").write_text(
@@ -871,6 +880,7 @@ def build_yolo_pose_dataset(
     val_items: Optional[List[Tuple[Path, Path]]] = None,
     ignore_occluded_train: bool = True,
     ignore_occluded_val: bool = False,
+    flip_idx: Optional[List[int]] = None,
 ) -> Dict[str, object]:
     """
     Build a YOLO Pose dataset with copied images/labels under output_dir.
@@ -942,7 +952,7 @@ def build_yolo_pose_dataset(
     val_txt.write_text("images/val\n", encoding="utf-8")
 
     yaml_path = _write_dataset_yaml(
-        output_dir, keypoint_names, class_names, manifest_rows
+        output_dir, keypoint_names, class_names, manifest_rows, flip_idx=flip_idx
     )
 
     return {
