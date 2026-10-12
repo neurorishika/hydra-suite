@@ -93,7 +93,10 @@ def validate_run_config(d: dict) -> RunConfig:
     if not (0.0 <= float(d.get("aspect_jitter", 0.0)) <= 1.0):
         raise ValueError("aspect_jitter must be in [0, 1]")
     for key in ("fliplr", "flipud"):
-        if not (0.0 <= float(d.get(key, 0.0)) <= 1.0):
+        value = d.get(key, 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} must be a number in [0, 1]")
+        if not (0.0 <= float(value) <= 1.0):
             raise ValueError(f"{key} must be in [0, 1]")
     pairs = d.get("flip_pairs")
     if pairs is not None:
@@ -101,7 +104,9 @@ def validate_run_config(d: dict) -> RunConfig:
         ok = isinstance(pairs, (list, tuple)) and all(
             isinstance(p, (list, tuple))
             and len(p) == 2
-            and all(isinstance(i, int) and 0 <= i < k for i in p)
+            and all(
+                isinstance(i, int) and not isinstance(i, bool) and 0 <= i < k for i in p
+            )
             and p[0] != p[1]
             for p in pairs
         )

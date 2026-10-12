@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from hydra_suite.core.pose_flip import parse_flip_pairs
+from hydra_suite.core.pose_flip import parse_flip_pairs, remap_pairs_by_name
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ..panels.flip_pairs_panel import FlipPairsPanel
@@ -304,7 +304,8 @@ class SkeletonEditorDialog(QDialog):
         self._refresh_edges()
 
     def _make_chain(self):
-        self.edges = [(i, i + 1) for i in range(max(0, len(self.kpt_names) - 1))]
+        n = self.kpt_table.rowCount()
+        self.edges = [(i, i + 1) for i in range(max(0, n - 1))]
         self._refresh_edges()
 
     def _clear_edges(self):
@@ -369,6 +370,8 @@ class SkeletonEditorDialog(QDialog):
                 return
             self.kpt_table.setRowCount(len(names))
 
+        old_names = self._current_names()
+        old_pairs = self.flip_panel.pairs()
         self.kpt_names = list(names)
         for i, name in enumerate(self.kpt_names):
             self.kpt_table.setItem(i, 0, QTableWidgetItem(str(i)))
@@ -383,8 +386,11 @@ class SkeletonEditorDialog(QDialog):
         ]
         self._refresh_edges()
         self.flip_panel.set_names(self.kpt_names)
-        if flip_pairs is not None:  # a file without pairs keeps the current ones
-            self.flip_panel.set_pairs(flip_pairs)
+        if flip_pairs is None:
+            # A file saved without pairs: keep the current pairs only for
+            # keypoints it still has, matched by name, never by position.
+            flip_pairs = remap_pairs_by_name(old_pairs, old_names, self.kpt_names)
+        self.flip_panel.set_pairs(flip_pairs)
 
     def _load_config(self):
         path = self._pick_skeleton_path(save=False)

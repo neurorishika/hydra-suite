@@ -56,6 +56,7 @@ from hydra_suite.posekit.core.frame_grouping import (
     FRAME_MODE_CONFIRMATION_TEMPLATE,
     group_indices_by_frame,
 )
+from hydra_suite.posekit.core.training_options import is_vitpose_run
 from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
@@ -1516,27 +1517,35 @@ class MainWindow(QMainWindow):
         if "pred_vitpose" in settings:
             self.pred_vitpose_edit.setText(str(settings["pred_vitpose"]))
         backend = str(settings.get("pred_backend") or "")
-        if backend and self._saved_backend_has_model(backend, settings):
+        if backend and self._saved_backend_has_model(
+            backend, settings, self.project.latest_pose_weights
+        ):
             self.combo_pred_backend.setCurrentText(backend)
         self._apply_pred_runtime_setting(settings)
         self.pred_exported_edit.setText("")
         self._apply_pred_batch_setting(settings)
 
     @staticmethod
-    def _saved_backend_has_model(backend: str, settings) -> bool:
-        """Restore a saved prediction backend only once a model was set for it.
+    def _saved_backend_has_model(backend: str, settings, latest_weights=None) -> bool:
+        """Whether to restore a saved prediction backend over the ViTPose default.
 
-        Older sessions saved "YOLO" (then the default) with no model; restoring
-        that would hide the ViTPose default from anyone who never chose YOLO.
+        Older sessions saved "YOLO" (then the default) even when no YOLO model
+        was ever used; restoring that would hide the new default.  YOLO is kept
+        when a YOLO model is reachable (its own field or the project's latest
+        YOLO run); SLEAP and ViTPose are always kept (SLEAP finds its models).
         """
-        key = {
-            "yolo": "pred_weights",
-            "sleap": "sleap_model_dir",
-            "vitpose": "pred_vitpose",
-        }.get(backend.strip().lower())
-        if key is None:
+        name = backend.strip().lower()
+        if name in ("sleap", "vitpose"):
+            return True
+        if name != "yolo":
             return False
-        return bool(str(settings.get(key) or "").strip())
+        if str(settings.get("pred_weights") or "").strip():
+            return True
+        return bool(
+            latest_weights
+            and Path(latest_weights).is_file()
+            and not is_vitpose_run(latest_weights)
+        )
 
     def _apply_sleap_settings(self, settings):
         if "sleap_env" in settings:
@@ -1559,11 +1568,10 @@ class MainWindow(QMainWindow):
             self.show_pred_conf = bool(self.cb_show_pred_conf.isChecked())
         latest = self.project.latest_pose_weights
         if latest and Path(latest).exists():
-            # ViTPose runs live under <training runs>/vitpose/; anything else
-            # is a YOLO run.  Fill the matching (empty) model field.
+            # Fill the (empty) model field of the backend that trained it.
             field = (
                 self.pred_vitpose_edit
-                if "vitpose" in Path(latest).parts
+                if is_vitpose_run(latest)
                 else self.pred_weights_edit
             )
             if not field.text().strip():
@@ -5848,10 +5856,12 @@ class MainWindow(QMainWindow):
         weights = str(getattr(dlg, "_last_weights", "") or "").strip()
         if not weights or not Path(weights).is_file():
             return
-        if dlg.backend_combo.currentText() == "ViTPose":
+        # The backend that trained, not whatever the combo shows at close.
+        trained = getattr(dlg, "_trained_backend", "")
+        if trained == "ViTPose":
             self.pred_vitpose_edit.setText(weights)
             self.combo_pred_backend.setCurrentText("ViTPose")
-        elif dlg.backend_combo.currentText() == "YOLO Pose":
+        elif trained == "YOLO Pose":
             self.pred_weights_edit.setText(weights)
             self.combo_pred_backend.setCurrentText("YOLO")
 

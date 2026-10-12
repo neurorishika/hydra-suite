@@ -142,9 +142,11 @@ Clustering also writes `posekit/clusters/clusters.csv` for every frame, which th
   A mirror turns a left antenna into a right one, so the skeleton needs its
   left/right pairs: set them in the **Skeleton Editor** (*Suggest from names* pairs
   `left_*`/`right_*`, `l_*`/`r_*`). They are saved in the project and in skeleton
-  files (`flip_pairs`). If the keypoint names have left and right sides but no pairs
-  are set, flips stay off and the Training Runner says so; a skeleton with only
-  midline keypoints flips without swapping.
+  files (`flip_pairs`). If any keypoint whose name marks a side (`left_*`, `l_*`,
+  `antL`, `L1`, `lf_*`, ...) is not in a pair, flips stay off and the Training
+  Runner names the keypoints; a skeleton with only midline keypoints flips without
+  swapping. Loading a skeleton file saved without pairs keeps the current pairs only
+  for keypoints it still has, matched by name.
 - **Mosaic off.** Ultralytics' mosaic tiles four crops into one image, which puts
   the labelled animal off-centre next to unlabelled ones; it is off by default and
   can be switched on under Augmentations.

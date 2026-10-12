@@ -274,7 +274,7 @@ def measure_crop_geometry(
     image_paths: Sequence[Path],
     *,
     detail: float = 1.0,
-    max_images: int = 400,
+    max_images: int = 150,
 ) -> CropSizeStats:
     """Suggest YOLO ``imgsz`` and a ViTPose input from the crops' pixel sizes.
 

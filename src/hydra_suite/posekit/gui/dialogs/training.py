@@ -55,7 +55,7 @@ from ...core.extensions import (
     build_yolo_pose_dataset,
     list_labeled_indices,
 )
-from ...core.training_options import plan_flips
+from ...core.training_options import is_vitpose_run, plan_flips
 from ...core.vitpose_checkpoints import CATALOG, check_variant_available
 from ...core.vitpose_training import (
     build_training_command,
@@ -75,6 +75,20 @@ from .utils import (
 )
 
 logger = logging.getLogger("pose_label.dialogs.training")
+
+
+def _setting_float(settings: dict, key: str, default: float) -> float:
+    try:
+        return float(settings.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _setting_bool(settings: dict, key: str, default: bool) -> bool:
+    value = settings.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value) if value is not None else default
 
 
 def _flip_spin(value: float) -> QDoubleSpinBox:
@@ -1186,8 +1200,15 @@ class TrainingRunnerDialog(QDialog):
         self._crop_stats = None
         self._crop_stats_error = ""
 
+        self._trained_backend = ""
         self._toggle_aug_widgets(self.cb_augment.isChecked())
-        self._apply_settings()
+        # Restoring Detail or a size must not trigger auto-sizing with the
+        # Auto boxes still at their defaults (it would overwrite saved sizes).
+        self._restoring_settings = True
+        try:
+            self._apply_settings()
+        finally:
+            self._restoring_settings = False
         self._refresh_sleap_envs()
         self._apply_latest_weights_default()
         if not self.sleap_out_edit.text().strip():
@@ -1386,19 +1407,21 @@ class TrainingRunnerDialog(QDialog):
             ("vitpose_fliplr", self.vitpose_fliplr_spin),
             ("vitpose_flipud", self.vitpose_flipud_spin),
         ):
-            widget.setValue(float(settings.get(key, widget.value())))
+            widget.setValue(_setting_float(settings, key, widget.value()))
         for key, box in (
             ("mosaic", self.cb_mosaic),
             ("imgsz_auto", self.imgsz_auto_cb),
             ("vitpose_auto_size", self.vitpose_auto_cb),
         ):
-            box.setChecked(bool(settings.get(key, box.isChecked())))
+            box.setChecked(_setting_bool(settings, key, box.isChecked()))
 
     def _apply_latest_weights_default(self):
         if (
             hasattr(self.project, "latest_pose_weights")
             and self.project.latest_pose_weights
             and Path(self.project.latest_pose_weights).exists()
+            # YOLO cannot start from a ViTPose checkpoint
+            and not is_vitpose_run(self.project.latest_pose_weights)
         ):
             self.model_combo.setCurrentText(str(self.project.latest_pose_weights))
 
@@ -1433,6 +1456,8 @@ class TrainingRunnerDialog(QDialog):
 
         self.vitpose_group.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
+        if hasattr(self, "_crop_stats"):  # sizes are measured lazily per backend
+            self._apply_auto_sizes()
 
     def _on_vitpose_checkpoint_activated(self, index: int):
         if self.vitpose_checkpoint_combo.itemText(index) == "Browse…":
@@ -1660,12 +1685,25 @@ class TrainingRunnerDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         """Persist dialog settings and cancel any running training or export worker before closing."""
+        self._shutdown()
+        super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        """Close / Esc go through here (not closeEvent): save and stop too."""
+        self._shutdown()
+        super().done(result)
+
+    def _shutdown(self) -> None:
         self._save_settings()
         if self._thread:
-            self._worker.cancel()
-            self._thread.quit()
-            self._thread.wait()
-        super().closeEvent(event)
+            try:
+                running = self._thread.isRunning()
+            except RuntimeError:  # thread object already deleted
+                running = False
+            if running:
+                self._worker.cancel()
+                self._thread.quit()
+                self._thread.wait()
 
     def _remove_aux_project(self):
         row = self.aux_list.currentRow()
@@ -1721,6 +1759,7 @@ class TrainingRunnerDialog(QDialog):
 
         self._apply_auto_sizes()
         flips = self._flip_plan(yolo=True)
+        self._trained_backend = "YOLO Pose"
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = self.project.out_root / "runs" / "yolo_pose" / timestamp
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -1859,6 +1898,10 @@ class TrainingRunnerDialog(QDialog):
         """Fill the image sizes from the crops wherever *Auto* is ticked."""
         from hydra_suite.training.pose_geometry_measure import suggest_vitpose_hw
 
+        if getattr(self, "_restoring_settings", False):
+            return
+        if self.backend_combo.currentText() not in ("YOLO Pose", "ViTPose"):
+            return  # nothing to size (and no need to read image headers)
         yolo_auto = self.imgsz_auto_cb.isChecked()
         vit_auto = self.vitpose_auto_cb.isChecked()
         stats = self._measure_crops() if (yolo_auto or vit_auto) else None
@@ -1888,7 +1931,7 @@ class TrainingRunnerDialog(QDialog):
             )
             self.vitpose_h_spin.setValue(h)
             self.vitpose_w_spin.setValue(w)
-            note = " (capped at 384)" if clamped else ""
+            note = " (kept within 64-384 px per side)" if clamped else ""
             self.vitpose_size_summary.setText(
                 f"{crop_txt} -> input {h}x{w} (HxW){note}."
             )
@@ -1946,6 +1989,7 @@ class TrainingRunnerDialog(QDialog):
 
         self._apply_auto_sizes()
         flips = self._flip_plan(yolo=False)
+        self._trained_backend = "ViTPose"
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = get_training_runs_dir() / "vitpose" / timestamp
         cache_dir = get_vitpose_cache_dir()
@@ -2107,9 +2151,8 @@ class TrainingRunnerDialog(QDialog):
                 self, "Missing weights", "No valid weights found to evaluate."
             )
             return
-        trained_backend = (
-            "vitpose" if self.backend_combo.currentText() == "ViTPose" else "yolo"
-        )
+        backend = self._trained_backend or self.backend_combo.currentText()
+        trained_backend = "vitpose" if backend == "ViTPose" else "yolo"
         dlg = EvaluationDashboardDialog(
             self,
             self.project,

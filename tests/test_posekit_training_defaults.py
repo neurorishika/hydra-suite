@@ -519,12 +519,146 @@ def test_vitpose_worker_passes_flips(monkeypatch, tmp_path):
 # ── main window ──────────────────────────────────────────────────────────
 
 
-def test_saved_prediction_backend_needs_a_model():
+def test_saved_prediction_backend_rule(tmp_path, monkeypatch):
+    import hydra_suite.paths as paths
     from hydra_suite.posekit.gui.main_window import MainWindow
 
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(paths, "get_training_runs_dir", lambda: runs)
+    yolo_best = tmp_path / "proj" / "runs" / "yolo_pose" / "1" / "weights" / "best.pt"
+    vit_best = runs / "vitpose" / "1" / "best.pt"
+    for p in (yolo_best, vit_best):
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"x")
+
     has = MainWindow._saved_backend_has_model
-    assert not has("YOLO", {"pred_backend": "YOLO", "pred_weights": ""})
+    # "YOLO" saved by an old session that never used a YOLO model
+    assert not has("YOLO", {"pred_weights": ""})
+    assert not has("YOLO", {"pred_weights": ""}, vit_best)
     assert has("YOLO", {"pred_weights": "/m/best.pt"})
-    assert has("ViTPose", {"pred_vitpose": "/v/best.pt"})
-    assert not has("SLEAP", {})
+    assert has("YOLO", {"pred_weights": ""}, yolo_best)  # latest YOLO run
+    assert has("SLEAP", {})  # SLEAP finds its own models
+    assert has("ViTPose", {})
     assert not has("other", {"pred_weights": "x"})
+
+
+def test_is_vitpose_run_uses_the_runs_folder(tmp_path, monkeypatch):
+    import hydra_suite.paths as paths
+    from hydra_suite.posekit.core.training_options import is_vitpose_run
+
+    monkeypatch.setattr(paths, "get_training_runs_dir", lambda: tmp_path / "runs")
+    assert is_vitpose_run(tmp_path / "runs" / "vitpose" / "2026" / "best.pt")
+    # a project that merely sits in a folder called "vitpose"
+    assert not is_vitpose_run(tmp_path / "vitpose" / "runs" / "yolo_pose" / "best.pt")
+    assert not is_vitpose_run("")
+
+
+def test_plan_flips_blocks_unpaired_side_keypoints():
+    from hydra_suite.posekit.core.training_options import plan_flips
+
+    for names in (
+        ["head", "L1", "R1"],
+        ["head", "leg_l1", "leg_r1"],
+        ["head", "lf_leg", "rf_leg"],
+        ["head", "antL", "antR"],
+        ["head", "l.ant", "r.ant"],
+        ["head", "left_antenna", "right_ant"],
+    ):
+        assert plan_flips(names, [], 0.5, 0.5).blocked, names
+    partial = plan_flips(
+        ["nose", "left_eye", "right_eye", "left_ear", "right_ear"], [(1, 2)], 0.5, 0.5
+    )
+    assert partial.blocked and "left_ear" in partial.note
+    ok = plan_flips(["head", "L1", "R1"], [(1, 2)], 0.5, 0.5)
+    assert ok.enabled and ok.flip_idx == [0, 2, 1]
+
+
+def test_skeleton_file_without_pairs_remaps_by_name(qapp, tmp_path, monkeypatch):
+    from hydra_suite.posekit.gui.dialogs import skeleton as S
+
+    dlg = S.SkeletonEditorDialog(
+        ["left_eye", "right_eye", "nose"], [(0, 1)], None, flip_pairs=[(0, 1)]
+    )
+    monkeypatch.setattr(S.QMessageBox, "question", lambda *a, **k: S.QMessageBox.Yes)
+    out = tmp_path / "s.json"
+    monkeypatch.setattr(dlg, "_pick_skeleton_path", lambda save: out)
+    out.write_text(
+        json.dumps(
+            {"keypoint_names": ["head", "thorax", "abdomen", "tail"], "edges": [[0, 1]]}
+        )
+    )
+    dlg._load_config()
+    assert dlg.get_flip_pairs() == []  # never head<->thorax by position
+    out.write_text(
+        json.dumps(
+            {
+                "keypoint_names": ["nose", "right_eye", "left_eye", "tail"],
+                "edges": [[0, 1]],
+            }
+        )
+    )
+    dlg._apply_config(["left_eye", "right_eye", "nose"], [(0, 1)], [(0, 1)])
+    dlg._load_config()
+    assert dlg.get_flip_pairs() == [(1, 2)]
+
+
+def test_runner_restores_manual_sizes_with_detail(qapp, tmp_path, isolated_settings):
+    from hydra_suite.posekit.gui.dialogs.training import TrainingRunnerDialog
+
+    isolated_settings.write_text(
+        json.dumps(
+            {
+                "dialogs": {
+                    "training_runner": {
+                        "imgsz_auto": False,
+                        "imgsz": 1024,
+                        "vitpose_auto_size": False,
+                        "vitpose_input_h": 512,
+                        "vitpose_input_w": 384,
+                        "vitpose_detail": 2.0,
+                        "fliplr": "abc",
+                        "flipud": None,
+                        "mosaic": "false",
+                    }
+                }
+            }
+        )
+    )
+    proj = _project(tmp_path)
+    imgs = _write_images(proj.images_dir, [(192, 128)] * 3)
+    dlg = TrainingRunnerDialog(None, proj, imgs)
+    assert dlg.imgsz_spin.value() == 1024
+    assert (dlg.vitpose_h_spin.value(), dlg.vitpose_w_spin.value()) == (512, 384)
+    assert dlg.fliplr_spin.value() == 0.5 and not dlg.cb_mosaic.isChecked()
+    dlg._loss_timer.stop()
+
+
+def test_runner_saves_on_close_button(runner, isolated_settings):
+    runner.cb_mosaic.setChecked(True)
+    runner.btn_close.click()
+    saved = json.loads(isolated_settings.read_text())["dialogs"]["training_runner"]
+    assert saved["mosaic"] is True
+
+
+def test_trained_weights_follow_the_training_backend(tmp_path):
+    from types import SimpleNamespace
+
+    from hydra_suite.posekit.gui.main_window import MainWindow
+
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"x")
+    calls = {}
+    fake = SimpleNamespace(
+        pred_vitpose_edit=SimpleNamespace(setText=lambda t: calls.update(vit=t)),
+        pred_weights_edit=SimpleNamespace(setText=lambda t: calls.update(yolo=t)),
+        combo_pred_backend=SimpleNamespace(
+            setCurrentText=lambda t: calls.update(backend=t)
+        ),
+    )
+    dlg = SimpleNamespace(
+        _last_weights=str(weights),
+        _trained_backend="ViTPose",
+        backend_combo=SimpleNamespace(currentText=lambda: "YOLO Pose"),
+    )
+    MainWindow._use_trained_weights(fake, dlg)
+    assert calls == {"vit": str(weights), "backend": "ViTPose"}

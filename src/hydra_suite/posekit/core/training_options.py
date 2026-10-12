@@ -6,13 +6,33 @@ Pure (no Qt): the Training Runner calls these for both YOLO-pose and ViTPose.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from hydra_suite.core.pose_flip import (
     flip_index,
     normalize_flip_pairs,
-    suggest_flip_pairs,
+    unpaired_side_keypoints,
 )
+
+
+def is_vitpose_run(weights) -> bool:
+    """Whether ``weights`` came from a PoseKit ViTPose run.
+
+    ViTPose runs are written under ``<training runs>/vitpose/`` (YOLO runs go
+    under the project's ``runs/yolo_pose/``), so the location says which
+    backend a ``best.pt`` belongs to.
+    """
+    from hydra_suite.paths import get_training_runs_dir
+
+    if not weights:
+        return False
+    try:
+        path = Path(weights).expanduser().resolve()
+        root = (get_training_runs_dir() / "vitpose").resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    return path.is_relative_to(root)
 
 
 @dataclass(frozen=True)
@@ -41,10 +61,11 @@ def plan_flips(
 ) -> FlipPlan:
     """Decide the flips for a run.
 
-    A mirror must swap left and right keypoints.  With pairs set, flips run and
-    swap them.  With no pairs and no left/right names (a midline-only skeleton)
-    flips run with every keypoint kept in place.  With left/right names but no
-    pairs, flips would teach the model to confuse the sides, so they are off.
+    A mirror must swap left and right keypoints, so flips run only when every
+    side-named keypoint (``left_*``, ``l_*``, ``antL``, ``L1``, ...) is in a
+    pair; any left unpaired would teach the model to confuse the sides, so
+    flips are off until the Skeleton Editor pairs them.  A skeleton with only
+    midline keypoints flips with every keypoint kept in place.
     """
     k = len(keypoint_names)
     fliplr = max(0.0, min(1.0, float(fliplr)))
@@ -52,6 +73,19 @@ def plan_flips(
     pairs = normalize_flip_pairs(flip_pairs, k)
     if fliplr <= 0 and flipud <= 0:
         return FlipPlan(0.0, 0.0, None, pairs, "Flips off.")
+    unpaired = unpaired_side_keypoints(keypoint_names, pairs)
+    if unpaired:
+        listed = ", ".join(str(keypoint_names[i]) for i in unpaired)
+        return FlipPlan(
+            0.0,
+            0.0,
+            None,
+            pairs,
+            f"Flips off: {listed} look like left/right keypoints but are not in "
+            "a left/right pair. Pair them in the Skeleton Editor (Suggest from "
+            "names), then flips swap them.",
+            blocked=True,
+        )
     if pairs:
         names = ", ".join(
             f"{keypoint_names[a]} ↔ {keypoint_names[b]}" for a, b in pairs
@@ -62,17 +96,6 @@ def plan_flips(
             flip_index(pairs, k),
             pairs,
             f"Flips swap {len(pairs)} left/right pair(s): {names}.",
-        )
-    if suggest_flip_pairs(keypoint_names):
-        return FlipPlan(
-            0.0,
-            0.0,
-            None,
-            [],
-            "Flips off: the keypoint names have left and right sides but the "
-            "skeleton has no left/right pairs. Set them in the Skeleton Editor "
-            "(Suggest from names).",
-            blocked=True,
         )
     return FlipPlan(
         fliplr,

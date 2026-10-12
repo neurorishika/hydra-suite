@@ -22,6 +22,53 @@ _SIDE_PATTERNS = (
 )
 
 
+_SIDE_WORD = re.compile(r"left|right", re.IGNORECASE)
+# One-letter side tokens: l / r, l1 / r2 (leg numbers), lf / rh / lm / rb
+# (front, hind, middle, back).
+_SIDE_TOKEN = re.compile(r"^[lr](\d+|[fhmb])?$", re.IGNORECASE)
+_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=\d)")
+
+
+def is_side_named(name: str) -> bool:
+    """Whether a keypoint name marks a left or right side.
+
+    Deliberately broad (left/right anywhere; l/r tokens such as ``l_ear``,
+    ``antL``, ``L1``, ``lf_leg``, ``l.ant``): a missed side name lets a flip
+    train the model to confuse sides, a false alarm only asks for pairs.
+    """
+    text = str(name)
+    if _SIDE_WORD.search(text):
+        return True
+    tokens = [t for t in _TOKEN_SPLIT.split(text) if t]
+    # Re-join a letter split from its leg number ("L1" -> "L", "1").
+    joined = list(tokens)
+    for i in range(len(tokens) - 1):
+        if tokens[i + 1].isdigit():
+            joined.append(tokens[i] + tokens[i + 1])
+    return any(_SIDE_TOKEN.match(t) for t in joined)
+
+
+def unpaired_side_keypoints(names: Sequence[str], pairs: Iterable[Pair]) -> List[int]:
+    """Side-named keypoints (see :func:`is_side_named`) that no pair covers."""
+    paired = {i for pair in pairs for i in pair}
+    return [i for i, n in enumerate(names) if i not in paired and is_side_named(n)]
+
+
+def remap_pairs_by_name(
+    pairs: Iterable[Pair], old_names: Sequence[str], new_names: Sequence[str]
+) -> List[Pair]:
+    """Carry pairs over to a new keypoint list by name (dropping missing ones)."""
+    where = {str(n): i for i, n in enumerate(new_names)}
+    out: List[Pair] = []
+    for a, b in pairs:
+        if not (0 <= a < len(old_names) and 0 <= b < len(old_names)):
+            continue
+        na, nb = where.get(str(old_names[a])), where.get(str(old_names[b]))
+        if na is not None and nb is not None:
+            out.append((na, nb))
+    return normalize_flip_pairs(out, len(new_names))
+
+
 def normalize_flip_pairs(pairs: Iterable[Sequence[int]], k: int) -> List[Pair]:
     """Valid pairs only: in range, two distinct keypoints, each used once.
 
