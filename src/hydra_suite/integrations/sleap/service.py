@@ -25,7 +25,11 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from hydra_suite.core.inference.api import load_pose_backend
-from hydra_suite.runtime.sidecar_versions import SUPPORTED_SLEAP_NN_PREFIX
+from hydra_suite.runtime.sidecar_versions import (
+    SLEAP_PIN,
+    SUPPORTED_SLEAP_NN_PREFIXES,
+    SUPPORTED_SLEAP_NN_TEXT,
+)
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 
 
@@ -864,6 +868,11 @@ def _load_training_preprocess_config(model_dir):
             raw = yaml.safe_load(cfg_path.read_text(encoding='utf-8')) or {}
             data_cfg = raw.get('data_config') or {}
             preprocess_config = data_cfg.get('preprocessing') or None
+            if preprocess_config is not None:
+                # sleap-nn 0.3 reads attributes (preprocess_config.scale), so a
+                # plain dict fails; OmegaConf supports both access styles.
+                from omegaconf import OmegaConf
+                preprocess_config = OmegaConf.create(preprocess_config)
         except Exception as e:
             _log(f'predictor: failed to load preprocess_config from training_config.yaml: {e}')
     _state['preprocess_model_dir'] = model_dir
@@ -892,7 +901,8 @@ def _load_predictor(model_dir, device):
                     device=device,
                     preprocess_config=preprocess_config,
                 )
-    except Exception:
+    except Exception as e:
+        _log(f"predictor: sleap_nn.inference.predictors load failed: {e}")
         pred = None
     if pred is None:
         try:
@@ -2574,10 +2584,10 @@ def _format_sleap_env_preflight_error(raw_error: str, env_name: str) -> str:
         found = msg.rsplit(" ", 1)[-1]
         return (
             f"SLEAP env '{env_name}' has sleap-nn {found}; HYDRA supports "
-            f"sleap-nn {SUPPORTED_SLEAP_NN_PREFIX}x (from sleap==1.6.2). Newer "
-            "sleap-nn breaks the pose service's shared-memory transport.\n"
+            f"sleap-nn {SUPPORTED_SLEAP_NN_TEXT} (sleap=={SLEAP_PIN} brings 0.3.x). "
+            "Other sleap-nn versions are untested with the pose service.\n"
             "Fix: python install.py --with-sleap   (rebuilds the env with the pin), or\n"
-            f'  conda run -n {env_name} python -m pip install "sleap[nn,nn-export]==1.6.2"'
+            f'  conda run -n {env_name} python -m pip install "sleap[nn,nn-export]=={SLEAP_PIN}"'
         )
     if "torchvision::nms does not exist" in msg:
         return (
@@ -2620,7 +2630,7 @@ def _sleap_env_preflight(env_name: str) -> Tuple[bool, str]:
         "    sys.exit(4)\n"
         "import importlib.metadata as _md\n"
         "out['sleap_nn']=_md.version('sleap-nn')\n"
-        f"if not out['sleap_nn'].startswith({SUPPORTED_SLEAP_NN_PREFIX!r}):\n"
+        f"if not out['sleap_nn'].startswith({SUPPORTED_SLEAP_NN_PREFIXES!r}):\n"
         "    print('ERROR: unsupported sleap-nn ' + out['sleap_nn'])\n"
         "    sys.exit(5)\n"
         "print(json.dumps(out))\n"

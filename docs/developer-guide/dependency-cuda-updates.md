@@ -12,7 +12,7 @@ constraints to re-check when you do.
 | torch / torchvision | `TORCH_VERSION`, `TORCHVISION_VERSION` in `install.py` | A matched release pair, installed from the PyTorch index for the tier. |
 | Driver → CUDA mapping | `CUDA13_MIN_DRIVER` in `install.py` (580) | Driver ≥ 580 gets CUDA 13 (`cu130`); older drivers get CUDA 12 (`cu128`). |
 | Git-only pins | `CLIP_REF`, `APRILTAG_COMMIT`, `SAM3_REF` in `install.py` | ultralytics CLIP fork, Kronauer lab AprilTag fork, Meta `sam3` (training sidecar). |
-| Sidecar pins | `SLEAP_PIN` (`1.6.2`) and the `sam3_train_steps` pin list in `install.py` | SLEAP and SAM3-training sidecar envs. |
+| Sidecar pins | `SLEAP_PIN` (`1.6.5`) and `SLEAP_NN_PIN` (`0.3.3`) and the `sam3_train_steps` pin list in `install.py` | SLEAP and SAM3-training sidecar envs. |
 
 `tools/lock_constraints.py` deliberately does **not** pin `torch`,
 `torchvision`, `triton`, `nvidia-*`, `cuda-*` or `hydra-suite` itself. Torch
@@ -97,9 +97,16 @@ run `python install.py --recreate`.
 
 ### SLEAP sidecar
 
-`sleap==1.6.2` pins `sleap-nn` 0.1.x. Newer `sleap-nn` breaks the
-shared-memory transport, and the runtime preflight refuses anything but 0.1.x.
-Re-verify on a fresh env before relaxing `SLEAP_PIN`.
+`install.py` pins `sleap==1.6.5` and `sleap-nn==0.3.3`. The runtime preflight
+and `hydra doctor` accept `sleap-nn` 0.3.x or 0.1.x (the previous pin), from
+`SUPPORTED_SLEAP_NN_PREFIXES` in `runtime/sidecar_versions.py`, which also
+holds a copy of `SLEAP_PIN`; a test keeps the two in step. To move the pin,
+build a fresh env with `install.py --with-sleap`, then compare the pose clips
+(`ant_pose_headtail`, `ant_obb_sleap`) against the old env with `pose_sleap_env`
+pointed at each, plus `tools/equivalence/verify_sleap_exported_vs_service.py`
+for ONNX and TensorRT. sleap-nn 0.3 needs `preprocess_config` as an OmegaConf
+object, and failures in the service's fast path are logged, then fall back to
+the slow `sleap-nn track` CLI path.
 
 ### SAM3 training sidecar
 

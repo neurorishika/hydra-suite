@@ -406,7 +406,10 @@ REINSTALL_SLEAP = (
 def check_sleap() -> Check:
     if "sleap" not in _conda_env_names():
         return _sleap_missing()
-    from hydra_suite.runtime.sidecar_versions import SUPPORTED_SLEAP_NN_PREFIX
+    from hydra_suite.runtime.sidecar_versions import (
+        SUPPORTED_SLEAP_NN_PREFIXES,
+        SUPPORTED_SLEAP_NN_TEXT,
+    )
     from hydra_suite.utils.conda_utils import run_conda
 
     code = "import importlib.metadata as m; print(m.version('sleap-nn'))"
@@ -425,11 +428,11 @@ def check_sleap() -> Check:
         return Check(
             "sleap", WARN, "sleap env present but sleap-nn is missing", REINSTALL_SLEAP
         )
-    if not version.startswith(SUPPORTED_SLEAP_NN_PREFIX):
+    if not version.startswith(SUPPORTED_SLEAP_NN_PREFIXES):
         return Check(
             "sleap",
             WARN,
-            f"sleap-nn {version} is unsupported (need {SUPPORTED_SLEAP_NN_PREFIX}x); "
+            f"sleap-nn {version} is unsupported (need {SUPPORTED_SLEAP_NN_TEXT}); "
             "pose inference will refuse to start",
             REINSTALL_SLEAP,
         )

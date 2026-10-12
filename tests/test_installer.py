@@ -364,6 +364,34 @@ def test_sleap_sidecar_is_pinned():
     steps = inst.build_plan(_ctx(LINUX, "cpu"), inst.Options(with_sleap=True))
     text = _argv_text([s for s in steps if s.name == "sleap"])
     assert f"=={inst.SLEAP_PIN}" in text
+    assert f"sleap-nn=={inst.SLEAP_NN_PIN}" in text
+
+
+def test_sleap_sidecar_installs_cuda_libraries_for_pinned_torch():
+    steps = [
+        s
+        for s in inst.build_plan(
+            _ctx(linux_gpu("535"), "cuda", 12), inst.Options(with_sleap=True)
+        )
+        if s.name == "sleap"
+    ]
+    pin, deps = steps[-2].argv, steps[-1].argv
+    assert "--no-deps" in pin and "--force-reinstall" in pin
+    # The follow-up re-requests the same cu128 torch WITH its dependencies,
+    # so the CUDA 12 libraries it links against get installed.
+    assert "--no-deps" not in deps and "--force-reinstall" not in deps
+    assert f"torch=={inst.TORCH_VERSION}+cu128" in deps
+    assert deps[deps.index("--index-url") + 1].endswith("/cu128")
+
+
+def test_sleap_pins_match_runtime_guard():
+    from hydra_suite.runtime.sidecar_versions import (
+        SLEAP_PIN,
+        SUPPORTED_SLEAP_NN_PREFIXES,
+    )
+
+    assert inst.SLEAP_PIN == SLEAP_PIN
+    assert inst.SLEAP_NN_PIN.startswith(SUPPORTED_SLEAP_NN_PREFIXES)
 
 
 # ---------------------------------------------------------------------------

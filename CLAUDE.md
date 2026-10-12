@@ -29,7 +29,7 @@ python install.py --cuda 12          # override driver detection (or CUDA_MAJOR=
 python install.py --update           # upgrade an existing env
 python install.py --recreate         # rebuild the conda env (do this for pre-pyproject envs)
 python install.py --with-sam3-train  # + hydra-sam3 training sidecar (CUDA only)
-python install.py --with-sleap       # + sleap sidecar (sleap==1.6.2)
+python install.py --with-sleap       # + sleap sidecar (sleap==1.6.5, sleap-nn==0.3.3)
 python install.py --dev --docs       # + dev / docs extras
 python install.py --latest           # ignore the tested pins in constraints/
 hydra doctor                         # headless install verification (also: make doctor)

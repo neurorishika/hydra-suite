@@ -243,7 +243,7 @@ python install.py --source git+https://github.com/neurorishika/hydra-suite@main
 | Add-on | Command | Make target | Notes |
 |---|---|---|---|
 | SAM3 LoRA training sidecar | `python install.py --with-sam3-train` | `make setup-sam3-train` | **CUDA only** (compute capability ≥ 8.0, bf16); refused on other tiers. Builds conda env `hydra-sam3`. See [SAM2 and SAM3](../user-guide/sam-install-and-run.md#sam3-training-optional-cuda-only). |
-| SLEAP pose sidecar | `python install.py --with-sleap` | `make setup-sleap` | Builds conda env `sleap` with `sleap==1.6.2` and the torch build matching this host. See [Integrations](integrations.md#sleap-integration-trackerkit-posekit). |
+| SLEAP pose sidecar | `python install.py --with-sleap` | `make setup-sleap` | Builds conda env `sleap` with `sleap==1.6.5` and the torch build matching this host. See [Integrations](integrations.md#sleap-integration-trackerkit-posekit). |
 | Dev tools | `python install.py --dev` | `make install-dev` | pytest, black, flake8, mypy, build, twine, … (`[dev]` extra). |
 | Docs tools | `python install.py --docs` | `make docs-install` | mkdocs and plugins (`[docs]` extra). |
 

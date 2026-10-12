@@ -64,11 +64,12 @@ SAM3_PYTHON = "3.12"
 
 SLEAP_ENV = "sleap"
 SLEAP_PYTHON = "3.13"
-#: sleap 1.6.2 + sleap-nn 0.1.3 (pinned explicitly: sleap declares no upper
-#: bound on sleap-nn); newer sleap-nn breaks the shared-memory
-#: transport to the SLEAP service (AttributeError in sleap_nn.data.utils).
-SLEAP_PIN = "1.6.2"
-SLEAP_NN_PIN = "0.1.3"
+#: sleap 1.6.5 + sleap-nn 0.3.3, verified byte-identical to the previous
+#: 1.6.2 + 0.1.3 pin (native, ONNX and TensorRT pose). sleap-nn is pinned
+#: exactly so a fresh env is the tested one. Keep the copy in
+#: hydra_suite.runtime.sidecar_versions in step.
+SLEAP_PIN = "1.6.5"
+SLEAP_NN_PIN = "0.3.3"
 
 DEFAULT_PYTHON = "3.13"
 MIN_TARGET_PYTHON = (3, 11)
@@ -1056,8 +1057,7 @@ def sleap_steps(ctx: Context, opts: Options) -> List[Step]:
         Step(
             "sleap",
             f"install sleap[{extra}]=={SLEAP_PIN}",
-            # sleap 1.6.2 declares sleap-nn>=0.1.2 with NO upper bound, so a fresh
-            # resolve takes 0.3.x -- which the service preflight refuses. Pin it.
+            # sleap allows a range of sleap-nn releases; pin the verified one.
             [
                 *side,
                 "install",
@@ -1072,6 +1072,16 @@ def sleap_steps(ctx: Context, opts: Options) -> List[Step]:
         torch_args += ["--index-url", index]
     steps.append(
         Step("sleap", "pin the sidecar's torch to this host's build", torch_args)
+    )
+    # --no-deps leaves the CUDA libraries of the torch that sleap's resolve
+    # pulled (cu13 from PyPI); a cu128 torch then fails to import (missing
+    # libcupti.so.12 symbols). Re-requesting the same pins without
+    # --force-reinstall keeps torch and installs only its missing libraries.
+    deps_args = [*side, "install", *reqs]
+    if index:
+        deps_args += ["--index-url", index]
+    steps.append(
+        Step("sleap", "install the CUDA libraries the pinned torch needs", deps_args)
     )
     return steps
 
