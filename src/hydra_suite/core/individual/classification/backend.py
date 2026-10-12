@@ -681,6 +681,13 @@ class ClassifierBackend:
 
         return _native_accelerator_available(self._resolved)
 
+    def _can_fall_back_to_native_after_onnx_failure(self) -> bool:
+        """True when a failed ONNX/TensorRT build can be replaced by the native
+        checkpoint on the same accelerator (a ``.pth`` flat classifier)."""
+        if Path(self._model_path).suffix.lower() != ".pth":
+            return False
+        return _native_accelerator_available(self._resolved)
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
@@ -701,8 +708,26 @@ class ClassifierBackend:
                     if native_device.startswith("cuda"):
                         self._warmup_native_cuda_model()
                 else:
-                    self._load_onnx()
-                    self._active_execution_backend = "onnx"
+                    try:
+                        self._load_onnx()
+                        self._active_execution_backend = "onnx"
+                    except Exception as trt_exc:
+                        if not self._can_fall_back_to_native_after_onnx_failure():
+                            raise
+                        native_device = self._resolved.device
+                        logger.error(
+                            "ClassifierBackend: TensorRT/ONNX session for %s could not "
+                            "be built (%s); falling back to native %s execution for "
+                            "this model. Results are unaffected but this stage runs "
+                            "slower than gpu_fast.",
+                            self._model_path,
+                            trt_exc,
+                            native_device,
+                        )
+                        self._model = self._loader.load(self._model_path, native_device)
+                        self._active_execution_backend = "native"
+                        if native_device.startswith("cuda"):
+                            self._warmup_native_cuda_model()
             else:
                 loader_target = (
                     self._resolved
@@ -757,11 +782,35 @@ class ClassifierBackend:
         except Exception:
             pass
 
+    def _onnx_peer_is_stale(self, peer: Path) -> bool:
+        """True for a torchvision peer written by an older exporter."""
+        if self._metadata.arch in ("yolo", "tinyclassifier"):
+            return False
+        from hydra_suite.training.torchvision_model import (
+            TORCHVISION_ONNX_EXPORT_VERSION,
+            onnx_export_version,
+        )
+
+        try:
+            version = onnx_export_version(peer)
+        except Exception:  # unreadable peer: rebuild it
+            return True
+        if version == TORCHVISION_ONNX_EXPORT_VERSION:
+            return False
+        logger.warning(
+            "ClassifierBackend: re-exporting stale ONNX peer %s "
+            "(export version %s, current %s)",
+            peer,
+            version,
+            TORCHVISION_ONNX_EXPORT_VERSION,
+        )
+        return True
+
     def _derive_onnx_peer(self) -> Path:
         """Return (creating if necessary) the ONNX peer path for this artifact."""
         src = Path(self._model_path)
         peer = src.with_suffix(".onnx")
-        if peer.exists():
+        if peer.exists() and not self._onnx_peer_is_stale(peer):
             return peer
         h, w = self._metadata.input_size
         if self._metadata.arch == "yolo":
@@ -791,6 +840,9 @@ class ClassifierBackend:
     def _load_onnx(self) -> None:
         import onnxruntime as ort
 
+        from hydra_suite.core.individual.classification.trt_probe import (
+            probe_trt_session_in_child,
+        )
         from hydra_suite.runtime.artifact_lock import artifact_build_lock
         from hydra_suite.runtime.onnx_providers import (
             execution_providers_for,
@@ -829,6 +881,15 @@ class ClassifierBackend:
                 # The lock lives in that cache dir (writable by construction),
                 # not beside the model, which may be read-only.
                 with artifact_build_lock(tensorrt_ep_lock_target(peer)):
+                    # Build the engine in a child first: some TRT builder
+                    # failures (e.g. CUDA 716 in the autotuner) poison this
+                    # process's CUDA context and would break any fallback.
+                    probe = probe_trt_session_in_child(str(peer), providers)
+                    if not probe.ok:
+                        raise RuntimeError(
+                            "TensorRT engine build failed in an isolated probe "
+                            f"process (exit {probe.returncode}): {probe.detail}"
+                        )
                     self._model = ort.InferenceSession(str(peer), providers=providers)
             else:
                 self._model = ort.InferenceSession(str(peer), providers=providers)

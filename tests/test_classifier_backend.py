@@ -590,3 +590,84 @@ def test_backend_tiny_monochrome_preprocess_matches_training_path(
 
     assert np.allclose(processed, expected, atol=1e-6)
     backend.close()
+
+
+def test_backend_falls_back_to_native_when_tensorrt_engine_build_fails(
+    tiny_flat_headtail, monkeypatch, caplog
+):
+    """A TensorRT engine-build failure must degrade to the native model, loudly.
+
+    Before this fix any non-allocation TRT error (e.g. "TensorRT EP failed to
+    create engine from network") escaped _ensure_loaded and aborted the whole
+    tracking run before frame 0.
+    """
+    import logging
+
+    import hydra_suite.core.individual.classification.backend as backend_module
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+
+    observed: dict[str, object] = {}
+
+    def _fake_load(path: str, device: str):
+        observed["device"] = device
+        return object()
+
+    def _trt_build_fails(self):
+        raise RuntimeError(
+            "[ONNXRuntimeError] : 1 : FAIL : TensorRT EP failed to create engine "
+            "from network for fused node: TensorrtExecutionProvider_TRTKernel"
+        )
+
+    monkeypatch.setattr(
+        backend_module,
+        "_available_onnx_provider_names",
+        lambda: {"TensorrtExecutionProvider", "CUDAExecutionProvider"},
+    )
+    monkeypatch.setattr(
+        backend_module, "_native_accelerator_available", lambda resolved: True
+    )
+    monkeypatch.setattr(backend_module._TinyLoader, "load", staticmethod(_fake_load))
+    monkeypatch.setattr(ClassifierBackend, "_load_onnx", _trt_build_fails)
+    monkeypatch.setattr(
+        ClassifierBackend, "_warmup_native_cuda_model", lambda self: None
+    )
+
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("tensorrt", "cuda", False)
+    )
+    with caplog.at_level(logging.WARNING):
+        backend._ensure_loaded()
+
+    assert observed["device"] == "cuda"
+    assert backend._active_execution_backend == "native"
+    assert any(
+        "TensorRT" in r.getMessage() and "native" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_backend_tensorrt_build_failure_still_raises_without_native_accelerator(
+    tiny_flat_headtail, monkeypatch
+):
+    import hydra_suite.core.individual.classification.backend as backend_module
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.errors import ClassifierRuntimeError
+
+    def _trt_build_fails(self):
+        raise RuntimeError("TensorRT EP failed to create engine from network")
+
+    monkeypatch.setattr(
+        backend_module,
+        "_available_onnx_provider_names",
+        lambda: {"TensorrtExecutionProvider"},
+    )
+    monkeypatch.setattr(
+        backend_module, "_native_accelerator_available", lambda resolved: False
+    )
+    monkeypatch.setattr(ClassifierBackend, "_load_onnx", _trt_build_fails)
+
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("tensorrt", "cuda", False)
+    )
+    with pytest.raises(ClassifierRuntimeError, match="TensorRT EP failed"):
+        backend._ensure_loaded()

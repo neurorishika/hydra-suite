@@ -7,6 +7,7 @@ All functions are pure Python / PyTorch — no Qt dependency.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -493,6 +494,39 @@ def load_torchvision_classifier(
     return model, ckpt
 
 
+# Bump when the exported graph changes so stale ``.onnx`` peers beside existing
+# checkpoints get rebuilt. 2: shared-trunk heads exported as one fused MLP.
+TORCHVISION_ONNX_EXPORT_VERSION = 2
+_ONNX_EXPORT_VERSION_KEY = "hydra_torchvision_export_version"
+
+
+def onnx_export_version(onnx_path: str | Path) -> int | None:
+    """Return the exporter version stamped in *onnx_path*, or None."""
+    import onnx
+
+    model = onnx.load(str(onnx_path), load_external_data=False)
+    for prop in model.metadata_props:
+        if prop.key == _ONNX_EXPORT_VERSION_KEY:
+            try:
+                return int(prop.value)
+            except ValueError:
+                return None
+    return None
+
+
+def _stamp_onnx_export_version(onnx_path: Path) -> None:
+    import onnx
+
+    model = onnx.load(str(onnx_path))
+    for prop in list(model.metadata_props):
+        if prop.key == _ONNX_EXPORT_VERSION_KEY:
+            model.metadata_props.remove(prop)
+    entry = model.metadata_props.add()
+    entry.key = _ONNX_EXPORT_VERSION_KEY
+    entry.value = str(TORCHVISION_ONNX_EXPORT_VERSION)
+    onnx.save(model, str(onnx_path))
+
+
 def export_torchvision_to_onnx(
     model: nn.Module, ckpt: dict[str, Any], onnx_path: str | Path
 ) -> Path:
@@ -506,10 +540,20 @@ def export_torchvision_to_onnx(
     Returns:
         Path to the exported ONNX file.
     """
+    from hydra_suite.training.multihead_torchvision_model import (
+        MultiHeadTorchvisionClassifier,
+    )
+
     onnx_path = Path(onnx_path)
     h, w = ckpt.get("input_size", (224, 224))
     dummy = torch.zeros(1, 3, h, w)
     model.eval()
+    if isinstance(model, MultiHeadTorchvisionClassifier):
+        model = model.fused_for_export().eval()
+    # Export beside the target and swap in atomically: concurrent loaders
+    # must never see a half-written peer.
+    final_path = onnx_path
+    onnx_path = final_path.with_name(f".{final_path.name}.{os.getpid()}.tmp")
     export_kwargs = {
         "opset_version": 17,
         "input_names": ["input"],
@@ -531,7 +575,9 @@ def export_torchvision_to_onnx(
             str(onnx_path),
             **export_kwargs,
         )
-    return onnx_path
+    _stamp_onnx_export_version(onnx_path)
+    os.replace(onnx_path, final_path)
+    return final_path
 
 
 def export_torchvision_to_coreml(
