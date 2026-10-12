@@ -1507,8 +1507,6 @@ def build_engine_params(
         "W_ORIENTATION": float(_cfg_get(cfg, "weight_orientation", default=0.3)),
         "W_AREA": float(_cfg_get(cfg, "weight_area", default=0.2)),
         "W_ASPECT": float(_cfg_get(cfg, "weight_aspect_ratio", default=0.1)),
-        "W_POSE_DIRECTION": float(_cfg_get(cfg, "weight_pose_direction", default=0.5)),
-        "W_POSE_LENGTH": float(_cfg_get(cfg, "weight_pose_length", default=0.0)),
         "POSE_VALID_ORIENTATION_SCALE": float(
             _cfg_get(cfg, "pose_valid_orientation_scale", default=0.15)
         ),
