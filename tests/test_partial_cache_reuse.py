@@ -330,3 +330,67 @@ def test_reuse_run_says_limit_hits_were_reported_at_build_time(tmp_path, video, 
     hits = [m for m in msgs if "reused from the cache" in m]
     assert len(hits) == 1
     assert "detection-limit hits were reported when the cache was built" in hits[0]
+
+
+def _window_pass(cache_dir, cfg, video, *, start, end, reuse):
+    """Batch pass over ``[start, end]``; returns detector call count."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch(_P + "run_obb", side_effect=_fake_run_obb) as obb,
+        patch(_P + "run_headtail_batch", side_effect=_fake_ht),
+        patch(_P + "run_cnn_batch", side_effect=_fake_cnn),
+        patch(_P + "run_pose_batch", side_effect=_fake_pose),
+        patch(_P + "run_apriltag", side_effect=_fake_apriltag),
+    ):
+        ml.return_value = _models()
+        runner = InferenceRunner(cfg, cache_dir=cache_dir, video_path=video)
+        try:
+            runner.run_batch_pass(
+                video, start_frame=start, end_frame=end, reuse_detection_cache=reuse
+            )
+        finally:
+            runner.close()
+    return obb.call_count
+
+
+def _revision_dirs(cache_dir):
+    return sorted(p for p in (cache_dir / ".cache-generations").glob("*/*"))
+
+
+@pytest.mark.parametrize("reuse", [True, False])
+def test_window_run_after_filter_change_fails_before_any_compute(
+    tmp_path, video, reuse
+):
+    """A window strictly inside the cached range, after a filter change,
+    would rebuild the stale per-animal members over the window only while
+    detection keeps its full coverage -- a generation that can never be
+    promoted. It must refuse up front: no detector run, no staged revision,
+    the active cache untouched, and a message naming the way out."""
+    from hydra_suite.core.inference.runner import MixedCacheCoverageError
+
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    manifest_before = (built / "cache_set.json").read_bytes()
+    revisions_before = _revision_dirs(built)
+
+    with pytest.raises(MixedCacheCoverageError) as excinfo:
+        _window_pass(built, _stricter_size(), video, start=2, end=4, reuse=reuse)
+
+    message = str(excinfo.value)
+    assert "2-4" in message and "full frame range" in message
+    assert "headtail" in message
+    assert _revision_dirs(built) == revisions_before
+    assert (built / "cache_set.json").read_bytes() == manifest_before
+
+
+def test_window_run_with_valid_caches_still_resumes(tmp_path, video):
+    """Same window, unchanged filters: every member stays coextensive, so
+    the guard must not fire."""
+    built = tmp_path / "built"
+    _build(built, 10, video)
+
+    _window_pass(built, _cfg(10), video, start=2, end=4, reuse=False)
+
+    _replay_cfg(built, _cfg(10), video)
