@@ -19,12 +19,14 @@ from hydra_suite.core.canonicalization.crop import extract_canonical_crop
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     ClippingStats,
+    _even,
     canonical_affine,
 )
 from hydra_suite.core.inference.cache import open_detection_cache_reader
 from hydra_suite.core.inference.cache.store import DetectionCacheHandle
 
 from ....utils.heading_flips import _fix_heading_flips
+from ....utils.pose_visualization import draw_pose_skeleton
 from ....utils.video_encoder import VideoEncoder
 from ..geometry import ellipse_axes_from_area, ellipse_to_obb_corners
 from .naming import build_detection_image_filename, build_interpolated_image_filename
@@ -72,6 +74,26 @@ class FrameBundle:
 
     tasks: list[FrameTask] = field(default_factory=list)
     polygons: list[np.ndarray] = field(default_factory=list)
+
+
+@dataclass
+class TrackPoseOverlay:
+    """Pose keypoints to draw on the per-track videos (never on stills).
+
+    ``keypoints`` is ``(N, K, 3)`` of ``(x, y, conf)`` in SOURCE-frame pixels,
+    one row per ``(FrameID, TrajectoryID)`` listed in ``row_index``;
+    ``row_colors`` holds the BGR colour for each row. Sizes are in output
+    pixels (already multiplied by the render scale).
+    """
+
+    keypoints: np.ndarray
+    row_index: dict[tuple[int, int], int]
+    row_colors: list[tuple[int, int, int]]
+    edges: list[tuple[int, int]]
+    min_conf: float
+    point_radius: int
+    point_thickness: int
+    line_thickness: int
 
 
 @dataclass
@@ -180,6 +202,10 @@ class OrientedTrackVideoExporter:
         image_format: str = "png",
         output_subdir: str = "oriented_videos",
         codec: str = "mp4v",
+        render_scale: float = 1.0,
+        track_video_names: dict[int, str] | None = None,
+        pose_overlay: TrackPoseOverlay | None = None,
+        video_quality: str = "high",
     ) -> None:
         self.dataset_dir = Path(dataset_dir).expanduser().resolve()
         self.final_csv_path = Path(final_csv_path).expanduser().resolve()
@@ -258,6 +284,34 @@ class OrientedTrackVideoExporter:
         image_format = str(image_format or "png").strip().lower()
         self.image_format = "jpg" if image_format in {"jpg", "jpeg"} else "png"
         self.codec = str(codec or "mp4v")
+        # Videos only: 1.0 renders at the source's own pixel scale (the
+        # canonical transform is rotation + translation). Stills keep the
+        # project canvas -- they are training data, not a viewing format.
+        try:
+            render_scale = float(render_scale)
+        except (TypeError, ValueError):
+            render_scale = 1.0
+        if not math.isfinite(render_scale) or render_scale <= 0.0:
+            render_scale = 1.0
+        self.render_scale = render_scale
+        self._video_wh = (
+            _even(self._geometry.canvas_w * render_scale),
+            _even(self._geometry.canvas_h * render_scale),
+        )
+        self._video_geometry = (
+            self._geometry
+            if self._video_wh == self._geometry.canvas_wh
+            else CanonicalGeometry(
+                canvas_wh=self._video_wh,
+                margin=self._geometry.margin,
+                aspect_ratio=self._geometry.aspect_ratio,
+            )
+        )
+        self.track_video_names = {
+            int(k): str(v) for k, v in (track_video_names or {}).items() if v
+        }
+        self.pose_overlay = pose_overlay
+        self.video_quality = str(video_quality or "high")
         self._last_missing_breakdown = self._empty_missing_breakdown()
 
     @staticmethod
@@ -1070,20 +1124,27 @@ class OrientedTrackVideoExporter:
                 continue
             rendered_videos = None
             if self.export_videos:
-                rendered_videos = self._render_task(
+                video_size = self._video_canvas_size(canvas_size)
+                video_frame = self._render_task(
                     frame,
                     task,
                     bundle.polygons,
-                    canvas_size,
+                    video_size,
                     canvas=_canvases.get(task.trajectory_id),
                     suppress_foreign_obb=self.suppress_foreign_obb_videos,
+                    video=True,
                 )
-                if rendered_videos is not None:
+                if video_frame is not None:
+                    if not self._video_differs_from_still():
+                        rendered_videos = video_frame
+                    if self.pose_overlay is not None:
+                        video_frame = video_frame.copy()
+                        self._draw_pose(video_frame, task)
                     writer = writers.get(task.trajectory_id)
                     if writer is None:
-                        writer = self._open_writer(task.trajectory_id, canvas_size)
+                        writer = self._open_writer(task.trajectory_id, video_size)
                         writers[task.trajectory_id] = writer
-                    writer.write(rendered_videos)
+                    writer.write(video_frame)
                     frames_written_by_track[task.trajectory_id] += 1
 
             if self._should_export_image(task.frame_id):
@@ -1119,7 +1180,7 @@ class OrientedTrackVideoExporter:
                 exported_frames += count
             elif self.export_videos:
                 skipped_tracks += 1
-                output_path = self.output_dir / f"trajectory_{int(traj_id):04d}.mp4"
+                output_path = self._video_output_path(traj_id)
                 try:
                     output_path.unlink(missing_ok=True)
                 except Exception:
@@ -1153,7 +1214,8 @@ class OrientedTrackVideoExporter:
 
         # Pre-allocate one reusable canvas per track to avoid per-frame np.full()
         _canvases: dict[int, np.ndarray] = {}
-        for traj_id, (cw, ch) in track_sizes.items():
+        for traj_id, size in track_sizes.items():
+            cw, ch = self._video_canvas_size(size)
             _canvases[traj_id] = np.full(
                 (ch, cw, 3), self.background_color, dtype=np.uint8
             )
@@ -1255,17 +1317,75 @@ class OrientedTrackVideoExporter:
             )
             return False
 
+    def _video_output_path(self, trajectory_id: int) -> Path:
+        if self.output_dir is None:
+            raise RuntimeError("Video output directory is not configured for export.")
+        stem = self.track_video_names.get(
+            int(trajectory_id), f"trajectory_{int(trajectory_id):04d}"
+        )
+        return self.output_dir / f"{stem}.mp4"
+
     def _open_writer(
         self, trajectory_id: int, canvas_size: tuple[int, int]
     ) -> VideoEncoder:
-        if self.output_dir is None:
-            raise RuntimeError("Video output directory is not configured for export.")
-        output_path = self.output_dir / f"trajectory_{int(trajectory_id):04d}.mp4"
         return VideoEncoder(
-            output_path,
+            self._video_output_path(trajectory_id),
             fps=self.fps,
             width=canvas_size[0],
             height=canvas_size[1],
+            quality=self.video_quality,
+        )
+
+    def _video_differs_from_still(self) -> bool:
+        """True when a video frame cannot double as the still for that task."""
+        return self._video_geometry is not self._geometry
+
+    def _video_canvas_size(self, canvas_size: tuple[int, int]) -> tuple[int, int]:
+        if not self._video_differs_from_still():
+            return canvas_size
+        return (
+            _even(canvas_size[0] * self.render_scale),
+            _even(canvas_size[1] * self.render_scale),
+        )
+
+    def _video_affine(self, affine: np.ndarray) -> np.ndarray:
+        """Compose the render scale onto a canonical (frame -> canvas) affine.
+
+        One uniform factor keeps the animal's proportions; the half-pixel the
+        even-sized video canvas gains or loses is absorbed by re-centring.
+        """
+        if not self._video_differs_from_still():
+            return affine
+        s = self.render_scale
+        dx = (self._video_geometry.canvas_w - self._geometry.canvas_w * s) / 2.0
+        dy = (self._video_geometry.canvas_h - self._geometry.canvas_h * s) / 2.0
+        scaled = np.asarray(affine, dtype=np.float64) * s
+        scaled[0, 2] += dx
+        scaled[1, 2] += dy
+        return scaled
+
+    def _draw_pose(self, image: np.ndarray, task: FrameTask) -> None:
+        overlay = self.pose_overlay
+        if overlay is None:
+            return
+        row = overlay.row_index.get((int(task.frame_id), int(task.trajectory_id)))
+        if row is None:
+            return
+        kpts = np.asarray(overlay.keypoints[row], dtype=np.float64)
+        if not np.any(np.isfinite(kpts[:, 2])):
+            return
+        affine = self._video_affine(task.affine)
+        mapped = kpts.copy()
+        mapped[:, :2] = kpts[:, :2] @ affine[:, :2].T + affine[:, 2]
+        draw_pose_skeleton(
+            image,
+            mapped,
+            overlay.edges,
+            overlay.row_colors[row],
+            min_conf=overlay.min_conf,
+            line_thickness=overlay.line_thickness,
+            point_radius=overlay.point_radius,
+            point_thickness=overlay.point_thickness,
         )
 
     def _render_task(
@@ -1276,6 +1396,7 @@ class OrientedTrackVideoExporter:
         canvas_size: tuple[int, int],
         canvas: Optional[np.ndarray] = None,
         suppress_foreign_obb: Optional[bool] = None,
+        video: bool = False,
     ) -> Optional[np.ndarray]:
         # THE shared canonical crop kernel -- the same single call every other
         # crop consumer (head-tail, CNN, pose, the crop-dataset exporter) goes
@@ -1304,17 +1425,18 @@ class OrientedTrackVideoExporter:
                 if idx != task.polygon_index
             ]
 
+        geometry = self._video_geometry if video else self._geometry
         masked = extract_canonical_crop(
             frame,
-            task.affine,
-            geometry=self._geometry,
+            self._video_affine(task.affine) if video else task.affine,
+            geometry=geometry,
             bg_color=self.background_color,
             foreign_corners=foreign_corners,
             own_corners=task.corners,
         )
         if masked is None or masked.size == 0:
             return None
-        if masked.shape[0] != task.out_h or masked.shape[1] != task.out_w:
+        if masked.shape[0] != geometry.canvas_h or masked.shape[1] != geometry.canvas_w:
             # Every task is built against self._geometry, so this cannot
             # happen; bail rather than silently render a mismatched frame.
             logger.error(

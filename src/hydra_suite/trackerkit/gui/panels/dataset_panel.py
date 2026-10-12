@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -534,6 +535,106 @@ class DatasetPanel(QWidget):
         )
         vl_oriented.addWidget(self.chk_generate_individual_track_videos)
 
+        self.oriented_video_output = QGroupBox("Video Output")
+        f_oriented_output = QFormLayout(self.oriented_video_output)
+        f_oriented_output.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
+        self.spin_oriented_video_scale = QDoubleSpinBox()
+        self.spin_oriented_video_scale.setRange(0.25, 8.0)
+        self.spin_oriented_video_scale.setSingleStep(0.25)
+        self.spin_oriented_video_scale.setDecimals(2)
+        self.spin_oriented_video_scale.setValue(1.0)
+        self.spin_oriented_video_scale.setSuffix("x")
+        self.spin_oriented_video_scale.setToolTip(
+            "Output size relative to the source video's own pixels.\n"
+            "1.0 keeps every source pixel (best quality the raw data allows);\n"
+            "> 1 enlarges for viewing, < 1 makes smaller files."
+        )
+        f_oriented_output.addRow("Rescale factor", self.spin_oriented_video_scale)
+
+        self.chk_oriented_video_show_pose = QCheckBox("Show Pose Keypoints/Skeleton")
+        self.chk_oriented_video_show_pose.setChecked(False)
+        self.chk_oriented_video_show_pose.setToolTip(
+            "Draw pose keypoints and skeleton edges onto the oriented videos\n"
+            "(saved crop images are never annotated)."
+        )
+        self.chk_oriented_video_show_pose.toggled.connect(
+            self._sync_oriented_video_pose_controls
+        )
+        f_oriented_output.addRow("", self.chk_oriented_video_show_pose)
+
+        self.combo_oriented_video_pose_color_mode = QComboBox()
+        self.combo_oriented_video_pose_color_mode.addItems(
+            ["Track Color", "Fixed Color"]
+        )
+        self.combo_oriented_video_pose_color_mode.setToolTip(
+            "Use each track's color or one fixed color for the pose overlay."
+        )
+        self.combo_oriented_video_pose_color_mode.currentIndexChanged.connect(
+            self._sync_oriented_video_pose_controls
+        )
+        self.lbl_oriented_video_pose_color_mode = QLabel("Pose color mode")
+        f_oriented_output.addRow(
+            self.lbl_oriented_video_pose_color_mode,
+            self.combo_oriented_video_pose_color_mode,
+        )
+
+        self._oriented_video_pose_color = (255, 255, 255)
+        pose_color_row = QHBoxLayout()
+        self.btn_oriented_video_pose_color = QPushButton()
+        self.btn_oriented_video_pose_color.setMaximumWidth(60)
+        self.btn_oriented_video_pose_color.setMinimumHeight(28)
+        self.btn_oriented_video_pose_color.clicked.connect(
+            self._select_oriented_video_pose_color
+        )
+        self.lbl_oriented_video_pose_color = QLabel("")
+        pose_color_row.addWidget(self.btn_oriented_video_pose_color)
+        pose_color_row.addWidget(self.lbl_oriented_video_pose_color)
+        self.lbl_oriented_video_pose_color_label = QLabel("Fixed pose color (BGR)")
+        f_oriented_output.addRow(
+            self.lbl_oriented_video_pose_color_label, pose_color_row
+        )
+        self._update_oriented_video_pose_color_button()
+
+        self.spin_oriented_video_pose_point_radius = QSpinBox()
+        self.spin_oriented_video_pose_point_radius.setRange(1, 20)
+        self.spin_oriented_video_pose_point_radius.setValue(3)
+        self.spin_oriented_video_pose_point_radius.setToolTip(
+            "Keypoint circle radius in source pixels (scaled with the video)."
+        )
+        self.lbl_oriented_video_pose_point_radius = QLabel("Pose keypoint radius (px)")
+        f_oriented_output.addRow(
+            self.lbl_oriented_video_pose_point_radius,
+            self.spin_oriented_video_pose_point_radius,
+        )
+
+        self.spin_oriented_video_pose_point_thickness = QSpinBox()
+        self.spin_oriented_video_pose_point_thickness.setRange(-1, 10)
+        self.spin_oriented_video_pose_point_thickness.setValue(-1)
+        self.spin_oriented_video_pose_point_thickness.setToolTip(
+            "Keypoint circle thickness (-1 fills circles)."
+        )
+        self.lbl_oriented_video_pose_point_thickness = QLabel("Pose keypoint thickness")
+        f_oriented_output.addRow(
+            self.lbl_oriented_video_pose_point_thickness,
+            self.spin_oriented_video_pose_point_thickness,
+        )
+
+        self.spin_oriented_video_pose_line_thickness = QSpinBox()
+        self.spin_oriented_video_pose_line_thickness.setRange(1, 12)
+        self.spin_oriented_video_pose_line_thickness.setValue(2)
+        self.spin_oriented_video_pose_line_thickness.setToolTip(
+            "Skeleton edge line thickness in source pixels (scaled with the video)."
+        )
+        self.lbl_oriented_video_pose_line_thickness = QLabel(
+            "Pose skeleton thickness (px)"
+        )
+        f_oriented_output.addRow(
+            self.lbl_oriented_video_pose_line_thickness,
+            self.spin_oriented_video_pose_line_thickness,
+        )
+        vl_oriented.addWidget(self.oriented_video_output)
+
         self.oriented_advanced = CollapsibleGroupBox("Advanced options")
         self.oriented_advanced.setHelpToolTip(
             "Direction fixing and affine stabilization are off by default; the "
@@ -631,6 +732,7 @@ class DatasetPanel(QWidget):
         self.chk_suppress_foreign_obb_individual_dataset.setVisible(False)
         self.oriented_video_options.setVisible(False)
         self.oriented_advanced.setVisible(False)
+        self.oriented_video_output.setVisible(False)
         self._sync_oriented_video_postprocess_controls()
 
         scroll.setWidget(content)
@@ -776,6 +878,7 @@ class DatasetPanel(QWidget):
         """Show or hide oriented-video post-processing controls."""
         self.oriented_video_options.setVisible(bool(enabled))
         self.oriented_advanced.setVisible(bool(enabled))
+        self.oriented_video_output.setVisible(bool(enabled))
         self._sync_oriented_video_postprocess_controls()
 
     def _on_export_level_toggled(self, _checked: bool) -> None:
@@ -800,3 +903,59 @@ class DatasetPanel(QWidget):
         self.spin_oriented_video_stabilization_window.setEnabled(
             enabled and self.chk_enable_oriented_video_affine_stabilization.isChecked()
         )
+        self._sync_oriented_video_pose_controls()
+
+    def _sync_oriented_video_pose_controls(self, *_args):
+        """Show pose-overlay controls only when pose extraction is enabled."""
+        is_pose_enabled = getattr(self._main_window, "_is_pose_inference_enabled", None)
+        pose_available = bool(is_pose_enabled()) if callable(is_pose_enabled) else False
+        self.chk_oriented_video_show_pose.setVisible(pose_available)
+        show_pose = bool(
+            pose_available and self.chk_oriented_video_show_pose.isChecked()
+        )
+        for widget in (
+            self.lbl_oriented_video_pose_color_mode,
+            self.combo_oriented_video_pose_color_mode,
+            self.lbl_oriented_video_pose_point_radius,
+            self.spin_oriented_video_pose_point_radius,
+            self.lbl_oriented_video_pose_point_thickness,
+            self.spin_oriented_video_pose_point_thickness,
+            self.lbl_oriented_video_pose_line_thickness,
+            self.spin_oriented_video_pose_line_thickness,
+        ):
+            widget.setVisible(show_pose)
+        show_fixed_color = bool(
+            show_pose and self.combo_oriented_video_pose_color_mode.currentIndex() == 1
+        )
+        for widget in (
+            self.lbl_oriented_video_pose_color_label,
+            self.btn_oriented_video_pose_color,
+            self.lbl_oriented_video_pose_color,
+        ):
+            widget.setVisible(show_fixed_color)
+
+    def _select_oriented_video_pose_color(self):
+        """Open color picker for the oriented-video fixed pose color (BGR)."""
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        b, g, r = self._oriented_video_pose_color
+        color = QColorDialog.getColor(
+            QColor(r, g, b), self, "Choose Oriented Video Pose Color"
+        )
+        if color.isValid():
+            self._oriented_video_pose_color = (
+                color.blue(),
+                color.green(),
+                color.red(),
+            )
+            self._update_oriented_video_pose_color_button()
+
+    def _update_oriented_video_pose_color_button(self):
+        """Update the oriented-video fixed pose-color swatch and label."""
+        b, g, r = self._oriented_video_pose_color
+        self.btn_oriented_video_pose_color.setStyleSheet(
+            f"background-color: rgb({r}, {g}, {b}); "
+            f"border: 1px solid #333; border-radius: 2px;"
+        )
+        self.lbl_oriented_video_pose_color.setText(f"{self._oriented_video_pose_color}")

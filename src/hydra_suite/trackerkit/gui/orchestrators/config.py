@@ -1510,6 +1510,41 @@ class ConfigOrchestrator:
                 default=5,
             )
         )
+        self._panels.dataset.spin_oriented_video_scale.setValue(
+            float(get_cfg("final_media_export_video_scale", default=1.0))
+        )
+        self._panels.dataset.chk_oriented_video_show_pose.setChecked(
+            bool(get_cfg("final_media_export_show_pose", default=False))
+        )
+        self._panels.dataset.combo_oriented_video_pose_color_mode.setCurrentIndex(
+            0
+            if str(
+                get_cfg("final_media_export_pose_color_mode", default="track")
+            ).lower()
+            == "track"
+            else 1
+        )
+        self._panels.dataset.spin_oriented_video_pose_point_radius.setValue(
+            int(get_cfg("final_media_export_pose_point_radius", default=3))
+        )
+        self._panels.dataset.spin_oriented_video_pose_point_thickness.setValue(
+            int(get_cfg("final_media_export_pose_point_thickness", default=-1))
+        )
+        self._panels.dataset.spin_oriented_video_pose_line_thickness.setValue(
+            int(get_cfg("final_media_export_pose_line_thickness", default=2))
+        )
+        _oriented_pose_color = get_cfg(
+            "final_media_export_pose_color", default=[255, 255, 255]
+        )
+        if (
+            isinstance(_oriented_pose_color, (list, tuple))
+            and len(_oriented_pose_color) == 3
+        ):
+            self._panels.dataset._oriented_video_pose_color = tuple(
+                int(max(0, min(255, float(v)))) for v in _oriented_pose_color
+            )
+            self._panels.dataset._update_oriented_video_pose_color_button()
+        self._panels.dataset._sync_oriented_video_pose_controls()
         format_text = get_cfg("individual_output_format", default="png").upper()
         format_idx = self._panels.dataset.combo_individual_format.findText(format_text)
         if format_idx >= 0:
@@ -2182,6 +2217,24 @@ class ConfigOrchestrator:
                     self._panels.dataset.chk_enable_oriented_video_affine_stabilization.isChecked()
                 ),
                 "final_media_export_stabilization_window": self._panels.dataset.spin_oriented_video_stabilization_window.value(),
+                "final_media_export_video_scale": float(
+                    self._panels.dataset.spin_oriented_video_scale.value()
+                ),
+                "final_media_export_show_pose": bool(
+                    self._panels.dataset.chk_oriented_video_show_pose.isChecked()
+                ),
+                "final_media_export_pose_color_mode": (
+                    "track"
+                    if self._panels.dataset.combo_oriented_video_pose_color_mode.currentIndex()
+                    == 0
+                    else "fixed"
+                ),
+                "final_media_export_pose_color": [
+                    int(c) for c in self._panels.dataset._oriented_video_pose_color
+                ],
+                "final_media_export_pose_point_radius": self._panels.dataset.spin_oriented_video_pose_point_radius.value(),
+                "final_media_export_pose_point_thickness": self._panels.dataset.spin_oriented_video_pose_point_thickness.value(),
+                "final_media_export_pose_line_thickness": self._panels.dataset.spin_oriented_video_pose_line_thickness.value(),
                 "individual_output_format": self._panels.dataset.combo_individual_format.currentText().lower(),
             }
         )
