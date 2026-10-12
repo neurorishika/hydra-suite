@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.pose_flip import unpaired_side_keypoints
 from hydra_suite.paths import get_training_runs_dir, get_vitpose_cache_dir
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
@@ -1436,6 +1437,9 @@ class TrainingRunnerDialog(QDialog):
         ):
             widget.setValue(_setting_float(settings, key, widget.value()))
         self.vitpose_recipe.apply_settings(settings.get("vitpose_recipe") or {})
+        checkpoint = str(settings.get("vitpose_checkpoint") or "").strip()
+        if checkpoint and checkpoint != "Browse…":
+            self.vitpose_checkpoint_combo.setCurrentText(checkpoint)
         variant = str(settings.get("vitpose_variant") or "")
         if self.vitpose_variant_combo.findText(variant) >= 0:
             self.vitpose_variant_combo.setCurrentText(variant)
@@ -1720,6 +1724,7 @@ class TrainingRunnerDialog(QDialog):
                 "vitpose_fliplr": float(self.vitpose_fliplr_spin.value()),
                 "vitpose_flipud": float(self.vitpose_flipud_spin.value()),
                 "vitpose_variant": self.vitpose_variant_combo.currentText(),
+                "vitpose_checkpoint": self.vitpose_checkpoint_combo.currentText(),
                 "vitpose_recipe": self.vitpose_recipe.settings(),
             },
         )
@@ -2028,6 +2033,19 @@ class TrainingRunnerDialog(QDialog):
             allow_unpaired=self.cb_flip_unpaired.isChecked(),
         )
 
+    def _vitpose_recipe_params(self, flips) -> dict:
+        """Recipe values, with the flip test only where a mirror is meaningful:
+        left-right flips trained, and every side keypoint paired (or none)."""
+        params = self.vitpose_recipe.params()
+        side_like = unpaired_side_keypoints(self.project.keypoint_names, flips.pairs)
+        if params.get("flip_test") and (flips.fliplr <= 0 or side_like):
+            params["flip_test"] = False
+            self._append_log(
+                "[flip test] off: needs left-right flips with every left/right "
+                "keypoint paired."
+            )
+        return params
+
     def _update_flip_notes(self, *_args) -> None:
         self.lbl_flip_note.setText(self._flip_plan(yolo=True).note)
         self.lbl_vitpose_flip_note.setText(self._flip_plan(yolo=False).note)
@@ -2035,7 +2053,12 @@ class TrainingRunnerDialog(QDialog):
     def _start_vitpose_training(self):
         labeled_count = len(
             list_labeled_indices(self.image_paths, self.project.labels_dir)
-        )
+        ) + len(self._aux_items)
+        for aux in self._aux_datasets:
+            if "images" in aux and "labels_dir" in aux:
+                labeled_count += len(
+                    list_labeled_indices(aux["images"], aux["labels_dir"])
+                )
         if labeled_count < 2:
             QMessageBox.warning(
                 self,
@@ -2100,7 +2123,7 @@ class TrainingRunnerDialog(QDialog):
             flip_pairs=flips.pairs,
             fliplr=flips.fliplr,
             flipud=flips.flipud,
-            recipe=self.vitpose_recipe.params(),
+            recipe=self._vitpose_recipe_params(flips),
             extra_datasets=[
                 (d["images"], d["labels_dir"])
                 for d in self._aux_datasets
@@ -2149,6 +2172,7 @@ class TrainingRunnerDialog(QDialog):
     def _on_finished(self, info: dict):
         # The weights below belong to the run that just finished.
         self._trained_backend = getattr(self, "_run_backend", "")
+        self.progress.setValue(100)  # also after an early stop
         self._append_log("Training complete.")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)

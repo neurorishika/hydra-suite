@@ -196,6 +196,14 @@ def validate_run_config(d: dict) -> RunConfig:
                 raise ValueError(f"{key} must be a number in [0, 1]")
             if not (0.0 <= float(value) <= 1.0):
                 raise ValueError(f"{key} must be in [0, 1]")
+    for key in ("amp", "ema", "flip_test", "ignore_occluded"):
+        if key in d and not isinstance(d[key], bool):
+            raise ValueError(f"{key} must be true or false")
+    for key in ("num_workers", "patience"):
+        if key in d and (isinstance(d[key], bool) or not isinstance(d[key], int)):
+            raise ValueError(f"{key} must be a whole number")
+    if "ema_decay" in d and not float(d["ema_decay"]) < 1.0:
+        raise ValueError("ema_decay must be below 1")
     if "rotation" in d and not (0.0 <= float(d["rotation"]) <= 180.0):
         raise ValueError("rotation must be in [0, 180] degrees")
     for key in ("warmup_epochs", "patience", "num_workers"):

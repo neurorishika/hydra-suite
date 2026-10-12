@@ -40,12 +40,42 @@ ViTPose is a third selectable pose backend alongside YOLO-pose and SLEAP, availa
   `torch/ap10k/vitpose-b-ap10k.pth` from the `JunkyByte/easy_ViTPose` Hugging Face
   mirror on first use (the upstream release hosts it on OneDrive only), verifies it
   against a pinned SHA-256, and caches it locally.
+- **Auto download: AP-10K L and H.** `vitpose-l-ap10k` (1.2 GB) and
+  `vitpose-h-ap10k` (2.4 GB) come from the same mirror, also hash-pinned. Choosing a
+  catalog checkpoint sets the model size (B/L/H) to match.
 - **Auto download: COCO-B.** The `vitpose-b-coco` entry downloads the human
   COCO-17 checkpoint `vitpose-b.pth` from `nielsr/vitpose-original-checkpoints`.
 - **Browse:** point at any local `.pth` checkpoint, for example an APT-36K
   checkpoint or one you trained yourself with the training CLI below.
 
 ### Training
+
+With ViTPose selected, the Training Runner shows the full recipe. *Recommended
+settings* restores these defaults (an mmpose ViTPose / RTMPose-style fine-tune):
+
+| Group | Setting | Default | What it does |
+|---|---|---|---|
+| Augmentation | rotation / rotation prob | 40° / 0.6 | Random rotation, N(0, r/2) clipped to ±r |
+| | brightness, contrast, saturation | 0.3 each | Colour jitter (± fraction) |
+| | hue | 0.02 | Hue shift (fraction of the colour circle) |
+| | blur prob, noise prob | 0.1, 0.1 | Gaussian/median blur; sensor noise |
+| | occlusion prob | 0.3 | One random rectangle over the crop, so hidden keypoints are learnt from the rest of the animal |
+| | scale / aspect jitter, flips | 0.2 / 0.2, 0.5 / 0.5 | As for YOLO (flips need the Skeleton Editor's left/right pairs) |
+| Optimisation | learning rate, weight decay | 5e-4, 0.1 | AdamW |
+| | layer decay, drop path | Auto | The variant's ViTPose values |
+| | warmup epochs | 3 | Linear warmup, then cosine decay (per batch) |
+| | early stopping patience | 40 | Stop after 40 epochs without a better validation score |
+| | loader workers | min(8, CPUs) | Parallel data loading |
+| | EMA, mixed precision | on | Averaged weights are validated and saved; bf16 on NVIDIA GPUs |
+| Validation | fraction, split by, seed | 0.2, source frame, 0 | Whole source frames are held out, so validation crops are not near-copies of training crops |
+| | ignore occluded | off | Occluded keypoints get no loss |
+| | flip test | on | Validate on the crop and its mirror, averaged |
+
+Epochs, batch size and device are in the Config group (shared with YOLO), as are
+auxiliary datasets, which ViTPose now uses too. The loss plot follows the run,
+and the log reports PCK@0.05, PCK@0.1 and the mean normalised error (NME: pixel
+error / √animal box area) every epoch. `best.pt` is the epoch with the highest
+PCK@0.05 (lower NME breaks ties). The settings are kept between sessions.
 
 ViTPose can also be trained/fine-tuned outside the GUI via its standalone CLI:
 

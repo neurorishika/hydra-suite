@@ -12,8 +12,9 @@ import random
 import re
 from pathlib import PurePosixPath
 
-# <video>__<frame token>__<crop index>.<ext>
-_CROP = re.compile(r"^(?P<frame>(?P<video>.+?)__.+)__\d+$")
+# <video>__<frame token>__<crop index>.<ext>, optionally with the
+# _<sha8> suffix the dataset builders add to colliding names
+_CROP = re.compile(r"^(?P<frame>(?P<video>.+?)__.+)__\d+(?:_[0-9a-f]{8})?$")
 
 
 def group_key(file_name: str, split_by: str) -> str:
@@ -39,25 +40,32 @@ def split_ids(
 ) -> tuple[list[int], list[int]]:
     """``(train_ids, val_ids)`` with whole groups on one side.
 
-    Groups are shuffled with ``seed`` and taken into validation until about
-    ``val_fraction`` of the crops are there (at least one group, and never
-    all of them when there are two or more groups).
+    Groups are visited in a ``seed``-shuffled order and a group joins
+    validation when that brings the validation size closer to
+    ``val_fraction`` (never past half of the crops).  With fewer than two
+    groups the split falls back to single images.
     """
     groups: dict[str, list[int]] = {}
     for i in ids:
         groups.setdefault(group_key(file_names[i], split_by), []).append(i)
+    if len(groups) < 2:
+        groups = {str(i): [i] for i in ids}
     keys = sorted(groups)
     random.Random(seed).shuffle(keys)
-    target = max(1, int(round(len(ids) * val_fraction)))
+    n = len(ids)
+    target = max(1, int(round(n * val_fraction)))
+    cap = max(1, n // 2)
     val: list[int] = []
-    last: list[int] = []
     for k in keys:
-        if len(val) >= target:
-            break
-        last = groups[k]
-        val.extend(last)
-    if len(keys) > 1 and len(val) == len(ids):  # keep something to train on
-        val = val[: len(val) - len(last)]
+        size = len(groups[k])
+        if len(val) + size > cap:
+            continue
+        if abs(len(val) + size - target) < abs(len(val) - target):
+            val.extend(groups[k])
+    if not val:  # every group alone overshoots: take the smallest
+        val = list(min(groups.values(), key=len))
     val_set = set(val)
+    if len(val_set) == n:  # keep something to train on
+        val_set = set(val[: n // 2])
     train = [i for i in ids if i not in val_set]
     return train, [i for i in ids if i in val_set]

@@ -56,7 +56,9 @@ def _warmup_cosine(total_iters: int, warmup_iters: int):
 
 
 def _loader(ds, cfg: RunConfig, shuffle: bool, device) -> DataLoader:
-    workers = int(cfg.num_workers)
+    # Validation is small and unaugmented: load it in-process rather than
+    # keeping a second set of (each ~1 GB) spawned workers alive.
+    workers = int(cfg.num_workers) if shuffle else 0
     gen = torch.Generator()
     gen.manual_seed(cfg.seed)
     return DataLoader(
@@ -173,6 +175,7 @@ def train(cfg: RunConfig) -> dict:
         group.setdefault("initial_lr", group["lr"])
 
     start_epoch, best_pck, best_nme, best_epoch = 0, -1.0, float("inf"), 0
+    stale = 0
     resume_ckpt = None
     if cfg.resume_from:
         resume_ckpt = torch.load(cfg.resume_from, map_location="cpu", weights_only=True)
@@ -189,6 +192,16 @@ def train(cfg: RunConfig) -> dict:
         best_pck = float(resume_ckpt.get("pck", -1.0))
         best_nme = float(resume_ckpt.get("nme", float("inf")))
         best_epoch = int(resume_ckpt.get("best_epoch", resume_ckpt["epoch"]))
+        stale = int(resume_ckpt.get("stale", 0))
+        if "best_epoch" not in resume_ckpt:
+            # Older checkpoints store this epoch's PCK, not the best: take
+            # the best from the run's best.pt so it is not overwritten by a
+            # worse epoch.
+            best_file = Path(cfg.resume_from).with_name("best.pt")
+            if best_file.is_file():
+                best = torch.load(best_file, map_location="cpu", weights_only=True)
+                best_pck = float(best.get("pck", best_pck))
+                best_epoch = int(best.get("epoch", best_epoch))
         for group, base_group in zip(opt.param_groups, groups):
             group["initial_lr"] = base_group["lr"]
     sched = torch.optim.lr_scheduler.LambdaLR(
@@ -203,10 +216,10 @@ def train(cfg: RunConfig) -> dict:
             "epoch,train_loss,val_loss,pck@0.05,pck@0.1,nme,lr\n", encoding="utf-8"
         )
 
-    stale = 0
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
         running, n = 0.0, 0
+        lr_sum, steps = 0.0, 0
         for batch in train_loader:
             img = batch["image"].to(device, non_blocking=True)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -216,6 +229,8 @@ def train(cfg: RunConfig) -> dict:
                 batch["target"].to(device, non_blocking=True),
                 batch["target_weight"].to(device, non_blocking=True),
             )
+            lr_sum += opt.param_groups[-1]["lr"]  # the lr this step uses
+            steps += 1
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
@@ -237,13 +252,22 @@ def train(cfg: RunConfig) -> dict:
             amp=use_amp,
         )
         p05, p10, nme = val["pck"][0.05], val["pck"][0.1], val["nme"]
-        lr_now = opt.param_groups[-1]["lr"]
+        lr_now = lr_sum / max(steps, 1)  # mean lr of the epoch (head group)
         print(
             f"EPOCH {epoch} train_loss={train_loss:.5f} val_loss={val['val_loss']:.5f} "
             f"pck@0.05={p05:.4f} pck@0.1={p10:.4f}",
             flush=True,
         )
-        print(f"METRICS epoch={epoch} nme={nme:.5f} lr={lr_now:.3e}", flush=True)
+        flip_txt = ""
+        if "flip_pck" in val:
+            flip_txt = (
+                f" flip_pck@0.05={val['flip_pck'][0.05]:.4f}"
+                f" flip_nme={val['flip_nme']:.5f}"
+            )
+        print(
+            f"METRICS epoch={epoch} nme={nme:.5f} lr={lr_now:.3e}{flip_txt}",
+            flush=True,
+        )
         _append_metrics(
             metrics_path,
             {
@@ -276,6 +300,7 @@ def train(cfg: RunConfig) -> dict:
             "pck": best_pck,
             "nme": best_nme,
             "best_epoch": best_epoch,
+            "stale": stale,
             "sched_state": sched.state_dict(),
         }
         if ema is not None:

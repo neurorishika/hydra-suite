@@ -227,10 +227,15 @@ def _mirror(
 
 
 def seed_worker(worker_id: int) -> None:
-    """``DataLoader(worker_init_fn=...)``: independent augmentation per worker
-    and per epoch (torch hands each worker a fresh base seed every epoch)."""
+    """``DataLoader(worker_init_fn=...)``: independent augmentation per worker.
+
+    Runs once per worker (workers are persistent); each worker's generator
+    then keeps advancing, so epochs differ too.  OpenCV is kept single-
+    threaded per worker so N workers don't each start a full thread pool.
+    """
     import random
 
+    cv2.setNumThreads(1)
     info = torch.utils.data.get_worker_info()
     seed = int(torch.initial_seed() % (2**32))
     random.seed(seed)
