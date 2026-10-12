@@ -62,6 +62,7 @@ from ...core.vitpose_training import (
     parse_progress_line,
     prepare_run,
 )
+from ..panels.vitpose_recipe_panel import ViTPoseRecipePanel
 from .evaluation import EvaluationDashboardDialog
 from .utils import (
     _load_dialog_settings,
@@ -341,6 +342,9 @@ class ViTPoseTrainingWorker(QObject):
         flip_pairs=None,
         fliplr=0.0,
         flipud=0.0,
+        recipe=None,
+        extra_datasets=None,
+        extra_items=None,
     ):
         super().__init__()
         self.image_paths = list(image_paths)
@@ -362,6 +366,10 @@ class ViTPoseTrainingWorker(QObject):
         self.flip_pairs = [list(p) for p in flip_pairs] if flip_pairs else None
         self.fliplr = float(fliplr)
         self.flipud = float(flipud)
+        # RunConfig keys from the recipe panel (augmentation, schedule, split)
+        self.recipe = dict(recipe or {})
+        self.extra_datasets = list(extra_datasets or [])
+        self.extra_items = list(extra_items or [])
         self._cancel = False
         self._proc = None
 
@@ -384,6 +392,8 @@ class ViTPoseTrainingWorker(QObject):
                 class_names=self.class_names,
                 keypoint_names=self.keypoint_names,
                 skeleton_edges=self.skeleton_edges,
+                extra_datasets=self.extra_datasets,
+                extra_items=self.extra_items,
             )
             params = dict(
                 init_checkpoint=self.init_checkpoint,
@@ -404,6 +414,7 @@ class ViTPoseTrainingWorker(QObject):
                     fliplr=self.fliplr,
                     flipud=self.flipud,
                 )
+            params.update(self.recipe)
             run_json = prepare_run(params, self.run_dir, self.cache_dir)
             cmd = build_training_command(run_json)
             self.log.emit(f"Launching: {' '.join(cmd)}")
@@ -819,6 +830,9 @@ class TrainingRunnerDialog(QDialog):
 
         content_layout.addWidget(self.vitpose_group)
 
+        self.vitpose_recipe = ViTPoseRecipePanel(self)
+        content_layout.addWidget(self.vitpose_recipe)
+
         # Config
         self.cfg_group = QGroupBox("Config")
         cfg_layout = QFormLayout(self.cfg_group)
@@ -1194,6 +1208,9 @@ class TrainingRunnerDialog(QDialog):
         self.vitpose_checkpoint_combo.activated.connect(
             self._on_vitpose_checkpoint_activated
         )
+        self.vitpose_checkpoint_combo.currentTextChanged.connect(
+            self._sync_variant_to_checkpoint
+        )
         self.imgsz_auto_cb.toggled.connect(self._apply_auto_sizes)
         self.vitpose_auto_cb.toggled.connect(self._apply_auto_sizes)
         self.vitpose_detail_spin.valueChanged.connect(self._apply_auto_sizes)
@@ -1225,6 +1242,7 @@ class TrainingRunnerDialog(QDialog):
         self._update_backend_ui()
         self._apply_auto_sizes()
         self._update_flip_notes()
+        self._sync_variant_to_checkpoint(self.vitpose_checkpoint_combo.currentText())
 
     def _append_log(self, msg: str):
         self.log_view.appendPlainText(msg)
@@ -1417,6 +1435,10 @@ class TrainingRunnerDialog(QDialog):
             ("vitpose_flipud", self.vitpose_flipud_spin),
         ):
             widget.setValue(_setting_float(settings, key, widget.value()))
+        self.vitpose_recipe.apply_settings(settings.get("vitpose_recipe") or {})
+        variant = str(settings.get("vitpose_variant") or "")
+        if self.vitpose_variant_combo.findText(variant) >= 0:
+            self.vitpose_variant_combo.setCurrentText(variant)
         for key, box in (
             ("mosaic", self.cb_mosaic),
             ("imgsz_auto", self.imgsz_auto_cb),
@@ -1456,17 +1478,25 @@ class TrainingRunnerDialog(QDialog):
         self.aug_group.setVisible(is_yolo)
         self.info_group.setVisible(is_yolo or is_vitpose)
         self.progress.setVisible(is_yolo or is_vitpose)
-        self.lbl_loss_plot.setVisible(is_yolo)
-        self.loss_components_box.setVisible(is_yolo)
+        self.lbl_loss_plot.setVisible(is_yolo or is_vitpose)
+        self.loss_components_box.setVisible(is_yolo or is_vitpose)
         self.log_view.setVisible(is_yolo or is_vitpose)
         self.btn_start.setVisible(is_yolo or is_vitpose)
         self.btn_stop.setVisible(is_yolo or is_vitpose)
         self.btn_open_eval.setVisible(is_yolo or is_vitpose)
 
         self.vitpose_group.setVisible(is_vitpose)
+        self.vitpose_recipe.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
         if hasattr(self, "_crop_stats"):  # sizes are measured lazily per backend
             self._apply_auto_sizes()
+
+    def _sync_variant_to_checkpoint(self, text: str) -> None:
+        """A catalog checkpoint fixes the model size (B/L/H)."""
+        entry = CATALOG.get(str(text).strip())
+        if entry is not None:
+            self.vitpose_variant_combo.setCurrentText(entry.variant)
+        self.vitpose_variant_combo.setEnabled(entry is None)
 
     def _on_vitpose_checkpoint_activated(self, index: int):
         if self.vitpose_checkpoint_combo.itemText(index) == "Browse…":
@@ -1689,6 +1719,8 @@ class TrainingRunnerDialog(QDialog):
                 "vitpose_auto_size": bool(self.vitpose_auto_cb.isChecked()),
                 "vitpose_fliplr": float(self.vitpose_fliplr_spin.value()),
                 "vitpose_flipud": float(self.vitpose_flipud_spin.value()),
+                "vitpose_variant": self.vitpose_variant_combo.currentText(),
+                "vitpose_recipe": self.vitpose_recipe.settings(),
             },
         )
 
@@ -2068,8 +2100,18 @@ class TrainingRunnerDialog(QDialog):
             flip_pairs=flips.pairs,
             fliplr=flips.fliplr,
             flipud=flips.flipud,
+            recipe=self.vitpose_recipe.params(),
+            extra_datasets=[
+                (d["images"], d["labels_dir"])
+                for d in self._aux_datasets
+                if "images" in d and "labels_dir" in d
+            ],
+            extra_items=list(self._aux_items),
         )
         self._append_log(f"[flips] {flips.note}")
+        self.lbl_loss_plot.clear()
+        self.lbl_loss_plot.setText("Waiting for loss...")
+        self._loss_timer.start()
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.log.connect(self._append_log)
