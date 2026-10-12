@@ -2066,3 +2066,26 @@ def test_saved_direct_obb_mode_survives_restore_with_sequential_models(
     )
     assert reloaded._detection_panel.combo_yolo_obb_mode.currentIndex() == 1
     reloaded.close()
+
+
+@pytest.mark.parametrize("label", ["YOLO", "SLEAP", "ViTPose"])
+def test_pose_backend_type_roundtrip_restores_combo(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+    label: str,
+) -> None:
+    window = _make_main_window(monkeypatch)
+    window._identity_panel.combo_pose_model_type.setCurrentText(label)
+
+    config_path = tmp_path / "pose_backend_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_cfg["pose_model_type"] == label.lower()
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert reloaded_window._identity_panel.combo_pose_model_type.currentText() == label
+    reloaded_window.close()

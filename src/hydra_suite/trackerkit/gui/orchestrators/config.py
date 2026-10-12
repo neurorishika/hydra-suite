@@ -1368,7 +1368,7 @@ class ConfigOrchestrator:
         )
         pose_backend = str(get_cfg("pose_model_type", default="yolo")).strip().upper()
         pose_backend_idx = self._panels.identity.combo_pose_model_type.findText(
-            pose_backend
+            pose_backend, Qt.MatchFixedString
         )
         if pose_backend_idx >= 0:
             self._panels.identity.combo_pose_model_type.setCurrentIndex(
