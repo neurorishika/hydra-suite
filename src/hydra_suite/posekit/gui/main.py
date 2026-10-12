@@ -93,6 +93,20 @@ def dataset_dir_for_cli_project(
     return None
 
 
+def remember_cli_project(proj: Project) -> None:
+    """Add a project opened from the command line to the splash page's recents.
+
+    Opening from the splash page records it in ``_switch_project_window``; a
+    ``posekit --project`` / dataset launch skips that path.
+    """
+    try:
+        from hydra_suite.widgets.recents import RecentItemsStore
+
+        RecentItemsStore("posekit").add(str(proj.project_path))
+    except Exception:
+        logging.getLogger(__name__).debug("Could not record recent", exc_info=True)
+
+
 def main() -> None:
     """main function documentation."""
     logging.basicConfig(
@@ -195,6 +209,7 @@ def main() -> None:
         if proj is None:
             sys.exit(0)
 
+    remember_cli_project(proj)
     imgs = build_image_list(proj)
     win = MainWindow(proj, imgs, show_welcome_when_empty=False)
     try:

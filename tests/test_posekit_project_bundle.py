@@ -227,3 +227,21 @@ def test_repair_keeps_legacy_labels_dir(tmp_path: Path) -> None:
     assert _repair_project_paths(proj, ds)
     assert proj.images_dir == (ds / DEFAULT_DATASET_IMAGES_DIR).resolve()
     assert proj.labels_dir == (ds / "labels").resolve()  # labels not hidden
+
+
+def test_cli_opened_project_is_added_to_recents(monkeypatch, tmp_path):
+    """A project opened with ``posekit --project`` shows up on the splash page."""
+    from types import SimpleNamespace
+
+    from hydra_suite.posekit.gui import main as posekit_main
+    from hydra_suite.widgets import recents
+
+    added = []
+    monkeypatch.setattr(
+        recents.RecentItemsStore,
+        "add",
+        lambda self, p: added.append((self._app_name, p)),
+    )
+    proj_file = tmp_path / "proj" / "pose_project.json"
+    posekit_main.remember_cli_project(SimpleNamespace(project_path=proj_file))
+    assert added == [("posekit", str(proj_file))]
