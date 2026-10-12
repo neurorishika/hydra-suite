@@ -386,6 +386,29 @@ Fields:
 | `val_fraction` | `float` | `0.2` | Must be strictly between 0 and 1. |
 | `seed` | `int` | `0` | |
 | `resume_from` | `str \| None` | `None` | Optional checkpoint to resume training from. |
+| `input_size` | `[H, W] \| None` | `None` | Model input; `None` = 256x192. |
+| `scale_jitter` / `aspect_jitter` | `float` | `None` / `0.0` | Centred window jitter (`None` keeps the legacy random zoom). |
+| `flip_pairs` / `fliplr` / `flipud` | | `None` / `0` / `0` | Mirror augmentation and the left/right pairs it swaps. |
+| `rotation` / `rotation_prob` | `float` | `40` / `0.6` | Degrees, N(0, r/2) clipped to ±r. |
+| `brightness` / `contrast` / `saturation` / `hue` | `float` | `0.3` / `0.3` / `0` / `0` | Photometric jitter. |
+| `blur_prob` / `noise_prob` / `occlusion_prob` | `float` | `0` | Blur, Gaussian noise, one random occluding rectangle. |
+| `warmup_epochs` | `float` | `0` | Linear warmup, then cosine decay, per optimizer step. |
+| `layer_decay` | `float \| None` | `None` | `None` = the variant's value. `drop_path: None` likewise. |
+| `amp` / `ema` / `ema_decay` | | `false` / `false` / `0.9998` | bf16 autocast (CUDA); weight EMA (validated and saved). |
+| `num_workers` | `int` | `0` | Spawned data-loader workers. |
+| `patience` | `int` | `0` | Early stopping (0 = off). |
+| `split_by` | `str` | `"image"` | `image`, `frame` or `video` (crop names `<video>__<frame>__<n>`). |
+| `ignore_occluded` / `flip_test` | `bool` | `false` | No loss on v=1 keypoints; flip-averaged validation. |
+
+Defaults keep older `run.json` files on the original recipe; the Training Runner
+writes the recommended values. Each epoch prints an `EPOCH ...` line (loss, PCK)
+and a `METRICS epoch=<n> nme=<x> lr=<y>` line; `metrics.csv` has the same columns.
+`model_state` holds the inference weights (the averaged ones with EMA on).
+`best.pt` carries only those plus metadata (`variant`, `input_size`,
+`num_keypoints`, `epoch`, `pck`, `nme`); `last.pt` adds the resume state
+(`train_state`, `optim_state`, `ema_state`, `sched_state`, `stale`). A copy of a
+ViTPose `best.pt` outside the training-runs folder is recognised as ViTPose by
+the `run.json` beside it.
 
 The CLI prints `DONE best_pck=<value> best_epoch=<n>` on completion and exits non-zero
 on validation/training failure.

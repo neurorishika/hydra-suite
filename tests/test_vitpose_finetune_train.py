@@ -121,14 +121,10 @@ def test_resume_restores_lr_scheduler_and_metrics_header(tmp_path):
     ckpt = torch.load(last, map_location="cpu", weights_only=True)
     assert "sched_state" in ckpt
 
-    # The saved scheduler state reflects the completed 4-epoch run (construction
-    # steps once, then epochs 0..3 each call sched.step() once more), i.e.
-    # last_epoch == 4 -- not a scheduler restarted from last_epoch == -1.
-    probe_model = build_vitpose("S", "classic", 3)
-    probe_opt = torch.optim.AdamW(probe_model.parameters(), lr=1e-3)
-    probe_sched = torch.optim.lr_scheduler.CosineAnnealingLR(probe_opt, T_max=4)
-    probe_sched.load_state_dict(ckpt["sched_state"])
-    assert probe_sched.last_epoch == 4
+    # The scheduler steps once per batch (warmup + cosine): 6 training crops
+    # at batch 4 = 2 steps per epoch, so the completed 4-epoch run has taken
+    # 8 steps -- not a scheduler restarted from last_epoch == -1.
+    assert ckpt["sched_state"]["last_epoch"] == 8
 
     # Resume into a brand-new output_dir (no pre-existing metrics.csv) for one more
     # epoch; the header guard must still fire even though start_epoch > 0.
@@ -153,7 +149,7 @@ def test_resume_restores_lr_scheduler_and_metrics_header(tmp_path):
     resumed_metrics = resume_out / "metrics.csv"
     assert resumed_metrics.exists()
     lines = resumed_metrics.read_text().strip().splitlines()
-    assert lines[0] == "epoch,train_loss,val_loss,pck@0.05,pck@0.1"
+    assert lines[0] == "epoch,train_loss,val_loss,pck@0.05,pck@0.1,nme,lr"
     # Only epoch 4 ran (resumed at start_epoch=4, epochs=5).
     assert len(lines) == 2
     assert lines[1].split(",")[0] == "4"
@@ -197,7 +193,7 @@ def test_fresh_rerun_overwrites_stale_metrics_csv(tmp_path):
     train(cfg)
 
     lines = metrics_path.read_text().strip().splitlines()
-    assert lines[0] == "epoch,train_loss,val_loss,pck@0.05,pck@0.1"
+    assert lines[0] == "epoch,train_loss,val_loss,pck@0.05,pck@0.1,nme,lr"
     assert lines.count(lines[0]) == 1  # exactly one header row
     assert len(lines) == 3  # header + 2 epoch rows, no stale duplicates
     assert lines[1].split(",")[0] == "0"

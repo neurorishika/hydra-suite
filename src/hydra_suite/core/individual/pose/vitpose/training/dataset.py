@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 
 from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import affine_matrix, box2cs, normalize, top_down_affine
+from .augment import AugmentParams, augment_pixels, sample_rotation
 from .targets import generate_udp_gaussian
 from .window_jitter import WindowJitter
 
@@ -23,10 +24,9 @@ FEAT_STRIDE = (np.array(DEFAULT_GEOMETRY.image_size_wh, np.float32) - 1.0) / (
     np.array(DEFAULT_GEOMETRY.heatmap_size_wh, np.float32) - 1.0
 )
 
-# augmentation ranges (flips are opt-in through ``fliplr`` / ``flipud``)
+# legacy random zoom (scale_jitter=None); rotation and photometric ranges
+# live in augment.AugmentParams
 _SCALE_JITTER = 0.30
-_ROT_RANGE = 40.0
-_ROT_PROB = 0.6
 
 
 def load_coco_index(dataset_dir: Path) -> tuple[list[int], dict]:
@@ -70,6 +70,8 @@ class CocoKeypointsDataset(Dataset):
         flip_pairs: list | None = None,
         fliplr: float = 0.0,
         flipud: float = 0.0,
+        aug: AugmentParams | None = None,
+        ignore_occluded: bool = False,
     ) -> None:
         # ``scale_jitter=None`` keeps the legacy hard-coded random zoom. Any
         # explicit value (including 0) switches to the centred window jitter:
@@ -91,18 +93,31 @@ class CocoKeypointsDataset(Dataset):
         self._flip_idx = np.asarray(flip_index(flip_pairs or [], num_kpts), np.int64)
         self._fliplr = float(fliplr) if augment else 0.0
         self._flipud = float(flipud) if augment else 0.0
+        self.aug = aug if aug is not None else AugmentParams()
+        self.ignore_occluded = bool(ignore_occluded)
+        self.reseed(seed)
         self._feat_stride = (np.array(geom.image_size_wh, np.float32) - 1.0) / (
             np.array(geom.heatmap_size_wh, np.float32) - 1.0
         )
+
+    def reseed(self, seed: int) -> None:
+        """Give this copy of the dataset its own random streams.
+
+        Data-loader workers each get a copy of the dataset; without reseeding
+        (see ``seed_worker``) they would all draw the same augmentations.
+        """
+        self._rng = np.random.default_rng(seed)
+        if self._window is not None:
+            self._window._rng = np.random.default_rng(self._rng.integers(0, 2**63 - 1))
 
     def _maybe_flip(
         self, img: np.ndarray, kp: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
         flipped = False
-        if self._fliplr > 0 and np.random.rand() < self._fliplr:
+        if self._fliplr > 0 and self._rng.random() < self._fliplr:
             img, kp = _mirror(img, kp, self._flip_idx, axis=1)
             flipped = True
-        if self._flipud > 0 and np.random.rand() < self._flipud:
+        if self._flipud > 0 and self._rng.random() < self._flipud:
             img, kp = _mirror(img, kp, self._flip_idx, axis=0)
             flipped = True
         return (np.ascontiguousarray(img) if flipped else img), kp
@@ -139,27 +154,24 @@ class CocoKeypointsDataset(Dataset):
             if self._legacy_scale:
                 scale = scale * float(
                     np.clip(
-                        np.random.randn() * 0.25 + 1.0,
+                        self._rng.normal() * 0.25 + 1.0,
                         1 - _SCALE_JITTER,
                         1 + _SCALE_JITTER,
                     )
                 )
-            if np.random.rand() < _ROT_PROB:
-                rot = float(
-                    np.clip(
-                        np.random.randn() * (_ROT_RANGE / 2), -_ROT_RANGE, _ROT_RANGE
-                    )
-                )
+            rot = sample_rotation(self.aug, self._rng)
 
         warped = top_down_affine(img, center, scale, rot, geom=self.geom)
         if self.augment:
-            warped = _photometric(warped)
+            warped = augment_pixels(warped, self.aug, self._rng)
         image = torch.from_numpy(normalize(warped))
 
         matrix = affine_matrix(center, scale, rot, geom=self.geom)
         joints_in = _warp_joints(kp_warp[:, :2], matrix)  # input-crop space
         joints_hm = joints_in / self._feat_stride  # heatmap space
-        vis = kp_warp[:, 2]
+        vis = kp_warp[:, 2].copy()
+        if self.ignore_occluded:
+            vis[vis == 1] = 0.0  # COCO v=1: labelled but occluded
         # Zero out visibility (for target/weight generation only) for joints
         # that warp outside the heatmap bounds under augmentation, so
         # JointsMSELoss does not train those channels toward "no keypoint
@@ -214,9 +226,19 @@ def _mirror(
     return img, kp[flip_idx]
 
 
-def _photometric(img_bgr: np.ndarray) -> np.ndarray:
-    out = img_bgr.astype(np.float32)
-    out *= np.random.uniform(0.7, 1.3)  # brightness
-    mean = out.mean(axis=(0, 1), keepdims=True)
-    out = (out - mean) * np.random.uniform(0.7, 1.3) + mean  # contrast
-    return np.clip(out, 0, 255).astype(np.uint8)
+def seed_worker(worker_id: int) -> None:
+    """``DataLoader(worker_init_fn=...)``: independent augmentation per worker.
+
+    Runs once per worker (workers are persistent); each worker's generator
+    then keeps advancing, so epochs differ too.  OpenCV is kept single-
+    threaded per worker so N workers don't each start a full thread pool.
+    """
+    import random
+
+    cv2.setNumThreads(1)
+    info = torch.utils.data.get_worker_info()
+    seed = int(torch.initial_seed() % (2**32))
+    random.seed(seed)
+    np.random.seed(seed)
+    if info is not None and hasattr(info.dataset, "reseed"):
+        info.dataset.reseed(seed)

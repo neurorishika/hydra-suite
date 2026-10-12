@@ -21,8 +21,12 @@ def is_vitpose_run(weights) -> bool:
 
     ViTPose runs are written under ``<training runs>/vitpose/`` (YOLO runs go
     under the project's ``runs/yolo_pose/``), so the location says which
-    backend a ``best.pt`` belongs to.
+    backend a ``best.pt`` belongs to.  A ViTPose model copied elsewhere (into a
+    project, say) keeps its run's ``run.json`` beside it, which names the
+    ViTPose variant.
     """
+    import json
+
     from hydra_suite.paths import get_training_runs_dir
 
     if not weights:
@@ -32,7 +36,14 @@ def is_vitpose_run(weights) -> bool:
         root = (get_training_runs_dir() / "vitpose").resolve()
     except (OSError, RuntimeError, TypeError, ValueError):
         return False
-    return path.is_relative_to(root)
+    if path.is_relative_to(root):
+        return True
+    run_json = path.with_name("run.json")
+    try:
+        data = json.loads(run_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("variant") in ("S", "B", "L", "H")
 
 
 @dataclass(frozen=True)
