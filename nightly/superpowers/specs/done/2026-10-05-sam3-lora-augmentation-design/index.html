@@ -10,24 +10,24 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-10-03-install-ssot-design/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/done/2026-10-05-sam3-lora-augmentation-design/">
       
       
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
     
     
       
-        <title>Install single-source-of-truth + cross-platform installer — design - HYDRA Suite Docs</title>
+        <title>SAM3 LoRA training augmentation — design - HYDRA Suite Docs</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.0253249f.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -46,9 +46,9 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#install-single-source-of-truth-cross-platform-installer-design" class="md-skip">
+        <a href="#sam3-lora-training-augmentation-design" class="md-skip">
           Skip to content
         </a>
       
@@ -92,7 +92,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Install single-source-of-truth + cross-platform installer — design
+              SAM3 LoRA training augmentation — design
             
           </span>
         </div>
@@ -221,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../../../.." class="md-tabs__link">
         
   
     
@@ -240,7 +240,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../getting-started/installation/" class="md-tabs__link">
+        <a href="../../../../getting-started/installation/" class="md-tabs__link">
           
   
   Getting Started
@@ -258,7 +258,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../user-guide/overview/" class="md-tabs__link">
+        <a href="../../../../user-guide/overview/" class="md-tabs__link">
           
   
   User Guide
@@ -276,7 +276,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+        <a href="../../../../developer-guide/architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -294,7 +294,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../reference/api-index/" class="md-tabs__link">
+        <a href="../../../../reference/api-index/" class="md-tabs__link">
           
   
   Reference
@@ -327,7 +327,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -357,7 +357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../../../.." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -419,7 +419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/installation/" class="md-nav__link">
+      <a href="../../../../getting-started/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -440,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/environments/" class="md-nav__link">
+      <a href="../../../../getting-started/environments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -461,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/integrations/" class="md-nav__link">
+      <a href="../../../../getting-started/integrations/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -482,7 +482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+      <a href="../../../../getting-started/quickstart-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -503,7 +503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+      <a href="../../../../getting-started/quickstart-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -524,7 +524,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../getting-started/platforms/" class="md-nav__link">
+      <a href="../../../../getting-started/platforms/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -594,7 +594,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/overview/" class="md-nav__link">
+      <a href="../../../../user-guide/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -615,7 +615,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/workflow/" class="md-nav__link">
+      <a href="../../../../user-guide/workflow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -636,7 +636,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/trackerkit-cli/" class="md-nav__link">
+      <a href="../../../../user-guide/trackerkit-cli/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -657,7 +657,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/trackerkit-jobs/" class="md-nav__link">
+      <a href="../../../../user-guide/trackerkit-jobs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -678,7 +678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+      <a href="../../../../user-guide/detection-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -699,7 +699,28 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+      <a href="../../../../user-guide/detection-limits/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Limits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/tracking-and-merging/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -720,7 +741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+      <a href="../../../../user-guide/post-processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -741,7 +762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+      <a href="../../../../user-guide/configuration-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -762,7 +783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+      <a href="../../../../user-guide/compute-runtimes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -783,7 +804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+      <a href="../../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -804,7 +825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+      <a href="../../../../user-guide/dataset-generation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -825,7 +846,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+      <a href="../../../../user-guide/individual-analysis/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -846,7 +867,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/posekit/" class="md-nav__link">
+      <a href="../../../../user-guide/posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -867,7 +888,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/classkit/" class="md-nav__link">
+      <a href="../../../../user-guide/classkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -888,7 +909,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+      <a href="../../../../user-guide/detectkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -909,7 +930,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../runbooks/detectkit-headless-training/" class="md-nav__link">
+      <a href="../../../../runbooks/detectkit-headless-training/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -930,7 +951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/sam-install-and-run/" class="md-nav__link">
+      <a href="../../../../user-guide/sam-install-and-run/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -951,7 +972,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
+      <a href="../../../../user-guide/detectkit-semantic-escalation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -972,7 +993,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
+      <a href="../../../../user-guide/detectkit-sahi-calibration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -993,7 +1014,28 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+      <a href="../../../../user-guide/sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../user-guide/filterkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1014,7 +1056,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+      <a href="../../../../user-guide/refinekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1035,7 +1077,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+      <a href="../../../../user-guide/troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1105,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+      <a href="../../../../developer-guide/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1126,7 +1168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+      <a href="../../../../developer-guide/module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1147,7 +1189,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+      <a href="../../../../developer-guide/data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1168,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1189,7 +1231,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+      <a href="../../../../developer-guide/tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1210,7 +1252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+      <a href="../../../../developer-guide/gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1231,7 +1273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+      <a href="../../../../developer-guide/runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1252,7 +1294,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/resource-containment/" class="md-nav__link">
+      <a href="../../../../developer-guide/resource-containment/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1273,7 +1315,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/profiling/" class="md-nav__link">
+      <a href="../../../../developer-guide/profiling/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1294,7 +1336,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+      <a href="../../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1315,7 +1357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+      <a href="../../../../developer-guide/performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1336,7 +1378,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
+      <a href="../../../../developer-guide/inference-fast-mode/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1357,7 +1399,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/inference-autotuner/" class="md-nav__link">
+      <a href="../../../../developer-guide/inference-autotuner/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1378,7 +1420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+      <a href="../../../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1399,7 +1441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+      <a href="../../../../developer-guide/extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1420,7 +1462,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+      <a href="../../../../developer-guide/extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1441,7 +1483,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+      <a href="../../../../developer-guide/code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1462,7 +1504,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+      <a href="../../../../developer-guide/publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1483,7 +1525,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+      <a href="../../../../developer-guide/contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1553,7 +1595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-index/" class="md-nav__link">
+      <a href="../../../../reference/api-index/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1574,7 +1616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+      <a href="../../../../reference/ui-components-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1595,7 +1637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+      <a href="../../../../reference/ui-components-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1616,7 +1658,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-app/" class="md-nav__link">
+      <a href="../../../../reference/api-app/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1637,7 +1679,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-core/" class="md-nav__link">
+      <a href="../../../../reference/api-core/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1658,7 +1700,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-data/" class="md-nav__link">
+      <a href="../../../../reference/api-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1679,7 +1721,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-gui/" class="md-nav__link">
+      <a href="../../../../reference/api-gui/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1700,7 +1742,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-widgets/" class="md-nav__link">
+      <a href="../../../../reference/api-widgets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1721,7 +1763,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-posekit/" class="md-nav__link">
+      <a href="../../../../reference/api-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1742,7 +1784,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/api-utils/" class="md-nav__link">
+      <a href="../../../../reference/api-utils/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1763,7 +1805,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/cli-reference/" class="md-nav__link">
+      <a href="../../../../reference/cli-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1784,7 +1826,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/technical-reference/" class="md-nav__link">
+      <a href="../../../../reference/technical-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1805,7 +1847,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/changelog/" class="md-nav__link">
+      <a href="../../../../reference/changelog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1826,7 +1868,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../reference/faq/" class="md-nav__link">
+      <a href="../../../../reference/faq/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1874,108 +1916,114 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#goals" class="md-nav__link">
+  <a href="#why" class="md-nav__link">
     <span class="md-ellipsis">
-      Goals
+      Why
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#non-goals" class="md-nav__link">
+  <a href="#decisions-made-without-interactive-review" class="md-nav__link">
     <span class="md-ellipsis">
-      Non-goals
+      Decisions made without interactive review
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#1-installer-installpy-repo-root" class="md-nav__link">
+  <a href="#vocabulary-reuse-of-augmentationprofile" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Installer: install.py (repo root)
+      Vocabulary (reuse of AugmentationProfile)
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-pyproject-as-single-source-of-truth" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
-      2. pyproject as single source of truth
+      Architecture
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#new-module-trainingsam3_loraaugmentpy-pure-qt-free-no-sam3-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      New module training/sam3_lora/augment.py (pure, Qt-free, no sam3 import)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dataloader-threading-dataloaderpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dataloader threading (dataloader.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#training-loop-clipy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training loop (cli.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#publish-publish_workerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Publish (publish_worker.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-cli-detectkitconfigtrainingpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Config / CLI (detectkit/config/training.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gui-detectkitguipanelssam3_training_panelpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      GUI (detectkit/gui/panels/sam3_training_panel.py)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Error handling
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#3-runtime-code-changes-required-by-the-slimmer-envs" class="md-nav__link">
+  <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
-      3. Runtime code changes required by the slimmer envs
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-hydra-doctor" class="md-nav__link">
-    <span class="md-ellipsis">
-      4. hydra doctor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-sam3-training-sidecar-opt-in-cuda-only" class="md-nav__link">
-    <span class="md-ellipsis">
-      5. SAM3 training sidecar (opt-in, CUDA only)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-sleap-sidecar" class="md-nav__link">
-    <span class="md-ellipsis">
-      6. SLEAP sidecar
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-tests-and-ci" class="md-nav__link">
-    <span class="md-ellipsis">
-      7. Tests and CI
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-equivalence-proving-install-changes-dont-move-tracking-output" class="md-nav__link">
-    <span class="md-ellipsis">
-      8. Equivalence: proving install changes don't move tracking output
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#9-make-wrappers" class="md-nav__link">
-    <span class="md-ellipsis">
-      9. Make wrappers
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#10-rollout-order" class="md-nav__link">
-    <span class="md-ellipsis">
-      10. Rollout order
+      Testing
     </span>
   </a>
   
@@ -1996,7 +2044,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-10-03-install-ssot-design.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/done/2026-10-05-sam3-lora-augmentation-design.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2004,257 +2052,256 @@
   
 
 
-<h1 id="install-single-source-of-truth-cross-platform-installer-design">Install single-source-of-truth + cross-platform installer — design<a class="headerlink" href="#install-single-source-of-truth-cross-platform-installer-design" title="Permanent link">&para;</a></h1>
-<p><strong>Status:</strong> Approved direction (user, 2026-10-03); implementation on <code>feat/install-ssot</code>.
-<strong>Checklist:</strong> <code>docs/superpowers/plans/2026-10-03-install-paths-and-sam-todo.md</code>.</p>
-<h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
+<h1 id="sam3-lora-training-augmentation-design">SAM3 LoRA training augmentation — design<a class="headerlink" href="#sam3-lora-training-augmentation-design" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Shipped — merged to main (feat/sam3-lora-augmentation @ 3662c7a2, 2026-10-05).
+<strong>Branch:</strong> <code>feat/sam3-lora-augmentation</code> (worktree <code>.worktrees/sam3-aug</code>).</p>
+<h2 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h2>
+<p>SAM3 LoRA training (<code>src/hydra_suite/training/sam3_lora/</code>) applies <strong>no</strong>
+augmentation. <code>dataloader._default_transform</code> is <code>to_tensor</code>;
+<code>datapoints.build_tile_datapoint</code> only resizes to <code>RES</code> and applies Meta's
+<code>NormalizeAPI</code>; <code>dataset_build</code> writes fixed tiles. Every epoch replays the same
+pixels, which encourages overfitting on the small labeled sets SAM3 is meant
+for. YOLO roles get augmentation through <code>AugmentationProfile</code>
+(<code>training/contracts.py</code>) and Ultralytics. This design gives the SAM3 role a
+YOLO-parallel augmentation path with GUI controls, CLI/JSON parity, and a
+realised stamp.</p>
+<h2 id="decisions-made-without-interactive-review">Decisions made without interactive review<a class="headerlink" href="#decisions-made-without-interactive-review" title="Permanent link">&para;</a></h2>
+<p>The session ran under a "do not pause" goal, so these were decided by the
+implementer (with an advisor pass) rather than by the user. Each one can be
+reversed cheaply.</p>
 <ol>
-<li><code>pyproject.toml</code> is the only place Python dependencies are declared.</li>
-<li>One pure-Python installer works on Linux, macOS and Windows. Every <code>make</code> install target wraps it.</li>
-<li>CUDA major version is detected from the driver; the user can override it.</li>
-<li>SAM2 and SAM3 <em>inference</em> install by default on every tier.</li>
-<li>SAM3 <em>training</em> is an opt-in sidecar: CUDA only, refused loudly elsewhere, installable without a repo checkout.</li>
-<li>Tracking output is byte-identical before and after (proven by equivalence runs across the old and new envs).</li>
+<li><strong>Contract default OFF, GUI fresh-session default ON.</strong>
+   <code>Sam3LoraParams().augmentation</code> is a disabled profile, so every existing
+   plan JSON, published spec and probe resolves to exactly today's training
+   (the <code>patience</code> rule in <code>contracts.py</code>: "a plan written before this field
+   existed must train exactly as it did"). The SAM3 panel's fresh default is
+   the recommended profile below. This is a <strong>documented intentional GUI/CLI
+   default divergence</strong>, asserted next to the existing <code>auto_import</code> one in
+   <code>tests/test_sam3_gui_cli_training_parity.py</code>.</li>
+<li><strong>Schema: nest the existing <code>AugmentationProfile</code></strong> as
+   <code>Sam3LoraParams.augmentation</code>. No parallel <code>aug_*</code> fields. A
+   <code>__post_init__</code> coerces a <code>dict</code> into <code>AugmentationProfile</code>, so all four
+   <code>Sam3LoraParams(**dict)</code> reconstruction sites (sidecar child, publish CLI,
+   dialog project load, dataset-prep sidecar) keep working unchanged.</li>
+<li><strong>New typed field <code>AugmentationProfile.rot90: float = 0.0</code></strong>: the
+   probability of a 90° rotation. Transpose-type rotations cannot be expressed
+   with flips, and together with <code>fliplr</code>/<code>flipud</code> they cover all eight
+   label-exact dihedral symmetries of a top-down view. SAM3 is the only
+   consumer today. YOLO/classify ignore it, as they already ignore <code>rotate</code>.</li>
+<li><strong>Small-angle <code>rotate</code> defaults to 0</strong> (opt-in). It needs a border fill and
+   polygon clipping, so the label-exact geometric ops are the default.</li>
+<li><strong>BGR handling:</strong> the tile arrives from <code>cv2.imread</code> as BGR. The
+   photometric ops convert to RGB once, run in RGB (the convention of
+   <code>_apply_tiny_augmentation</code> and <code>simulate_decode_color</code>), and convert back.</li>
+<li><strong>Saved dialog state without an <code>augmentation</code> key</strong> keeps the panel's
+   current (fresh-default) augmentation rather than resetting it to the
+   contract's OFF. Older per-machine UI state therefore picks up the
+   recommended profile. Old <em>plan JSON</em> (CLI) does not.</li>
 </ol>
-<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Publishing to PyPI. <code>hydra-suite</code> is <strong>not on PyPI</strong> (the JSON API returns 404). Docs stop claiming <code>pip install hydra-suite</code>. Publishing is an outward-facing release decision left to the user.</li>
-<li>Training SAM3 on MPS or CPU.</li>
-<li>The manual Windows+CUDA gate, which waits for a box.</li>
-</ul>
-<h2 id="1-installer-installpy-repo-root">1. Installer: <code>install.py</code> (repo root)<a class="headerlink" href="#1-installer-installpy-repo-root" title="Permanent link">&para;</a></h2>
-<p><strong>Bootstrap constraints</strong>
-- stdlib only; Python ≥ 3.9.
-- Runs from <em>outside</em> the target env, e.g. base conda's Python, a system <code>python3</code>, or <code>py -3</code> on Windows.
-- It must never import <code>hydra_suite</code>.
-- The installer is a <strong>single file, <code>install.py</code></strong>, holding the pure logic (platform detection, CUDA mapping, plan building) and the step runner. Unit tests import it by file path (<code>tests/test_installer_*.py</code>).</p>
-<p><strong>CLI</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python install.py [--tier auto|cpu|mps|cuda] [--cuda auto|12|13|none]
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                  [--target conda|venv|current] [--env NAME] [--python 3.13]
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                  [--source PATH_OR_URL] [--update] [--create-only]
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                  [--with-sam3-train] [--with-sleap] [--dev] [--docs]
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                  [--skip-apriltag] [--skip-doctor] [--dry-run] [--yes]
-</span></code></pre></div>
-<p><strong>Tier resolution</strong> (<code>resolve_tier</code>)
-- An explicit <code>--tier</code> wins.
-- Otherwise:
-  - <code>darwin</code>+<code>arm64</code> → <code>mps</code>.
-  - <code>nvidia-smi</code> present → <code>cuda</code>.
-  - Anything else → <code>cpu</code>.
-- <code>--cuda none</code> forces <code>cpu</code> on a CUDA host.</p>
-<p><strong>CUDA resolution</strong> (<code>resolve_cuda_major</code>)
-- Parse the driver version from <code>nvidia-smi --query-gpu=driver_version --format=csv,noheader</code>.
-- Driver major ≥ 580 → 13; otherwise → 12.
-- An explicit <code>--cuda 12|13</code> overrides the detected value. It warns when it exceeds what the driver supports, because that is the silent <code>is_available()==False</code> trap.
-- <code>CUDA_MAJOR</code> from make arrives as <code>--cuda</code>.
-- The same mapping replaces the private <code>_driver_max_cuda</code> in <code>verify_cuda_runtime.py</code>. That file moves into the package (see §4).</p>
-<p><strong>Targets</strong>
-- <code>conda</code> (default when conda/mamba is on PATH): create or update the env from the slim yml, then install with <code>&lt;env&gt;/bin/python</code> (or <code>&lt;env&gt;\python.exe</code>).
-- <code>venv</code>: <code>python -m venv</code> with a host Python that must be ≥ 3.11 (checked).
-- <code>current</code>: the interpreter running the installer. Used by CI and by <code>make install*</code>, which run inside the activated env.</p>
-<p>Default env names are unchanged (<code>hydra</code>, <code>hydra-mps</code>, <code>hydra-cuda</code>).</p>
-<p><strong>Steps.</strong> Each step is a pure <code>Step(description, argv)</code> in a plan. <code>--dry-run</code> prints the plan.
-1. Env: create or update (skipped for <code>current</code>).
-2. Bootstrap <code>uv</code> into the env via <code>python -m pip install uv</code>. Fall back to <code>pip</code> if that fails.
-3. Uninstall conflicting families:
-   - <code>onnxruntime</code> vs <code>onnxruntime-gpu</code>
-   - tensorrt cu12 vs cu13
-   - all opencv variants except <code>opencv-python-headless</code>
-4. <strong>Torch first</strong>, with <code>--index-url</code>, never <code>--extra-index-url</code>. Versions come from the <code>TORCH_PINS</code> table (<code>torch==2.11.0</code>, <code>torchvision==0.26.0</code>; <code>+cu128</code>/<code>+cu130</code> on CUDA). Index:
-   - <code>cpu</code> on Linux/Windows → <code>whl/cpu</code>
-   - <code>mps</code> → PyPI
-   - <code>cuda</code> → <code>whl/cu128</code> / <code>whl/cu130</code></p>
-<p>This removes <code>--index-strategy unsafe-best-match</code> and the iopath/sam2 resolver failure.
-5. <code>uv pip install -e "&lt;source&gt;[&lt;tier-extra&gt;,sam,(dev),(docs)]"</code> with an <strong>overrides file</strong> that removes <code>opencv-python</code> (<code>opencv-python; sys_platform == 'never'</code>). This leaves exactly one <code>cv2</code> owner (headless). Without <code>uv</code>, run the same <code>pip</code> command, then force-reinstall headless.
-6. CLIP from git at the pinned commit <code>CLIP_REF</code>. A loud error if <code>git</code> is missing.
-7. AprilTag fork: clone + cmake build at the pinned commit. The cmake prefix and Python paths are computed per OS. Failure is an <strong>error</strong> that names the missing prerequisite (cmake / C compiler / MSVC Build Tools) and the <code>--skip-apriltag</code> escape.
-8. Platform fixups:
-   - MPS: the libomp de-duplication (logic from <code>tools/configure_mps_libs.py</code>, generalised to whichever duplicate pair exists). It no-ops when only one libomp is present.
-   - CUDA: no conda library hook. ORT uses the pip <code>nvidia-*-cu12</code> wheels via <code>onnxruntime.preload_dlls()</code> (§3).
-9. Optional sidecars: <code>--with-sam3-train</code> (§5), <code>--with-sleap</code> (§6).
-10. <code>hydra doctor</code> (§4), unless <code>--skip-doctor</code>.</p>
-<p><code>--update</code> re-runs steps 1–10 with upgrade semantics.</p>
-<p><strong>Source resolution</strong>
-- Default <code>--source</code>: the directory containing <code>install.py</code>, installed editable.
-- A git URL or a wheel path is also accepted, which is how a no-checkout install works (<code>python install.py --source git+https://github.com/neurorishika/hydra-suite@main</code> after downloading only <code>install.py</code>).</p>
-<h2 id="2-pyproject-as-single-source-of-truth">2. pyproject as single source of truth<a class="headerlink" href="#2-pyproject-as-single-source-of-truth" title="Permanent link">&para;</a></h2>
-<p><strong>Core deps added</strong></p>
+<h2 id="vocabulary-reuse-of-augmentationprofile">Vocabulary (reuse of <code>AugmentationProfile</code>)<a class="headerlink" href="#vocabulary-reuse-of-augmentationprofile" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
-<th>Dependency</th>
-<th>Why</th>
+<th>Field</th>
+<th>SAM3 semantics</th>
+<th>Fresh GUI default</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>torch&gt;=2.4</code>, <code>torchvision&gt;=0.16</code></td>
-<td>Declared explicitly</td>
+<td><code>enabled</code></td>
+<td>master switch</td>
+<td><code>True</code></td>
 </tr>
 <tr>
-<td><code>optuna</code>, <code>optunahub</code>, <code>cmaes</code>, <code>umap-learn</code>, <code>pyyaml</code>, <code>scikit-image</code>, <code>pillow</code>, <code>einops</code></td>
-<td>Everything <code>src/</code> imports at top level that only the ymls provided — the authoritative list comes from the import-declared test (§7)</td>
+<td><code>fliplr</code></td>
+<td>P(horizontal flip)</td>
+<td>0.5</td>
 </tr>
 <tr>
-<td><code>imageio-ffmpeg</code></td>
-<td>the <code>ffmpeg</code> binary on every platform (conda ffmpeg dropped, see below)</td>
+<td><code>flipud</code></td>
+<td>P(vertical flip)</td>
+<td>0.5</td>
+</tr>
+<tr>
+<td><code>rot90</code> (new)</td>
+<td>P(rotate 90°, direction 50/50 CW/CCW)</td>
+<td>0.5</td>
+</tr>
+<tr>
+<td><code>rotate</code></td>
+<td>max |angle| in degrees, uniform; constant gray fill</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td><code>brightness</code></td>
+<td>multiplicative factor ~ U(1−b, 1+b)</td>
+<td>0.2</td>
+</tr>
+<tr>
+<td><code>contrast</code></td>
+<td>about the per-channel mean, ~ U(1−c, 1+c)</td>
+<td>0.2</td>
+</tr>
+<tr>
+<td><code>saturation</code></td>
+<td>HSV S factor ~ U(1−s, 1+s)</td>
+<td>0.2</td>
+</tr>
+<tr>
+<td><code>hue</code></td>
+<td>HSV H shift ~ U(−h, h)·179 (Ultralytics <code>hsv_h</code> units)</td>
+<td>0.0</td>
+</tr>
+<tr>
+<td><code>monochrome</code></td>
+<td>gray → 3-channel</td>
+<td><code>False</code></td>
+</tr>
+<tr>
+<td><code>decode_color_sim</code></td>
+<td>P(apply), <code>training.augmentation.simulate_decode_color</code></td>
+<td>0.0</td>
+</tr>
+<tr>
+<td><code>resample_sim</code></td>
+<td>P(apply), <code>training.augmentation.simulate_resample</code></td>
+<td>0.0</td>
 </tr>
 </tbody>
 </table>
-<p><code>opencv-python-headless</code> stays.</p>
-<p><strong>Removed:</strong> <code>torchaudio</code> (never imported).</p>
-<p><strong>Extras</strong></p>
-<table>
-<thead>
-<tr>
-<th>Extra</th>
-<th>Contents</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>cpu</code></td>
-<td><code>onnxruntime</code>, <code>onnx</code>, <code>onnxslim</code>, <code>onnxscript</code>, <code>av</code></td>
-</tr>
-<tr>
-<td><code>mps</code></td>
-<td><code>cpu</code> + <code>coremltools&gt;=8</code></td>
-</tr>
-<tr>
-<td><code>cuda12</code></td>
-<td><code>onnxruntime-gpu[cuda,cudnn]</code>, <code>cupy-cuda12x</code>, <code>tensorrt-cu12</code>(+<code>-bindings</code>,<code>-libs</code>; Linux/Windows markers), <code>PyNvVideoCodec</code>, onnx tools, <code>av</code></td>
-</tr>
-<tr>
-<td><code>cuda13</code></td>
-<td>Same with cu13 packages. <code>cupy-cuda13x</code> is stable on PyPI now (14.2.0), so no <code>--pre</code>/custom index. ORT stays cu12 user-space via its own extra</td>
-</tr>
-<tr>
-<td><code>cuda</code></td>
-<td>Alias → <code>cuda12</code> (unchanged)</td>
-</tr>
-<tr>
-<td><code>sam</code></td>
-<td><code>ftfy</code>, <code>regex</code> (CLIP is installed by the installer — PEP 508 direct refs break <code>twine upload</code>)</td>
-</tr>
-<tr>
-<td><code>sam3</code></td>
-<td>Alias → <code>sam</code> (compat)</td>
-</tr>
-<tr>
-<td><code>sam3-train</code></td>
-<td>Unchanged (sidecar only)</td>
-</tr>
-<tr>
-<td><code>dev</code></td>
-<td>Absorbs <code>requirements-dev.txt</code></td>
-</tr>
-<tr>
-<td><code>docs</code></td>
-<td>Absorbs <code>requirements-docs.txt</code></td>
-</tr>
-</tbody>
-</table>
-<p><strong>Deleted files:</strong> <code>requirements.txt</code>, <code>requirements-mps.txt</code>, <code>requirements-cuda.txt</code>, <code>requirements-cuda12.txt</code>, <code>requirements-cuda13.txt</code>, <code>requirements-dev.txt</code>, <code>requirements-docs.txt</code>. A test asserts that none come back. The docs workflow installs the <code>docs</code> extra's requirement list (read via <code>tomllib</code>) without the heavy core deps.</p>
-<p><strong>Conda ymls</strong> (<code>environment.yml</code>, <code>-mps</code>, <code>-cuda</code>) shrink to <code>python=3.13</code>, <code>pip</code>, <code>git</code>, <code>cmake</code>, <code>c-compiler</code>, <code>cxx-compiler</code>.
-- <em>Amended during implementation:</em> conda <code>ffmpeg</code> was dropped. It pulls <code>harfbuzz</code>/<code>freetype</code> into <code>&lt;env&gt;/lib</code>; Qt then loaded that harfbuzz against Rocky Linux 9's older system freetype (<code>undefined symbol: FT_Get_Colorline_Stops</code>, diptera). <code>imageio-ffmpeg</code> supplies the binary everywhere.
-- No numpy/opencv/PySide6/qt6-main/pyqtwebengine/optuna/numba.
-- The CUDA-12 user-space libraries leave the CUDA yml, replaced by ORT's pip <code>[cuda,cudnn]</code> extra plus <code>preload_dlls()</code>.
-- <strong>Fallback, if that fails verification on mehek or diptera:</strong> keep only those libraries in <code>environment-cuda.yml</code> as a documented exception.</p>
-<h2 id="3-runtime-code-changes-required-by-the-slimmer-envs">3. Runtime code changes required by the slimmer envs<a class="headerlink" href="#3-runtime-code-changes-required-by-the-slimmer-envs" title="Permanent link">&para;</a></h2>
+<p>The photometric semantics match <code>runner._apply_tiny_augmentation</code> exactly,
+except that draws come from an explicit generator. <code>hue</code> defaults to 0
+because colour can be the concept's signal (painted tags), as with
+<code>fliplr=0</code> guidance for asymmetric animals on the YOLO side.</p>
+<p><strong>Unsupported for SAM3, rejected loudly</strong> by the shared validator:
+<code>canonical_aug=True</code>, non-empty <code>label_expansion</code>, non-empty <code>args</code>.
+<code>canonical_aug_copies</code> is inert unless <code>canonical_aug</code> is set, and is ignored.
+Ranges: probabilities in [0, 1]; <code>rotate</code> in [0, 180]; <code>hue</code> in [0, 0.5];
+<code>brightness</code>/<code>contrast</code>/<code>saturation</code> in [0, 1].</p>
+<p>Mosaic and mixup are deliberately not ported. Mosaic changes the tile scale
+that the scale-grouped multi-scale build controls, and mixup blends unlabeled
+pixels into exhaustive queries. Both would corrupt SAM3's exhaustive-query
+supervision.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h2>
+<h3 id="new-module-trainingsam3_loraaugmentpy-pure-qt-free-no-sam3-import">New module <code>training/sam3_lora/augment.py</code> (pure, Qt-free, no <code>sam3</code> import)<a class="headerlink" href="#new-module-trainingsam3_loraaugmentpy-pure-qt-free-no-sam3-import" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>ORT CUDA libraries.</strong> Before the first CUDA/TensorRT <code>InferenceSession</code>, call <code>onnxruntime.preload_dlls()</code> when it exists. Wrap it in the existing <code>onnx_providers</code> path, idempotently and without failing. This replaces the <code>LD_LIBRARY_PATH</code> activate.d hook (<code>configure-cuda-ort</code>), which was Linux-only.</li>
-<li><strong>ffmpeg binary.</strong> Add a helper <code>utils/ffmpeg.py::ffmpeg_exe()</code> that tries <code>shutil.which("ffmpeg")</code> first and then <code>imageio_ffmpeg.get_ffmpeg_exe()</code>. The trackerkit crop path uses it.</li>
-<li><strong>libomp.</strong> <code>hydra doctor</code> imports <code>torch</code>+<code>cv2</code>+<code>sklearn</code>+<code>numba</code> in both orders in a subprocess. The installer's MPS fixup handles any duplicate pair. <code>KMP_DUPLICATE_LIB_OK</code> is <strong>not</strong> introduced on the main path.</li>
+<li><code>is_active(profile) -&gt; bool</code>: true when <code>enabled</code> and at least one op is
+  non-zero (or <code>monochrome</code>).</li>
+<li><code>validate_sam3_augmentation(profile) -&gt; list[str]</code>: error strings for range
+  or unsupported-field violations. It is called by
+  <code>DetectTrainingPlan.validate()</code> (raising <code>TrainingPlanError</code>) and by the
+  sidecar child at startup (raising <code>RuntimeError</code>).</li>
+<li><code>active_ops(profile) -&gt; dict</code>: the ops actually in effect (for the stamp).</li>
+<li><code>augment_tile(tile_bgr, instances, profile, rng, *, min_area_ratio)
+  -&gt; (tile_bgr, instances)</code>. <code>instances</code> is <code>[(polygon Nx2 float32, is_crowd)]</code>
+  in tile-pixel, edge-convention coordinates (the convention
+  <code>_scale_polygons_to_res</code> assumes).</li>
+<li>Geometric ops in order flipud → fliplr → rot90 → rotate, each applied to
+    the image and every polygon together. Flip: <code>x' = w − x</code>. rot90 CW:
+    <code>(x, y) → (h − y, x)</code> with new shape (w, h). CCW is the inverse.</li>
+<li><code>rotate</code>: <code>cv2.getRotationMatrix2D</code> about the pixel-index centre
+    <code>((w−1)/2, (h−1)/2)</code>, polygons mapped as <code>index = edge − 0.5</code>, warp with
+    <code>BORDER_CONSTANT</code> value (114, 114, 114) — <strong>never reflect</strong>, which would
+    paste unlabeled mirrored animals into exhaustive queries. Polygons are
+    clipped to the tile with <code>utils.slice_geometry.clip_polygon_to_tile</code>.
+    Retained fraction = clipped area / pre-clip area (the tile polygon; the
+    full-frame area that <code>dataset_build</code> used is unavailable here).
+    0 → instance dropped (it is no longer in the image). Below
+    <code>params.min_area_ratio</code> → <code>is_crowd=True</code>, so
+    <code>select_output_objects</code> excludes it and marks the positive query
+    non-exhaustive. Already-crowd stays crowd.</li>
+<li>Photometric ops (BGR→RGB once): brightness → contrast → saturation/hue →
+    monochrome → decode_color_sim → resample_sim → RGB→BGR. <code>resample_sim</code>'s
+    ≤0.5 px sub-pixel shift is left unlabeled, as it is for classifiers.</li>
+<li><code>tile_rng(epoch_seed, image_id) -&gt; np.random.Generator</code>:
+  <code>np.random.default_rng([epoch_seed, image_id, _SALT])</code>. Draws are therefore
+  independent of shuffle and grouping order, and reproducible per epoch.</li>
+<li><code>make_tile_augmenter(profile, *, epoch_seed, min_area_ratio)
+  -&gt; Callable | None</code>: returns <code>None</code> when not <code>is_active</code>. A no-op profile
+  therefore takes literally the existing code path.</li>
 </ul>
-<h2 id="4-hydra-doctor">4. <code>hydra doctor</code><a class="headerlink" href="#4-hydra-doctor" title="Permanent link">&para;</a></h2>
+<h3 id="dataloader-threading-dataloaderpy">Dataloader threading (<code>dataloader.py</code>)<a class="headerlink" href="#dataloader-threading-dataloaderpy" title="Permanent link">&para;</a></h3>
+<p><code>load_datapoints(descriptor, transform, augmenter=None)</code> applies
+<code>augmenter(tile_bgr, instances, descriptor.image_id)</code> before
+<code>build_shared_query_datapoints</code>. <code>collate_batches(..., augmenter=None)</code> and
+<code>collate_epoch_batches(..., augmenter=None)</code> (both grouped and ungrouped arms)
+forward it. <strong>Only the training loop passes one.</strong> Validation (<code>cli.py</code>
+<code>collate_batches(val_descriptors, …)</code>), the autobatch probe
+(<code>collate_batches(densest, …)</code>) and <code>detection_quality</code> keep <code>None</code>.</p>
+<p><code>TileDescriptor.width/height</code> stay the stored tile shape. <code>rot90</code> swaps the
+array's shape, and <code>build_tile_datapoint</code> reads the shape from the array.
+Descriptor dims are only read by consumers that skip decoding, and none of
+those sit downstream of the augmenter (verified in the plan).</p>
+<p><strong>The probe stays an upper bound.</strong> Flips and rot90 preserve the instance
+count and the RES×RES tensor; rotate can only drop instances. The collator's
+max-instance padding (the superlinear VRAM driver) therefore never grows.</p>
+<h3 id="training-loop-clipy">Training loop (<code>cli.py</code>)<a class="headerlink" href="#training-loop-clipy" title="Permanent link">&para;</a></h3>
+<p>At startup: validate <code>params.augmentation</code> (fail loudly). Write
+<code>hydra_sam3_augmentation.json</code> to the run dir on <strong>both</strong> arms:
+<code>{"requested": asdict(profile), "applied": {"augmentation": bool, "ops": {...},
+"reason": str}}</code>, with reason <code>"disabled"</code> / <code>"no active ops"</code> when the arm is
+off. In each epoch, build <code>make_tile_augmenter(profile,
+epoch_seed=spec.seed + epoch, min_area_ratio=params.min_area_ratio)</code> and pass
+it to <code>collate_epoch_batches</code>. Log one line stating the arm and active ops.</p>
+<h3 id="publish-publish_workerpy">Publish (<code>publish_worker.py</code>)<a class="headerlink" href="#publish-publish_workerpy" title="Permanent link">&para;</a></h3>
+<p><code>_augmentation_metadata(run_dir)</code> reads the stamp (<code>read_sam3_augmentation_stamp</code>)
+and adds an <code>"augmentation"</code> block to the sidecar next to
+<code>scale_grouped_batching</code>. When the stamp is absent it adds <code>{}</code>, so old runs
+are unchanged.</p>
+<h3 id="config-cli-detectkitconfigtrainingpy">Config / CLI (<code>detectkit/config/training.py</code>)<a class="headerlink" href="#config-cli-detectkitconfigtrainingpy" title="Permanent link">&para;</a></h3>
+<p>A shared <code>_parse_augmentation_profile(values, label)</code> handles typing for both
+<code>training.augmentation</code> (now also accepting <code>rot90</code>) and <code>sam3.augmentation</code>.
+<code>_sam3_to_json</code> already recurses via <code>asdict</code>. <code>plan.validate()</code> calls
+<code>validate_sam3_augmentation</code> when SAM3 is a role.</p>
+<h3 id="gui-detectkitguipanelssam3_training_panelpy">GUI (<code>detectkit/gui/panels/sam3_training_panel.py</code>)<a class="headerlink" href="#gui-detectkitguipanelssam3_training_panelpy" title="Permanent link">&para;</a></h3>
+<p>A new checkable <code>QGroupBox("Augmentation")</code> on the SAM3 tab with spin boxes
+for every row of the vocabulary table and a monochrome checkbox, each with a
+tooltip. <code>params()</code> emits <code>augmentation=AugmentationProfile(...)</code>;
+<code>set_params()</code> round-trips it. Panel construction applies the fresh
+recommended profile (<code>RECOMMENDED_SAM3_AUGMENTATION</code> in <code>augment.py</code>, the one
+source for the defaults). The dialog's persisted-state loader keeps the
+panel's augmentation when the saved state has none (decision 6).</p>
+<h2 id="error-handling">Error handling<a class="headerlink" href="#error-handling" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Entry point.</strong> <code>hydra</code> points at <code>hydra_suite.launcher.cli:main</code>. That module dispatches <code>doctor</code> (and <code>--version</code>) <strong>before</strong> any Qt import; otherwise it imports <code>launcher.app</code> and runs the GUI exactly as today.</li>
-<li><strong>Location.</strong> The checks live in <code>hydra_suite/runtime/doctor.py</code>. The CUDA checks are moved from <code>verify_cuda_runtime.py</code>, with the <code>CONDA_PREFIX</code> exit and the <code>x86_64-linux</code> hard-coding removed. The root <code>verify_cuda_runtime.py</code> becomes a thin shim that calls doctor's CUDA section, so <code>tests/test_verify_cuda_runtime.py</code> keeps working (tests are updated to the new module path).</li>
-<li><strong>Check result shape.</strong> Each check is a <code>Check(name, status ∈ {ok, warn, fail, skip}, detail, fix)</code>.</li>
-<li><strong>Exit code.</strong> Nonzero iff any check is <code>fail</code>. <code>--json</code> prints machine-readable output.</li>
+<li>Invalid ranges or unsupported fields: <code>TrainingPlanError</code> at plan
+  validation (GUI shows its existing warning dialog), and <code>RuntimeError</code> in
+  the child if a hand-edited <code>spec.json</code> bypassed the plan.</li>
+<li>An augmenter exception inside a batch propagates (never swallowed). A silent
+  fallback to unaugmented training would make the stamp lie.</li>
 </ul>
-<p><strong>Checks</strong>
-1. Python version.
-2. Core imports: every kit's app module, imported headless, with Qt imports allowed but no <code>QApplication</code> created.
-3. Single <code>cv2</code> distribution.
-4. libomp import-order check (MPS/macOS).
-5. Torch build vs tier.
-   - CUDA tier: CUDA available + driver compatible + nvidia wheel families consistent.
-   - MPS tier: <code>torch.backends.mps.is_available()</code>.
-6. ONNX Runtime and its providers per tier.
-7. TensorRT / CuPy imports (CUDA tier).
-8. CoreML (MPS).
-9. SAM2 import.
-10. SAM3 inference packages (ultralytics + clip + ftfy).
-11. SAM3 checkpoint state: present / missing / gated-needs-login. A <strong>warn</strong> with the exact <code>hf auth login</code> and licence URL fix.
-12. AprilTag import (warn).
-13. SLEAP env and SAM3 training sidecar: info/warn only, never fail.</p>
-<h2 id="5-sam3-training-sidecar-opt-in-cuda-only">5. SAM3 training sidecar (opt-in, CUDA only)<a class="headerlink" href="#5-sam3-training-sidecar-opt-in-cuda-only" title="Permanent link">&para;</a></h2>
-<p><strong>Installer <code>--with-sam3-train</code></strong>
-- Refuses unless <code>tier == cuda</code>. The exit code is nonzero and the message is explicit.
-- The torch index follows the same resolved CUDA major. This replaces <code>tools/setup_sam3_train_env.sh</code>, which is deleted, and <code>make setup-sam3-train</code> becomes a wrapper.</p>
-<p><strong>hydra-suite inside the sidecar, without a repo checkout.</strong> The installer reads the main env's <code>hydra-suite</code> <code>direct_url.json</code> and installs the <strong>same source</strong> with <code>--no-deps</code>:
-- editable dir → <code>-e dir</code>
-- git URL → same URL@commit
-- wheel → same wheel</p>
-<p>The sidecar must match the main env's code (sentinel protocol), so it is never PyPI. The availability probe gains a skew check: sidecar <code>hydra_suite</code> origin + version vs the main env's. A mismatch is reported as a reason with a re-run command.</p>
-<p><strong>Messages and gates</strong>
-- The <code>availability.py</code> install hint points to the user guide section and <code>python install.py --with-sam3-train</code>.
-- Precision: <code>SUPPORTED_PRECISIONS</code> is narrowed to <code>("bf16",)</code> so it matches the CLI's actual rejection of fp32.
-- The GUI text "~32 GB" is replaced by the measured 12 GiB, sourced from the preflight constant.
-- On a non-CUDA host the training panel says "SAM3 training requires an NVIDIA GPU (CUDA)". When the sidecar is missing, it says "not installed — run …". Inference is unaffected in both cases.</p>
-<h2 id="6-sleap-sidecar">6. SLEAP sidecar<a class="headerlink" href="#6-sleap-sidecar" title="Permanent link">&para;</a></h2>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>--with-sleap</code> creates the <code>sleap</code> conda env with <code>sleap==1.6.2</code> and the torch index matching the resolved CUDA (cu128/cu130, cpu, mps). <code>make setup-sleap</code> wraps it.</li>
-<li>At runtime the SLEAP service checks the <code>sleap-nn</code> version in the child. Anything other than <code>0.1.x</code> raises a clear error naming the pin.</li>
+<li><code>augment_tile</code> unit tests (no <code>sam3</code> needed): for each geometric op, rasterise
+  the polygons to masks before and after, and check the mask transformed by
+  the same op as the image equals the mask of the transformed polygons (IoU ≈
+  1). Edge-clipped instances under <code>rotate</code>: drop at 0, crowd below
+  <code>min_area_ratio</code>, already-crowd stays crowd. Constant fill (no reflected
+  content). Photometric ops leave polygons bit-identical. BGR/RGB: a pure-red
+  BGR tile stays red after brightness-only.</li>
+<li>Determinism: same <code>(epoch_seed, image_id)</code> gives identical output; a
+  different epoch gives different output; the result is independent of
+  descriptor order.</li>
+<li>Disabled identity (goal item 5): <code>collate_epoch_batches(..., augmenter=
+  make_tile_augmenter(disabled))</code> yields batches equal to <code>augmenter=None</code>,
+  and <code>make_tile_augmenter</code> returns <code>None</code> for disabled and all-zero profiles.
+  Default <code>Sam3LoraParams()</code> is inactive.</li>
+<li>Config: <code>sam3.augmentation</code> round-trip through <code>to_dict</code>/<code>from_dict</code>;
+  rejection of out-of-range and unsupported fields; <code>training.augmentation.rot90</code>
+  accepted.</li>
+<li><code>Sam3LoraParams(**asdict(p))</code> round-trip, i.e. <code>__post_init__</code> coercion.</li>
+<li>GUI: panel <code>params()</code>/<code>set_params()</code> round-trip; fresh default equals
+  <code>RECOMMENDED_SAM3_AUGMENTATION</code>; parity test covers the nested field with a
+  non-default profile; intentional default divergence asserted.</li>
+<li>Stamp written on both arms; publish sidecar carries it.</li>
+<li>Reflective guards updated: <code>_REFERENCE_KWARGS</code>, <code>_SAM3_PARAM_FIELDS</code>,
+  slice-settings contract, geometry drift guard.</li>
+<li>Full SAM3 test files + contract guards on <code>hydra-mps</code>, with
+  <code>hydra_suite.__file__</code> verified to resolve into the worktree.</li>
+<li>Visual: PNG grid of augmented fixture tiles with overlaid polygons.</li>
+<li>CUDA smoke on <strong>courtship</strong> (RTX 4090): at least 1 epoch with augmentation
+  on, finite loss, no OOM, peak VRAM within the probe's admission.</li>
 </ul>
-<h2 id="7-tests-and-ci">7. Tests and CI<a class="headerlink" href="#7-tests-and-ci" title="Permanent link">&para;</a></h2>
-<p><strong>Unit tests (no env needed)</strong>
-- Installer tier/CUDA mapping with mocked <code>nvidia-smi</code> (570 → 12, 580 → 13, 595 → 13, absent → cpu, override warn).
-- Plan building per tier/OS (dry-run golden), Windows path layout, sidecar refusal on non-CUDA.
-- Source resolution from <code>direct_url.json</code>.</p>
-<p><strong><code>test_dependencies_declared.py</code></strong>
-- AST-scan top-level imports in <code>src/</code>.
-- Map each import to a distribution with <code>packages_distributions()</code>, plus a static fallback map for when a package is not installed.
-- Assert every third-party import is declared in core or an extra.
-- Allowlist the intentionally external modules: <code>sleap</code>, <code>sleap_nn</code>, <code>sam3</code>, <code>clip</code>, <code>apriltag</code>, <code>tensorrt</code>, <code>cupy</code>, <code>coremltools</code>, <code>PyNvVideoCodec</code>, <code>decord</code>.</p>
-<p><strong><code>test_no_requirements_files.py</code></strong></p>
-<p><strong>GitHub Actions <code>install-smoke.yml</code></strong>
-- Matrix: <code>ubuntu-latest</code>, <code>macos-14</code>, <code>windows-latest</code> × Python 3.11 / 3.12 / 3.13.
-- Steps: <code>python install.py --target current --cuda none --skip-doctor</code> (apriltag included, to prove Windows builds) → <code>hydra doctor --json</code> → headless import of all kits → <code>pytest</code> on the installer, declared-dependency and doctor tests plus a fast non-GPU subset.
-- Ubuntu needs apt <code>libegl1 libxkbcommon0 libgl1 libdbus-1-3</code>; <code>QT_QPA_PLATFORM=offscreen</code> is set.</p>
-<h2 id="8-equivalence-proving-install-changes-dont-move-tracking-output">8. Equivalence: proving install changes don't move tracking output<a class="headerlink" href="#8-equivalence-proving-install-changes-dont-move-tracking-output" title="Permanent link">&para;</a></h2>
-<p><code>run_matrix.sh</code> compares two <code>src</code> trees in one env. This change instead swaps the <strong>env</strong> under the same src.</p>
-<p><strong>Protocol</strong>
-1. <strong>Baseline.</strong> In the existing env (<code>hydra-mps</code>; <code>hydra-cuda</code> on mehek), run <code>tools/equivalence/runner.py</code> for <code>fly_obb</code> and <code>worm_bgsub</code> with branch-base src. Write the output to <code>OUT_OLD</code>. The env is never rebuilt in place.
-2. <strong>Candidate.</strong> Build a fresh env under a <strong>new name</strong> (<code>hydra-mps-ssot</code>; <code>hydra-cuda-ssot</code> on mehek) with the installer. Run the same clips with the same src into <code>OUT_NEW</code>.
-3. <strong>Compare.</strong> Use <code>tools/equivalence/compare.py</code> across <code>OUT_OLD</code>/<code>OUT_NEW</code> for <code>_forward.csv</code> and <code>_tracking_final.csv</code>. Assert row counts &gt; 1.</p>
-<p><strong>Known risk.</strong> <code>cv2</code> decoding changes from a conda/pip mixture to pip <code>opencv-python-headless</code> (a different bundled FFmpeg). If pixels differ, the CSVs will differ. That is a genuine decision for the user, not something to paper over.</p>
-<h2 id="9-make-wrappers">9. Make wrappers<a class="headerlink" href="#9-make-wrappers" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>BOOT_PY ?= python3</code>.</li>
-<li><code>setup</code>/<code>setup-mps</code>/<code>setup-cuda</code> → <code>install.py --target conda --tier X --create-only</code>.</li>
-<li><code>install</code>/<code>install-mps</code>/<code>install-cuda</code> → <code>install.py --target current --tier X [--cuda $(CUDA_MAJOR)]</code>. <code>CUDA_MAJOR</code> has no default (auto).</li>
-<li><code>env-update*</code> → <code>--target conda --tier X --update</code>.</li>
-<li><code>install-dev</code>/<code>docs-install</code> → <code>--target current --dev</code> / <code>--docs</code> (extras only).</li>
-<li><code>install-apriltag-fork</code>/<code>install-sam3-clip</code>/<code>configure-mps-libs</code>/<code>configure-cuda-ort</code> stay as names and call the matching installer <code>--only &lt;step&gt;</code>. <code>configure-cuda-ort</code> becomes a no-op that prints the doctor result.</li>
-<li><code>setup-sam3-train</code> → <code>--with-sam3-train --only sam3-train</code>; <code>setup-sleap</code> is new.</li>
-</ul>
-<h2 id="10-rollout-order">10. Rollout order<a class="headerlink" href="#10-rollout-order" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Installer pure logic + unit tests.</li>
-<li>CI workflow.</li>
-<li><strong>Ask the user to push</strong> (Windows evidence).</li>
-<li>pyproject/yml/requirements.</li>
-<li><code>hydra doctor</code>.</li>
-<li>Fresh MPS env + equivalence.</li>
-<li>Runtime changes.</li>
-<li>SAM items.</li>
-<li>Docs.</li>
-<li>mehek/diptera gates.</li>
-<li>Adversarial review.</li>
-<li>Merge.</li>
-</ol>
 
 
 
@@ -2307,10 +2354,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      <script src="../../../../assets/javascripts/bundle.83f73b43.min.js"></script>
       
     
   </body>

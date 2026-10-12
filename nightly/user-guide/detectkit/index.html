@@ -708,6 +708,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../detection-limits/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Limits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../tracking-and-merging/" class="md-nav__link">
         
   
@@ -1018,6 +1039,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="SAM2 and SAM3 escalation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sam3-training-augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 training augmentation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -1104,6 +1140,27 @@
   
   <span class="md-ellipsis">
     DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
   </span>
   
 
@@ -2076,6 +2133,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="SAM2 and SAM3 escalation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sam3-training-augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      SAM3 training augmentation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
     </ul>
@@ -2171,6 +2243,67 @@ add-on. See <a href="../sam-install-and-run/">SAM2 and SAM3: install and run</a>
 devices, weights, the CLI and training setup, and
 <a href="../detectkit-semantic-escalation/">Semantic Escalation (SAM3)</a> for the SAM3
 workflow.</p>
+<h3 id="sam3-training-augmentation">SAM3 training augmentation<a class="headerlink" href="#sam3-training-augmentation" title="Permanent link">&para;</a></h3>
+<p>The SAM3 training tab has an <strong>Augmentation</strong> group that augments tiles at
+train time. It applies to the <strong>training split only</strong>; validation is never
+augmented. Image and polygons are transformed together.</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Meaning</th>
+<th>Fresh default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Flip left-right / up-down (p)</td>
+<td>Probability of a flip</td>
+<td>0.5 / 0.5</td>
+</tr>
+<tr>
+<td>Rotate 90 (p)</td>
+<td>Probability of a random-direction 90 degree rotation</td>
+<td>0.5</td>
+</tr>
+<tr>
+<td>Rotate +/- (deg)</td>
+<td>Maximum small-angle rotation (gray border fill)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Brightness / Contrast / Saturation +/-</td>
+<td>Colour jitter</td>
+<td>0.2 each</td>
+</tr>
+<tr>
+<td>Hue +/-</td>
+<td>HSV hue shift (fraction of the hue circle)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Decode-colour sim (p)</td>
+<td>Re-simulate video decode colour conversion</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Resample sim (p)</td>
+<td>Alternate-resampler sub-pixel warp</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Monochrome</td>
+<td>Convert tiles to grayscale</td>
+<td>off</td>
+</tr>
+</tbody>
+</table>
+<p>A fresh session starts with this recommended profile enabled. Set both flips
+to 0 for chiral concepts, and keep <code>hue</code> at 0 when colour is the concept. Saved
+presets from before augmentation existed keep the recommended profile.</p>
+<p>Headless, set the <code>sam3.augmentation</code> key in the training plan. When the key is
+omitted, augmentation is <strong>disabled</strong>, so existing plans train unchanged. Each
+run records the profile it used in <code>hydra_sam3_augmentation.json</code>.</p>
 
 
 

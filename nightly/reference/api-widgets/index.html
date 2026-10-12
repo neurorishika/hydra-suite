@@ -705,6 +705,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../user-guide/detection-limits/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Limits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../user-guide/tracking-and-merging/" class="md-nav__link">
         
   
@@ -983,6 +1004,27 @@
   
   <span class="md-ellipsis">
     DetectKit: SAHI Calibration Profiles
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/sahi-settings/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    SAHI Settings (TrackerKit + DetectKit)
   </span>
   
 
@@ -1807,9 +1849,27 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.widgets.workers.AbandonableWorker" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;AbandonableWorker
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.widgets.workers.bounded_worker_message" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;bounded_worker_message
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.widgets.workers.join_abandonable_workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;join_abandonable_workers
     </span>
   </a>
   
@@ -2212,9 +2272,27 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.widgets.workers.AbandonableWorker" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;AbandonableWorker
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.widgets.workers.bounded_worker_message" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;bounded_worker_message
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.widgets.workers.join_abandonable_workers" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;join_abandonable_workers
     </span>
   </a>
   
@@ -2545,6 +2623,60 @@ finished()     — inherited from QThread; emitted automatically by Qt
 
 </div>
 
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="hydra_suite.widgets.workers.AbandonableWorker" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <code>AbandonableWorker</code>
+
+
+<a href="#hydra_suite.widgets.workers.AbandonableWorker" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><a class="autorefs autorefs-internal" title="hydra_suite.widgets.workers.BaseWorker" href="#hydra_suite.widgets.workers.BaseWorker">BaseWorker</a></code></p>
+
+
+        <p>BaseWorker whose owner may go away while it is still running.</p>
+<p>Use for advisory background work (dataset analysis, previews) that a
+dialog starts and may close on before it finishes.  The thread is parented
+to the application rather than the dialog and deletes itself once
+finished, so closing (or garbage-collecting) the owner never destroys a
+running <code>QThread</code> -- which aborts the process.  When the application
+quits, every still-running instance is cancelled and joined.</p>
+<p>Subclasses poll <code>is_cancelled()</code> between units of work.  Owners abandon a
+run by calling <code>cancel()</code> and dropping their reference; their result
+slots should ignore signals whose <code>sender()</code> is no longer the current
+worker.</p>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
 
 <div class="doc doc-object doc-function">
 
@@ -2558,6 +2690,23 @@ finished()     — inherited from QThread; emitted automatically by Qt
     <div class="doc doc-contents ">
 
         <p>Return a UTF-8-safe, fixed-size Qt signal payload.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.widgets.workers.join_abandonable_workers" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">join_abandonable_workers</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.widgets.workers.join_abandonable_workers" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Cancel and wait for every running AbandonableWorker (called on quit).</p>
 
     </div>
 
