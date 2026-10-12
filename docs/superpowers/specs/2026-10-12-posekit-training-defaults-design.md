@@ -32,8 +32,12 @@ On the ant pose project (8,633 crops of 192x128, crowded colonies):
   `suggest_flip_pairs` (left/right, l/r naming), remapping on keypoint
   move/remove.
 - `core/pose_instances.py` (numpy): `instance_centers` (box centre, else
-  confident-keypoint mean) and `central_instance_index` (nearest the crop
-  centre, score breaks sub-pixel ties). `MAX_POSES_PER_CROP = 10` replaces the
+  confident-keypoint mean) and `central_instance_index`: among detections
+  with box confidence >= max(0.1, 0.25 x best) (pose models run at conf 1e-4,
+  so unfiltered near-zero fragments at the centre would win), the one nearest
+  the crop centre; confidence breaks sub-pixel ties. The rule version and
+  per-crop limit are part of the TrackerKit YOLO pose cache key; PoseKit's
+  prediction cache is bumped to v4 and only stores model-size predictions. `MAX_POSES_PER_CROP = 10` replaces the
   per-crop limit of 1 in PoseKit prediction, `PoseRuntimeConfig` and
   TrackerKit's `PoseYOLOConfig`.
 - `posekit/core/training_options.plan_flips`: flips run with pairs; a skeleton

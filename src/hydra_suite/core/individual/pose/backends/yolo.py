@@ -73,7 +73,7 @@ def auto_export_yolo_model(
     )
     sig_blob = (
         f"{path_fingerprint_token(str(model_path))}|runtime={runtime}|"
-        f"batch={int(config.yolo_batch)}|device={export_device}"
+        f"batch={int(config.yolo_batch)}|device={export_device}|imgsz=trained"
     ).encode("utf-8")
     sig = hashlib.sha1(sig_blob).hexdigest()[:16]
     if artifact_meta_matches(target_path, sig):
@@ -88,7 +88,9 @@ def auto_export_yolo_model(
         model = YOLO(str(model_path))
     export_kwargs: Dict[str, Any] = {
         "format": "onnx" if runtime == "onnx" else "engine",
-        "imgsz": 640,
+        # The size the model was trained at (a dynamic ONNX/engine artifact
+        # otherwise predicts at this export size, not the training size).
+        "imgsz": int(getattr(model, "overrides", {}).get("imgsz") or 640),
         "verbose": False,
         "project": str(target_path.parent),
         "name": model_path.stem,
@@ -277,12 +279,16 @@ class YoloNativeBackend:
         if xy.shape[0] <= 1:
             return 0
         boxes = None
+        scores = np.nanmean(conf, axis=1)
         try:
             b = result.boxes.xywh
             boxes = b.cpu().numpy() if hasattr(b, "cpu") else np.asarray(b)
+            c = result.boxes.conf
+            c = c.cpu().numpy() if hasattr(c, "cpu") else np.asarray(c)
+            if c.shape[0] == xy.shape[0]:
+                scores = c  # detection confidence, not keypoint mean
         except Exception:
             boxes = None
-        scores = np.nanmean(conf, axis=1)
         try:
             h, w = result.orig_shape[:2]
         except Exception:

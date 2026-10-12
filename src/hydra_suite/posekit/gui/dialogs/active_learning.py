@@ -545,7 +545,9 @@ class ActiveLearningDialog(QDialog):
         self.device_combo.setCurrentText(
             settings.get("device", self.device_combo.currentText())
         )
-        self.imgsz_spin.setValue(int(settings.get("imgsz", self.imgsz_spin.value())))
+        self.imgsz_spin.setValue(
+            int(settings.get("pred_imgsz", self.imgsz_spin.value()))
+        )
         self.conf_spin.setValue(float(settings.get("conf", self.conf_spin.value())))
         self.batch_spin.setValue(int(settings.get("batch", self.batch_spin.value())))
         self.weights_a_edit.setText(
@@ -587,7 +589,7 @@ class ActiveLearningDialog(QDialog):
                 "scope": self.scope_combo.currentText(),
                 "n": int(self.n_spin.value()),
                 "device": self.device_combo.currentText(),
-                "imgsz": int(self.imgsz_spin.value()),
+                "pred_imgsz": int(self.imgsz_spin.value()),
                 "conf": float(self.conf_spin.value()),
                 "batch": int(self.batch_spin.value()),
                 "weights_a": self.weights_a_edit.text().strip(),

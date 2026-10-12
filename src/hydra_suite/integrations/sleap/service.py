@@ -32,7 +32,9 @@ from hydra_suite.utils.conda_utils import popen_conda, run_conda
 class PoseInferenceService:
     """PoseInferenceService API surface documentation."""
 
-    CACHE_VERSION = 3
+    # 4: YOLO keys were Ultralytics' image0.jpg placeholders before; the
+    # pose nearest the crop centre is reported (core.pose_instances).
+    CACHE_VERSION = 4
 
     def __init__(
         self,
@@ -357,7 +359,9 @@ class PoseInferenceService:
         if not ok:
             return None, err
 
-        if cache_predictions:
+        # The cache is keyed by model only, so it holds predictions made at the
+        # model's own size; an explicit size is a one-off and stays uncached.
+        if cache_predictions and int(imgsz or 0) <= 0:
             self.merge_cache(model_path, preds, backend=backend)
         return preds, ""
 
@@ -553,13 +557,18 @@ def _run_pose_predict_subprocess(
         "        scores=np.zeros((xy.shape[0],),dtype=np.float32)\n"
         "    best=int(np.argmax(scores)) if len(scores)>0 else 0\n"
         "    if xy.shape[0]>1:\n"
+        "      det=scores\n"
         "      try:\n"
         "        bx=r.boxes.xywh\n"
         "        bx=bx.cpu().numpy() if hasattr(bx,'cpu') else np.asarray(bx)\n"
+        "        bc=r.boxes.conf\n"
+        "        bc=bc.cpu().numpy() if hasattr(bc,'cpu') else np.asarray(bc)\n"
+        "        if bc.shape[0]==xy.shape[0]:\n"
+        "          det=bc\n"
         "      except Exception:\n"
         "        bx=None\n"
         "      oh,ow=r.orig_shape[:2]\n"
-        "      best=central_instance_index(instance_centers(xy,conf,bx),(ow,oh),scores)\n"
+        "      best=central_instance_index(instance_centers(xy,conf,bx),(ow,oh),det)\n"
         "    pred_xy=xy[best]\n"
         "    pred_conf=conf[best] if conf is not None else np.zeros((pred_xy.shape[0],),dtype=np.float32)\n"
         "    pred_conf=np.clip(np.asarray(pred_conf,dtype=np.float32),0.0,1.0)\n"

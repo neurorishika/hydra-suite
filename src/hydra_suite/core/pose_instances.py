@@ -2,7 +2,8 @@
 
 Pose crops are centred on one animal, but neighbours often reach into the
 frame and a YOLO-pose model can return a pose for each of them.  The crop's
-animal is the one nearest the crop centre; confidence only breaks ties.
+animal is the one nearest the crop centre among the confident detections;
+confidence also breaks ties.
 (Picking the most confident pose instead reports a neighbour whenever the
 neighbour happens to be clearer.)
 
@@ -18,6 +19,15 @@ import numpy as np
 # Poses a YOLO-pose model may return per crop.  More than one is needed for the
 # centre rule to choose; a crop rarely holds more than a few animals.
 MAX_POSES_PER_CROP = 10
+# Part of pose cache keys: bump when the selection rule changes.
+POSE_SELECTION_VERSION = "central-v1"
+# Candidates for "nearest the centre": detection confidence at least this
+# fraction of the best detection's and at least the absolute floor.  Pose
+# models run at very low thresholds (1e-4), so without this a near-zero
+# fragment sitting at the centre would beat the animal.  A quarter still lets
+# a partly hidden central animal (0.4) win over a clear neighbour (0.95).
+MIN_RELATIVE_SCORE = 0.25
+MIN_ABSOLUTE_SCORE = 0.1
 
 
 def instance_centers(
@@ -58,10 +68,13 @@ def central_instance_index(
     image_wh: Sequence[float],
     scores: Optional[np.ndarray] = None,
 ) -> int:
-    """Index of the instance nearest the image centre.
+    """Index of the confident instance nearest the image centre.
 
-    Distances within a pixel count as a tie, won by the higher score.  With no
-    usable centre at all, the highest score wins (0 without scores).
+    ``scores`` are detection confidences.  Only instances scoring at least
+    ``MIN_RELATIVE_SCORE`` of the best and ``MIN_ABSOLUTE_SCORE`` compete (just
+    the best one when nothing reaches the floor); among those, distances within
+    a pixel count as a tie, won by the higher score.  With no usable centre the
+    highest score wins (0 without scores).
     """
     centers = np.asarray(centers, dtype=np.float64).reshape(-1, 2)
     n = centers.shape[0]
@@ -74,9 +87,12 @@ def central_instance_index(
     )
     if s.shape[0] < n:
         s = np.pad(s, (0, n - s.shape[0]))
+    best = float(s.max())
+    floor = max(MIN_RELATIVE_SCORE * best, MIN_ABSOLUTE_SCORE)
+    eligible = s >= floor if best >= MIN_ABSOLUTE_SCORE else s >= best
     mid = np.array([float(image_wh[0]) / 2.0, float(image_wh[1]) / 2.0])
     dist = np.linalg.norm(centers - mid, axis=1)
-    dist = np.where(np.isfinite(dist), dist, np.inf)
+    dist = np.where(np.isfinite(dist) & eligible, dist, np.inf)
     if not np.isfinite(dist).any():
         return int(np.argmax(s))
     near = np.flatnonzero(dist <= dist.min() + 1.0)

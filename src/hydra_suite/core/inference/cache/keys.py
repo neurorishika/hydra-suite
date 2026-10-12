@@ -6,6 +6,7 @@ from dataclasses import replace
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.pose_instances import POSE_SELECTION_VERSION
 
 from ..config import (
     TRACKER_RAW_OBB_CONFIDENCE_FLOOR,
@@ -375,8 +376,16 @@ def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     # background_color was dropped from PoseConfig: it was always (0, 0, 0)
     # (never populated by from_parameters), so removing it does not change
     # any hash produced by any existing config in practice.
+    selection = ""
+    if config.backend == "yolo":
+        # Which of several poses in a crop is reported changes the output.
+        selection = (
+            f"|maxdet{backend_config.max_detections_per_crop}"
+            f"|{POSE_SELECTION_VERSION}"
+        )
     config_hash = _sha(
         f"{config.suppress_foreign_regions}|{canonical_geometry_key(geometry)}"
+        f"{selection}"
     ) + _batch_term(backend_config.batch_size, _default_batch_size(backend_config))
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,

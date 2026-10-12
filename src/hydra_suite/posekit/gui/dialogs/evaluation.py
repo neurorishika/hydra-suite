@@ -656,7 +656,7 @@ class EvaluationDashboardDialog(QDialog):
         if not self._lock_model:
             self.weights_edit.setText(settings.get("weights", ""))
         self.device_combo.setCurrentText(settings.get("device", "auto"))
-        self.imgsz_spin.setValue(int(settings.get("imgsz", 0)))
+        self.imgsz_spin.setValue(int(settings.get("pred_imgsz", 0)))
         self.conf_spin.setValue(float(settings.get("conf", 0.25)))
         self.pck_spin.setValue(float(settings.get("pck", 0.05)))
         self.oks_spin.setValue(float(settings.get("oks", 0.1)))
@@ -671,7 +671,7 @@ class EvaluationDashboardDialog(QDialog):
             {
                 "weights": self.weights_edit.text() if not self._lock_model else "",
                 "device": self.device_combo.currentText(),
-                "imgsz": self.imgsz_spin.value(),
+                "pred_imgsz": self.imgsz_spin.value(),
                 "conf": self.conf_spin.value(),
                 "pck": self.pck_spin.value(),
                 "oks": self.oks_spin.value(),

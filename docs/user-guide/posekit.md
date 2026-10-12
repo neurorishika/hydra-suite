@@ -155,9 +155,12 @@ Clustering also writes `posekit/clusters/clusters.csv` for every frame, which th
 
 A crop belongs to the animal at its centre; neighbours reaching into the frame are
 not labelled. When a YOLO-pose model finds several animals in a crop (up to 10 are
-kept), PoseKit and TrackerKit report the pose nearest the crop centre, not the most
-confident one, so a clearer neighbour no longer replaces the crop's own animal.
-ViTPose predicts one pose per crop.
+kept), PoseKit and TrackerKit report the pose nearest the crop centre among the
+confident detections (confidence at least 0.1 and at least a quarter of the best
+one), not simply the most confident, so a clearer neighbour no longer replaces the
+crop's own animal while near-zero fragments are ignored. ViTPose predicts one pose
+per crop. TrackerKit pose caches made with YOLO-pose before this change are
+recomputed.
 
 ## Training Augmentation
 

@@ -151,3 +151,31 @@ def test_vitpose_local_flip_index_matches_core():
 
     for pairs, k in (([(0, 1), (2, 3)], 6), ([], 3), ([(1, 4)], 5)):
         assert vit_flip_index(pairs, k) == flip_index(pairs, k)
+
+
+def test_central_ignores_low_confidence_fragments():
+    # real animal 4 px off-centre at 0.95; junk box exactly centred at 3e-4
+    centers = np.array([[100.0, 64.0], [96.0, 64.0]])
+    assert central_instance_index(centers, (192, 128), np.array([0.95, 3e-4])) == 0
+    # a partly hidden central animal (0.4) still beats a clear neighbour
+    centers = np.array([[20.0, 20.0], [96.0, 64.0]])
+    assert central_instance_index(centers, (192, 128), np.array([0.95, 0.4])) == 1
+    # nothing confident: the best one wins
+    assert central_instance_index(centers, (192, 128), np.array([0.05, 0.02])) == 0
+
+
+def test_yolo_pose_cache_key_tracks_the_selection_rule():
+    from hydra_suite.core.inference.cache.keys import pose_cache_key
+    from hydra_suite.core.inference.config import PoseConfig, PoseYOLOConfig
+
+    from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
+    geom = CanonicalGeometry(canvas_wh=(96, 48), margin=1.3, aspect_ratio=2.0)
+    one = PoseConfig(
+        backend="yolo",
+        yolo=PoseYOLOConfig(model_path="m.pt", max_detections_per_crop=1),
+    )
+    ten = PoseConfig(backend="yolo", yolo=PoseYOLOConfig(model_path="m.pt"))
+    assert (
+        pose_cache_key(one, geom).config_hash != pose_cache_key(ten, geom).config_hash
+    )
