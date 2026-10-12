@@ -500,7 +500,12 @@ class ChunkedArrayStore:
                 current_shape = tuple(
                     int(value) for value in arrays["keypoints"].shape[1:]
                 )
-                if pose_shape is None:
+                # Same rule as PoseCacheHandle's writer: a chunk with no
+                # detections is flushed as (0, 0, 3) before any keypoint shape
+                # is known -- it carries no shape and must not be compared.
+                if arrays["keypoints"].shape[0] == 0:
+                    pass
+                elif pose_shape is None:
                     pose_shape = current_shape
                 elif pose_shape != current_shape:
                     self._valid = False

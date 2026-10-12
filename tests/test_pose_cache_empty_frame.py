@@ -66,3 +66,22 @@ def test_a_real_shape_change_is_still_rejected(tmp_path, key):
     _write(h, 0, 2, KPTS)
     with pytest.raises(ValueError, match="keypoint dimensions must remain constant"):
         _write(h, 1, 2, KPTS + 1)
+
+
+def test_whole_empty_chunk_before_real_frames_stays_reusable(tmp_path, key):
+    """An entire chunk of zero-detection frames is flushed as (0, 0, 3) before
+    any keypoint shape is known. The read-side integrity check (is_reusable)
+    compared that against later (n, K, 3) chunks and rejected the whole cache:
+    'refusing to promote an incomplete cache generation' on any video whose
+    ROI is empty for a chunk's worth of frames (Libby X5_d10, 2026-10-12)."""
+    h = PoseCacheHandle(tmp_path / "pose.npz", key, chunk_size=4)
+    for f in range(4):
+        _write(h, f, 0, 0)  # a full chunk with no detections
+    for f in range(4, 10):
+        _write(h, f, 2, KPTS)
+    h.close()
+
+    r = PoseCacheHandle(tmp_path / "pose.npz", key)
+    assert r.is_reusable()
+    assert r.read_frame(5)[0].shape == (2, KPTS, 3)
+    assert r.read_frame(1)[0].shape[0] == 0
