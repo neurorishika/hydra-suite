@@ -2037,7 +2037,11 @@ class TrainingRunnerDialog(QDialog):
         """Recipe values, with the flip test only where a mirror is meaningful:
         left-right flips trained, and every side keypoint paired (or none)."""
         params = self.vitpose_recipe.params()
-        side_like = unpaired_side_keypoints(self.project.keypoint_names, flips.pairs)
+        side_like = (
+            []  # the user declared the side-like names midline
+            if self.cb_flip_unpaired.isChecked()
+            else unpaired_side_keypoints(self.project.keypoint_names, flips.pairs)
+        )
         if params.get("flip_test") and (flips.fliplr <= 0 or side_like):
             params["flip_test"] = False
             self._append_log(

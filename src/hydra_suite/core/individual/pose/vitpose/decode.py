@@ -130,7 +130,9 @@ def _post_dark_udp(
     hessian = np.concatenate([dxx, dxy, dxy, dyy], axis=1)
     hessian = hessian.reshape(N, K, 2, 2)
     hessian = np.linalg.inv(hessian + np.finfo(np.float32).eps * np.eye(2))
-    coords -= np.einsum("ijmn,ijnk->ijmk", hessian, derivative).squeeze()
+    # squeeze only the trailing column axis: with one keypoint (K=1) a bare
+    # squeeze() also dropped K and broke the subtraction
+    coords -= np.einsum("ijmn,ijnk->ijmk", hessian, derivative).squeeze(-1)
     return coords
 
 

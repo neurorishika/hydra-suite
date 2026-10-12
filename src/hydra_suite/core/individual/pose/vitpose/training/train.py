@@ -121,6 +121,18 @@ def train(cfg: RunConfig) -> dict:
         f"SPLIT by={cfg.split_by} train={len(train_ids)} val={len(val_ids)}",
         flush=True,
     )
+    share = len(val_ids) / max(1, len(all_ids))
+    if abs(share - cfg.val_fraction) > 0.1:
+        print(
+            f"WARNING validation holds {share:.0%} of the crops (asked "
+            f"{cfg.val_fraction:.0%}): the split groups are large; try another "
+            "split seed or a finer split",
+            flush=True,
+        )
+    if not train_ids or not val_ids:
+        raise ValueError(
+            f"split left train={len(train_ids)} val={len(val_ids)}; need both"
+        )
     aug = AugmentParams(
         rotation=cfg.rotation,
         rotation_prob=cfg.rotation_prob,
@@ -193,6 +205,8 @@ def train(cfg: RunConfig) -> dict:
         best_nme = float(resume_ckpt.get("nme", float("inf")))
         best_epoch = int(resume_ckpt.get("best_epoch", resume_ckpt["epoch"]))
         stale = int(resume_ckpt.get("stale", 0))
+        if cfg.patience and stale >= cfg.patience:
+            stale = 0  # resuming an early-stopped run: give it a fresh count
         if "best_epoch" not in resume_ckpt:
             # Older checkpoints store this epoch's PCK, not the best: take
             # the best from the run's best.pt so it is not overwritten by a

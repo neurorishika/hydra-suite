@@ -414,3 +414,24 @@ def test_group_key_ignores_collision_suffix():
 def test_run_config_rejects_wrong_types(bad):
     with pytest.raises(ValueError):
         validate_run_config(dict(BASE, **bad))
+
+
+def test_single_video_split_keeps_frames_together():
+    names = {i: f"vid__f{i // 5}__{i % 5:03d}.png" for i in range(50)}  # 10 frames
+    train, val = split_ids(list(range(50)), names, 0.2, 0, "video")
+    assert train and val
+    frames = lambda ids: {group_key(names[i], "frame") for i in ids}  # noqa: E731
+    assert not frames(train) & frames(val)
+
+
+def test_decode_handles_a_single_keypoint():
+    from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_cv2
+
+    rng = np.random.default_rng(0)
+    coords, maxvals = decode_udp_cv2(rng.random((3, 1, 16, 12)), kernel=3)
+    assert coords.shape == (3, 1, 2) and maxvals.shape == (3, 1, 1)
+
+
+def test_ema_decay_null_is_a_value_error():
+    with pytest.raises(ValueError):
+        validate_run_config(dict(BASE, ema_decay=None))

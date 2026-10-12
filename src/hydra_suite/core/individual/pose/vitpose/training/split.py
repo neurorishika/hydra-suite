@@ -48,6 +48,15 @@ def split_ids(
     groups: dict[str, list[int]] = {}
     for i in ids:
         groups.setdefault(group_key(file_names[i], split_by), []).append(i)
+    # Too few groups (one video, one frame): step down a level -- video, then
+    # frame, then single images -- rather than straight to images, which
+    # would put crops of one frame on both sides.
+    for finer in ("frame", "image")[("video", "frame", "image").index(split_by) :]:
+        if len(groups) >= 2:
+            break
+        groups = {}
+        for i in ids:
+            groups.setdefault(group_key(file_names[i], finer), []).append(i)
     if len(groups) < 2:
         groups = {str(i): [i] for i in ids}
     keys = sorted(groups)
