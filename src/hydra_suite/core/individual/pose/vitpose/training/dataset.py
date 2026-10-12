@@ -8,8 +8,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from hydra_suite.core.pose_flip import flip_index
-
 from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import affine_matrix, box2cs, normalize, top_down_affine
 from .targets import generate_udp_gaussian
@@ -188,6 +186,19 @@ class CocoKeypointsDataset(Dataset):
             "bbox": torch.tensor(ann["bbox"], dtype=torch.float32),
             "image_id": int(ann["image_id"]),
         }
+
+
+def flip_index(pairs, num_kpts: int) -> list[int]:
+    """Keypoint permutation for a mirror: each left/right pair swaps rows.
+
+    (``RunConfig`` validates the pairs; ``vitpose/`` stays free of
+    ``hydra_suite`` imports, so this mirrors ``core.pose_flip.flip_index``.)
+    """
+    idx = list(range(num_kpts))
+    for a, b in pairs or ():
+        if 0 <= a < num_kpts and 0 <= b < num_kpts:
+            idx[a], idx[b] = idx[b], idx[a]
+    return idx
 
 
 def _mirror(

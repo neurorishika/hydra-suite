@@ -141,3 +141,13 @@ def test_pose_detection_limit_allows_neighbours():
     assert MAX_POSES_PER_CROP > 1
     assert PoseRuntimeConfig(backend_family="yolo").yolo_max_det == MAX_POSES_PER_CROP
     assert PoseYOLOConfig(model_path="m.pt").max_detections_per_crop > 1
+
+
+def test_vitpose_local_flip_index_matches_core():
+    pytest.importorskip("torch")
+    from hydra_suite.core.individual.pose.vitpose.training.dataset import (
+        flip_index as vit_flip_index,
+    )
+
+    for pairs, k in (([(0, 1), (2, 3)], 6), ([], 3), ([(1, 4)], 5)):
+        assert vit_flip_index(pairs, k) == flip_index(pairs, k)
