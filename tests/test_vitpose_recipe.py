@@ -435,3 +435,51 @@ def test_decode_handles_a_single_keypoint():
 def test_ema_decay_null_is_a_value_error():
     with pytest.raises(ValueError):
         validate_run_config(dict(BASE, ema_decay=None))
+
+
+def test_best_checkpoint_is_inference_only():
+    from hydra_suite.core.individual.pose.vitpose.training.train import (
+        inference_checkpoint,
+    )
+
+    full = {
+        "model_state": {"w": 1},
+        "train_state": {"w": 2},
+        "optim_state": {},
+        "ema_state": {},
+        "sched_state": {},
+        "stale": 3,
+        "variant": "L",
+        "input_size": [160, 256],
+        "num_keypoints": 8,
+        "epoch": 7,
+        "pck": 0.1,
+    }
+    slim = inference_checkpoint(full, 0.8, 0.05)
+    assert set(slim) == {
+        "model_state",
+        "variant",
+        "input_size",
+        "num_keypoints",
+        "epoch",
+        "pck",
+        "nme",
+    }
+    assert slim["pck"] == 0.8 and slim["nme"] == 0.05
+
+
+def test_vitpose_model_recognised_by_its_run_json(tmp_path, monkeypatch):
+    import hydra_suite.paths as paths
+    from hydra_suite.posekit.core.training_options import is_vitpose_run
+
+    monkeypatch.setattr(paths, "get_training_runs_dir", lambda: tmp_path / "runs")
+    model = tmp_path / "project" / "models" / "vitpose_l" / "best.pt"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"x")
+    assert not is_vitpose_run(model)
+    (model.parent / "run.json").write_text(json.dumps({"variant": "L"}))
+    assert is_vitpose_run(model)
+    yolo = tmp_path / "project" / "runs" / "yolo_pose" / "1" / "weights" / "best.pt"
+    yolo.parent.mkdir(parents=True)
+    (yolo.parent.parent / "args.yaml").write_text("imgsz: 192\n")
+    assert not is_vitpose_run(yolo)

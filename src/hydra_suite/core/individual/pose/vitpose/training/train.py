@@ -95,6 +95,22 @@ def _append_metrics(path: Path, row: dict) -> None:
         csv.DictWriter(fh, fieldnames=header, extrasaction="ignore").writerow(row)
 
 
+_TRAINING_ONLY_KEYS = (
+    "train_state",
+    "optim_state",
+    "ema_state",
+    "sched_state",
+    "stale",
+)
+
+
+def inference_checkpoint(ckpt: dict, pck: float, nme: float) -> dict:
+    """``ckpt`` without the resume state, scored with this epoch's metrics."""
+    slim = {k: v for k, v in ckpt.items() if k not in _TRAINING_ONLY_KEYS}
+    slim["pck"], slim["nme"] = pck, nme
+    return slim
+
+
 def train(cfg: RunConfig) -> dict:
     _seed_everything(cfg.seed)
     out_dir = Path(cfg.output_dir)
@@ -321,8 +337,10 @@ def train(cfg: RunConfig) -> dict:
             ckpt["ema_state"] = ema.state_dict()
         torch.save(ckpt, out_dir / "last.pt")
         if better:
-            ckpt["pck"], ckpt["nme"] = p05, nme
-            torch.save(ckpt, out_dir / "best.pt")
+            # best.pt is for inference: weights and metadata only (a few
+            # hundred MB instead of several GB with optimizer/EMA state);
+            # last.pt carries everything a resume needs.
+            torch.save(inference_checkpoint(ckpt, p05, nme), out_dir / "best.pt")
         if cfg.patience and stale >= cfg.patience:
             print(
                 f"EARLY STOP epoch={epoch}: no better validation for "

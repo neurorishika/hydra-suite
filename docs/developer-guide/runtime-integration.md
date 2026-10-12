@@ -403,8 +403,12 @@ Fields:
 Defaults keep older `run.json` files on the original recipe; the Training Runner
 writes the recommended values. Each epoch prints an `EPOCH ...` line (loss, PCK)
 and a `METRICS epoch=<n> nme=<x> lr=<y>` line; `metrics.csv` has the same columns.
-With EMA on, `model_state` in `best.pt`/`last.pt` holds the averaged weights and
-`train_state`/`ema_state` the resume state.
+`model_state` holds the inference weights (the averaged ones with EMA on).
+`best.pt` carries only those plus metadata (`variant`, `input_size`,
+`num_keypoints`, `epoch`, `pck`, `nme`); `last.pt` adds the resume state
+(`train_state`, `optim_state`, `ema_state`, `sched_state`, `stale`). A copy of a
+ViTPose `best.pt` outside the training-runs folder is recognised as ViTPose by
+the `run.json` beside it.
 
 The CLI prints `DONE best_pck=<value> best_epoch=<n>` on completion and exits non-zero
 on validation/training failure.
