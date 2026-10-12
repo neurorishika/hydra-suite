@@ -308,3 +308,55 @@ def test_encoder_rate_keeps_fractional_fps(fps, expected):
 
     assert _encoder_rate(fps) == Fraction(expected)
     assert _encoder_rate(Fraction(30000, 1001)) == Fraction(30000, 1001)
+
+
+# ── Hardware-encoder rate control ─────────────────────────────────────────────
+
+
+def test_hardware_bit_rate_scales_with_pixel_rate():
+    """The target scales with w*h*fps, so a downscaled render gets a smaller file."""
+    from hydra_suite.utils.video_encoder import _hardware_bit_rate
+
+    full = _hardware_bit_rate(2632, 2632, 25.0)
+    half = _hardware_bit_rate(1316, 1316, 25.0)
+    assert full == pytest.approx(4 * half, rel=0.01)
+    assert _hardware_bit_rate(1316, 1316, 50.0) == pytest.approx(2 * half, rel=0.01)
+
+
+@pytest.mark.parametrize("backend", ["videotoolbox", "nvenc"])
+def test_hardware_backends_set_a_bit_rate(tmp_path, monkeypatch, backend):
+    """Hardware encoders must get a rate target.
+
+    With none, VideoToolbox and NVENC (preset p4, tune ll) run unconstrained:
+    measured 8-19x the bitrate of libx264 CRF 23 for <1 dB PSNR, so a 0.5x
+    render came out bigger than the source video.
+    """
+    import hydra_suite.utils.video_encoder as ve
+
+    stream = mock.Mock()
+    container = mock.Mock()
+    container.add_stream.return_value = stream
+    monkeypatch.setitem(sys.modules, "av", mock.Mock(open=lambda *a, **k: container))
+    monkeypatch.setattr(ve, "_NVENC_ACTIVE", 0)
+
+    enc = ve.VideoEncoder(
+        tmp_path / "hw.mp4", fps=25.0, width=1316, height=1316, backend=backend
+    )
+    assert stream.bit_rate == ve._hardware_bit_rate(1316, 1316, 25.0)
+    enc._container = None  # mock container: skip flush
+    enc.release()
+
+
+def test_software_backend_keeps_crf(tmp_path):
+    """libx264 stays on CRF (quality-targeted); no bit_rate is forced on it."""
+    av = pytest.importorskip("av")
+    if "libx264" not in av.codecs_available:
+        pytest.skip("libx264 not available")
+    from hydra_suite.utils.video_encoder import VideoEncoder
+
+    enc = VideoEncoder(
+        tmp_path / "sw.mp4", fps=10.0, width=64, height=48, backend="pyav_software"
+    )
+    assert enc._stream.options.get("crf") == "23"
+    enc.write(np.zeros((48, 64, 3), dtype=np.uint8))
+    enc.release()

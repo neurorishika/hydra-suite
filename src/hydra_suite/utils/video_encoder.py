@@ -44,6 +44,20 @@ _AV_CODEC_OPTS: dict[str, dict[str, str]] = {
     "pyav_software": {"preset": "fast", "crf": "23"},
 }
 
+# Hardware encoders get an explicit bitrate target. Unset, VideoToolbox and
+# NVENC run effectively unconstrained: measured 8-19x the bitrate of libx264
+# CRF 23 for < 1 dB PSNR, so a 0.5x render came out larger than its source.
+# 0.05 bits/pixel lands at libx264 CRF 23's PSNR (within ~0.5 dB on the
+# equivalence clips) at roughly 1-2x its size, still well under the source.
+_HW_BITS_PER_PIXEL = 0.05
+_HW_RATE_CONTROLLED = ("videotoolbox", "nvenc")
+
+
+def _hardware_bit_rate(width: int, height: int, fps: float) -> int:
+    """Bitrate target (bits/s) for a hardware encoder, scaled by pixel rate."""
+    return int(_HW_BITS_PER_PIXEL * width * height * float(fps))
+
+
 # H.264 Level 5.2 MaxFS = 36 864 macroblocks × 256 = 9 437 184 luma samples.
 # Frames larger than this must use HEVC, which has no practical limit for video.
 _H264_MAX_PIXELS = 9_437_184
@@ -261,6 +275,10 @@ class VideoEncoder:
                 self._stream.pix_fmt = "yuv420p"
                 if opts:
                     self._stream.options = opts
+                if self._backend in _HW_RATE_CONTROLLED:
+                    self._stream.bit_rate = _hardware_bit_rate(
+                        self._width, self._height, self._fps
+                    )
             except Exception:
                 if self._used_nvenc:
                     _NVENC_ACTIVE = max(0, _NVENC_ACTIVE - 1)
