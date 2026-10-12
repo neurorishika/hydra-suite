@@ -158,3 +158,72 @@ def test_posekit_open_project_from_manifest_recovers_using_legacy_file(
     assert loaded.project_path == canonical_project_path(project.out_root)
     assert canonical_project_path(project.out_root).exists()
     assert (project.out_root / "history" / f"legacy_{DEFAULT_PROJECT_NAME}").exists()
+
+
+def test_cli_project_standalone_bundle_is_not_relocated(tmp_path: Path) -> None:
+    """A bundle beside a separate images folder opens where it is."""
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    crops = tmp_path / "crops"
+    (crops / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    bundle = tmp_path / "pose_project"
+    state = bundle / "state" / DEFAULT_PROJECT_NAME
+    state.parent.mkdir(parents=True)
+    state.write_text("{}")
+    for selected in (state, bundle / "hydra_project.json", bundle):
+        assert dataset_dir_for_cli_project(selected, None) is None
+
+
+def test_cli_project_dataset_anchored_project_uses_dataset(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    proj = _make_posekit_project(tmp_path / "ds")
+    path = save_project_state(proj)
+    assert dataset_dir_for_cli_project(path, None) == (tmp_path / "ds").resolve()
+    explicit = tmp_path / "other"
+    assert dataset_dir_for_cli_project(path, explicit) == explicit
+
+
+def test_cli_project_legacy_layouts_still_repair(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    ds = tmp_path / "ds"
+    (ds / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    (ds / "labels").mkdir()
+    for legacy in (ds / DEFAULT_PROJECT_NAME, ds / "labels" / DEFAULT_PROJECT_NAME):
+        legacy.write_text("{}")
+        assert dataset_dir_for_cli_project(legacy, None) == ds
+
+
+def test_cli_project_symlinked_posekit_project_dir(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.main import dataset_dir_for_cli_project
+
+    ds = tmp_path / "ds"
+    (ds / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    real = tmp_path / "elsewhere" / "proj"
+    (real / "state").mkdir(parents=True)
+    (real / "state" / DEFAULT_PROJECT_NAME).write_text("{}")
+    (ds / DEFAULT_POSEKIT_PROJECT_DIR).symlink_to(real, target_is_directory=True)
+    selected = ds / DEFAULT_POSEKIT_PROJECT_DIR / "state" / DEFAULT_PROJECT_NAME
+    assert dataset_dir_for_cli_project(selected, None) == ds
+
+
+def test_repair_keeps_legacy_labels_dir(tmp_path: Path) -> None:
+    from hydra_suite.posekit.gui.project import _repair_project_paths
+
+    ds = tmp_path / "ds"
+    (ds / DEFAULT_DATASET_IMAGES_DIR).mkdir(parents=True)
+    (ds / "labels").mkdir()
+    (ds / "labels" / "a.txt").write_text("0 0.5 0.5 1 1 0.1 0.1 2 0.2 0.2 2\n")
+    proj = Project(
+        images_dir=Path("/old/machine/ds/images"),
+        out_root=Path("/old/machine/ds"),
+        labels_dir=Path("/old/machine/ds/labels"),
+        project_path=Path("/old/machine/ds/pose_project.json"),
+        class_names=["ant"],
+        keypoint_names=["head", "tail"],
+        skeleton_edges=[(0, 1)],
+    )
+    assert _repair_project_paths(proj, ds)
+    assert proj.images_dir == (ds / DEFAULT_DATASET_IMAGES_DIR).resolve()
+    assert proj.labels_dir == (ds / "labels").resolve()  # labels not hidden

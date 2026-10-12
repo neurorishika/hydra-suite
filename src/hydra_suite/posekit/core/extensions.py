@@ -329,243 +329,6 @@ def _enhance_pil_for_pose(img_pil):
     return Image.fromarray(rgb2)
 
 
-def _cosine_sim_matrix(A: np.ndarray, B: np.ndarray) -> np.ndarray:
-    """Compute cosine similarity matrix between L2-normalized embeddings."""
-    # assumes A, B are L2-normalized
-    return A @ B.T
-
-
-def _farthest_point_centers(emb: np.ndarray, k: int, seed: int = 0) -> List[int]:
-    """Select k centers using farthest-point sampling on embeddings."""
-    # emb: (n,d) L2-normalized
-    n = emb.shape[0]
-    if k <= 0:
-        return []
-    rng = np.random.default_rng(seed)
-    first = int(rng.integers(0, n))
-    centers = [first]
-    # maintain best similarity to any chosen center (higher is closer)
-    best_sim = _cosine_sim_matrix(emb, emb[[first]]).reshape(-1)
-    for _ in range(1, min(k, n)):
-        # pick point with lowest similarity to nearest center
-        idx = int(np.argmin(best_sim))
-        centers.append(idx)
-        new_sim = _cosine_sim_matrix(emb, emb[[idx]]).reshape(-1)
-        best_sim = np.maximum(best_sim, new_sim)
-    return centers
-
-
-def cluster_embeddings_cosine(
-    emb: np.ndarray,
-    k: int,
-    method: str = "hierarchical",
-    seed: int = 0,
-    hierarchical_limit: int = 2500,
-) -> np.ndarray:
-    """
-    Cluster embeddings using cosine similarity.
-    Returns cluster labels in [0..k-1].
-    """
-    n = emb.shape[0]
-    k = max(1, min(int(k), n))
-
-    if method == "hierarchical" and n <= hierarchical_limit:
-        from scipy.cluster.hierarchy import fcluster, linkage
-        from scipy.spatial.distance import pdist
-
-        # pdist with cosine => 1 - cosine_similarity
-        dist = pdist(emb, metric="cosine")
-        Z = linkage(dist, method="ward")
-        labels = fcluster(Z, t=k, criterion="maxclust")
-        return (labels - 1).astype(np.int32)
-
-    # fallback: farthest-point centers + nearest-center assignment
-    centers = _farthest_point_centers(emb, k=k, seed=seed)
-    C = emb[centers]
-    sims = _cosine_sim_matrix(emb, C)  # (n,k)
-    return np.argmax(sims, axis=1).astype(np.int32)
-
-
-def pick_frames_stratified(
-    emb: np.ndarray,
-    cluster_id: np.ndarray,
-    want_n: int,
-    eligible_indices: List[int],
-    min_per_cluster: int = 1,
-    seed: int = 0,
-    strategy: str = "centroid_then_diverse",  # or "centroid"
-) -> List[int]:
-    """
-    Select frames stratified by cluster.
-    emb: embeddings for eligible_indices (same order)
-    cluster_id: cluster labels for eligible_indices
-    returns: selected *global* indices (from eligible_indices mapping)
-    """
-    want_n = max(0, min(int(want_n), len(eligible_indices)))
-    if want_n == 0:
-        return []
-
-    # cluster -> local positions
-    clusters: Dict[int, List[int]] = {}
-    for pos, cid in enumerate(cluster_id):
-        clusters.setdefault(int(cid), []).append(pos)
-
-    # order clusters by size (largest first)
-    cluster_keys = sorted(clusters.keys(), key=lambda c: len(clusters[c]), reverse=True)
-
-    # If more clusters than want_n, keep only top want_n clusters (still diverse-ish)
-    if len(cluster_keys) > want_n:
-        cluster_keys = cluster_keys[:want_n]
-
-    # initial quotas
-    quotas = {c: 0 for c in cluster_keys}
-    remaining = want_n
-
-    # give each cluster min_per_cluster (as possible)
-    for c in cluster_keys:
-        give = min(min_per_cluster, len(clusters[c]), remaining)
-        quotas[c] += give
-        remaining -= give
-        if remaining <= 0:
-            break
-
-    if remaining > 0:
-        # proportional allocation
-        total_sz = sum(len(clusters[c]) for c in cluster_keys)
-        for c in cluster_keys:
-            frac = len(clusters[c]) / max(total_sz, 1)
-            extra = int(round(frac * remaining))
-            # don't exceed cluster size
-            cap = len(clusters[c]) - quotas[c]
-            extra = min(extra, cap, remaining)
-            quotas[c] += extra
-            remaining -= extra
-            if remaining <= 0:
-                break
-
-        # leftover
-        while remaining > 0:
-            for c in cluster_keys:
-                if quotas[c] < len(clusters[c]):
-                    quotas[c] += 1
-                    remaining -= 1
-                    if remaining <= 0:
-                        break
-
-    selected_local: List[int] = []
-
-    for c in cluster_keys:
-        positions = clusters[c]
-        q = quotas[c]
-        if q <= 0:
-            continue
-
-        if strategy == "centroid":
-            # pick nearest to cluster centroid
-            pos_arr = np.array(positions)
-            sub_emb = emb[pos_arr]
-            centroid = sub_emb.mean(axis=0, keepdims=True)
-            centroid = centroid / (np.linalg.norm(centroid) + 1e-8)
-            sims = _cosine_sim_matrix(sub_emb, centroid).reshape(-1)
-            top = np.argsort(-sims)[:q]
-            selected_local.extend(pos_arr[top].tolist())
-
-        else:  # "centroid_then_diverse"
-            pos_arr = np.array(positions)
-            sub_emb = emb[pos_arr]
-            centroid = sub_emb.mean(axis=0, keepdims=True)
-            centroid = centroid / (np.linalg.norm(centroid) + 1e-8)
-
-            if q == 1:
-                sims = _cosine_sim_matrix(sub_emb, centroid).reshape(-1)
-                best = int(np.argmax(sims))
-                selected_local.append(int(pos_arr[best]))
-            else:
-                # pick centroid first
-                sims = _cosine_sim_matrix(sub_emb, centroid).reshape(-1)
-                best = int(np.argmax(sims))
-                picked_local = [best]
-                selected_local.append(int(pos_arr[best]))
-
-                # then diverse
-                best_sim_to_any = sims.copy()
-                for _ in range(1, q):
-                    cand = [i for i in range(len(pos_arr)) if i not in picked_local]
-                    if not cand:
-                        break
-                    cand_sims = best_sim_to_any[cand]
-                    # pick the one with lowest similarity to any selected
-                    rel_idx = int(np.argmin(cand_sims))
-                    chosen = cand[rel_idx]
-                    picked_local.append(chosen)
-                    selected_local.append(int(pos_arr[chosen]))
-                    # update best_sim_to_any
-                    new_sim = _cosine_sim_matrix(sub_emb, sub_emb[[chosen]]).reshape(-1)
-                    best_sim_to_any = np.maximum(best_sim_to_any, new_sim)
-
-    # map local positions back to global frame indices
-    out = [eligible_indices[pos] for pos in selected_local]
-    # ensure exact want_n (rare over/under due to edge cases)
-    out = out[:want_n]
-    return out
-
-
-def select_frames_by_cluster_coverage(
-    cluster_id: np.ndarray,
-    eligible_indices: List[int],
-    frame_key_of_index: Dict[int, Any],
-    want_n_frames: int,
-) -> List[Any]:
-    """Greedily select frame keys to maximize embedding-cluster coverage.
-
-    `cluster_id` is aligned with `eligible_indices` (cluster_id[i] is the
-    cluster of eligible_indices[i], matching cluster_embeddings_cosine's
-    output convention). `frame_key_of_index` maps a subset (or all) of
-    `eligible_indices` to an opaque, comparable per-source frame key (see
-    `hydra_suite.posekit.core.frame_grouping.group_indices_by_frame`).
-
-    Diversity is scored on the true per-individual embeddings/clusters —
-    never averaged across a frame's companions. Each round picks the
-    frame covering the most not-yet-covered clusters; ties break on (a)
-    total distinct clusters spanned, then (b) the smallest frame key, for
-    determinism. Once all clusters are covered, remaining picks continue
-    to use the same ranking (which naturally falls back to "most total
-    distinct clusters" once new-coverage is zero for every candidate),
-    so the full requested budget is used rather than under-filling.
-
-    Returns the selected frame keys, in selection order.
-    """
-    want_n_frames = max(0, int(want_n_frames))
-    if want_n_frames == 0 or not eligible_indices:
-        return []
-
-    frame_clusters: Dict[Any, set] = {}
-    for local, global_idx in enumerate(eligible_indices):
-        key = frame_key_of_index.get(global_idx)
-        if key is None:
-            continue
-        frame_clusters.setdefault(key, set()).add(int(cluster_id[local]))
-
-    covered: set = set()
-    selected: List[Any] = []
-    remaining = set(frame_clusters.keys())
-
-    while remaining and len(selected) < want_n_frames:
-        best_key = min(
-            remaining,
-            key=lambda k: (
-                -len(frame_clusters[k] - covered),
-                -len(frame_clusters[k]),
-                k,
-            ),
-        )
-        selected.append(best_key)
-        covered.update(frame_clusters[best_key])
-        remaining.discard(best_key)
-
-    return selected
-
-
 # -----------------------------
 # YOLO Pose I/O
 # -----------------------------
@@ -1400,14 +1163,40 @@ def build_coco_keypoints_dataset(
 # -----------------------------
 
 
+def _file_stamp(path: Path):
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return None  # missing
+    return [int(st.st_mtime), int(st.st_size)]
+
+
+def _unreadable_stamps(image_paths: List[Path], idxs) -> Dict[str, Any]:
+    """``{path: [mtime, size] or None}`` for images that failed to read."""
+    return {str(image_paths[i]): _file_stamp(image_paths[i]) for i in idxs}
+
+
+def _unchanged_unreadable(image_paths: List[Path], stored) -> Set[int]:
+    """Indices of images that failed before and are unchanged since."""
+    if not isinstance(stored, dict) or not stored:
+        return set()
+    out = set()
+    for i, p in enumerate(image_paths):
+        key = str(p)
+        if key in stored and _file_stamp(p) == stored[key]:
+            out.add(i)
+    return out
+
+
 class EmbeddingWorker(QObject):
     """Worker thread for computing embeddings."""
 
     progress = Signal(int, int)  # done, total
     status = Signal(str)
-    finished = Signal(
-        object, object, object
-    )  # embeddings(np.ndarray), eligible_indices(list[int]), meta(dict)
+    # embeddings for every image_paths entry (np.ndarray), eligible_indices
+    # (list[int]), meta (dict).  Selection needs all rows (labeled frames give
+    # cluster coverage), not just the eligible ones.
+    finished = Signal(object, object, object)
     failed = Signal(str)
 
     def __init__(
@@ -1438,39 +1227,64 @@ class EmbeddingWorker(QObject):
         """Signal the worker loop to stop at the next safe checkpoint."""
         self._cancel = True
 
+    def _assemble(self, cache, unreadable: set) -> Optional[np.ndarray]:
+        """One row per image; unreadable images get a zero row."""
+        good = [p for i, p in enumerate(self.image_paths) if i not in unreadable]
+        rows = cache.get_embeddings(good) if good else None
+        if rows is None:
+            if good:
+                return None
+            return np.zeros((len(self.image_paths), 0), dtype=np.float32)
+        out = np.zeros((len(self.image_paths), rows.shape[1]), dtype=np.float32)
+        good_idx = [i for i in range(len(self.image_paths)) if i not in unreadable]
+        out[good_idx] = rows
+        return out
+
     @Slot()
     def run(self) -> None:
         """Compute/load embeddings and emit final embedding matrix for eligible frames."""
+        self._pending_flush = None
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+            # Only what changes the vectors goes into the cache key: device
+            # and batch size do not, so switching them reuses the cache.
             meta = {
                 "model_name": self.model_name,
-                "device_pref": self.device_pref,
-                "batch_size": int(self.batch_size),
                 "use_enhance": bool(self.use_enhance),
                 "max_side": int(self.max_side),
             }
             key = _stable_hash_dict(meta)
             cache = IncrementalEmbeddingCache(self.cache_dir, key)
-            cache.set_metadata(meta)
+            stored_bad = (cache.get_metadata() or {}).get("unreadable", {})
+            cache.set_metadata(dict(meta, unreadable=stored_bad))
 
             if self.cache_ok:
                 needs_compute, _ = cache.needs_update(self.image_paths)
             else:
                 needs_compute = list(range(len(self.image_paths)))
 
+            # Images that failed to read last time and haven't changed since
+            # are skipped up front, so they don't force a model load each run.
+            known_bad = _unchanged_unreadable(self.image_paths, stored_bad)
+            needs_compute = [i for i in needs_compute if i not in known_bad]
+            if needs_compute and known_bad:
+                # The model loads anyway: retry them (a permission or network
+                # error leaves mtime and size unchanged, so "unchanged" alone
+                # would skip a file that has become readable).
+                needs_compute = sorted(set(needs_compute) | known_bad)
+                known_bad = set()
+
             if not needs_compute:
                 self.status.emit("Loading cached embeddings…")
-                emb_all = cache.get_embeddings(self.image_paths)
-                if emb_all is None:
-                    needs_compute = list(range(len(self.image_paths)))
-                else:
-                    emb = emb_all[self.eligible_indices]
-                    cached_meta = cache.get_metadata() or {}
-                    meta.update(cached_meta)
-                    self.finished.emit(emb, self.eligible_indices, meta)
+                emb_all = self._assemble(cache, known_bad)
+                if emb_all is not None:
+                    meta = dict(meta, unreadable=sorted(known_bad))
+                    self.finished.emit(emb_all, self.eligible_indices, meta)
                     return
+                needs_compute = [
+                    i for i in range(len(self.image_paths)) if i not in known_bad
+                ]
 
             self.status.emit("Loading model…")
             device = _choose_device(self.device_pref)
@@ -1480,59 +1294,98 @@ class EmbeddingWorker(QObject):
             from timm.data import resolve_data_config
             from timm.data.transforms_factory import create_transform
 
+            if self._cancel:
+                self.failed.emit("Canceled.")
+                return
             model = timm.create_model(self.model_name, pretrained=True, num_classes=0)
+            if self._cancel:  # canceled while the weights loaded / downloaded
+                self.failed.emit("Canceled.")
+                return
             model.eval().to(device)
             data_config = resolve_data_config({}, model=model)
             transform = create_transform(**data_config)
 
-            # embed missing
-            feats = []
+            # embed missing.  Unreadable images are skipped (and reported),
+            # not fatal: one bad file must not make the whole set unusable.
+            # Finished batches are flushed to the cache as we go, so a cancel
+            # or a crash keeps the work done so far.
+            pending_paths: List[Path] = []
+            pending_feats: List[np.ndarray] = []
+            unreadable: List[int] = sorted(known_bad)
             total = len(needs_compute)
             done = 0
 
-            for start in range(0, total, self.batch_size):
+            def flush() -> None:
+                if pending_feats:
+                    cache.update_embeddings(
+                        list(pending_paths), np.vstack(pending_feats).astype(np.float32)
+                    )
+                    pending_paths.clear()
+                    pending_feats.clear()
+
+            self._pending_flush = flush  # the error path flushes too
+
+            for n_batch, start in enumerate(range(0, total, self.batch_size)):
                 if self._cancel:
+                    flush()
                     self.failed.emit("Canceled.")
                     return
 
                 batch_idx = needs_compute[start : start + self.batch_size]
                 imgs = []
+                ok_idx = []
                 for i in batch_idx:
-                    img = _read_image_pil(self.image_paths[i])
-                    img = _maybe_downscale_pil(img, self.max_side)
-                    if self.use_enhance:
-                        img = _enhance_pil_for_pose(img)
-                    imgs.append(transform(img))
+                    try:
+                        img = _read_image_pil(self.image_paths[i])
+                        img = _maybe_downscale_pil(img, self.max_side)
+                        if self.use_enhance:
+                            img = _enhance_pil_for_pose(img)
+                        imgs.append(transform(img))
+                        ok_idx.append(i)
+                    except Exception as exc:  # unreadable / deleted / corrupt
+                        logger.warning(
+                            "Smart Select: skipping %s (%s)", self.image_paths[i], exc
+                        )
+                        unreadable.append(i)
 
-                batch = torch.stack(imgs).to(device)
-
-                with torch.no_grad():
-                    out = model(batch)
-                    out = out.detach().float().cpu().numpy()
-
-                # L2 normalize
-                out = out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-8)
-                feats.append(out)
+                if imgs:
+                    batch = torch.stack(imgs).to(device)
+                    with torch.no_grad():
+                        out = model(batch)
+                        out = out.detach().float().cpu().numpy()
+                    # L2 normalize
+                    out = out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-8)
+                    pending_paths.extend(self.image_paths[i] for i in ok_idx)
+                    pending_feats.append(out)
 
                 done += len(batch_idx)
                 self.progress.emit(done, total)
                 self.status.emit(f"Embedding {done}/{total}")
+                if (n_batch + 1) % 20 == 0:
+                    flush()
+            flush()
 
-            if feats:
-                new_emb = np.vstack(feats).astype(np.float32)
-                cache.update_embeddings(
-                    [self.image_paths[i] for i in needs_compute], new_emb
-                )
-
-            emb_all = cache.get_embeddings(self.image_paths)
+            self._pending_flush = None
+            emb_all = self._assemble(cache, set(unreadable))
             if emb_all is None:
                 self.failed.emit("Failed to load embeddings from cache.")
                 return
-            emb = emb_all[self.eligible_indices]
-            cache.set_metadata(meta)
-            self.finished.emit(emb, self.eligible_indices, meta)
+            cache.set_metadata(
+                dict(
+                    meta,
+                    unreadable=_unreadable_stamps(self.image_paths, unreadable),
+                )
+            )
+            meta = dict(meta, unreadable=sorted(unreadable))
+            self.finished.emit(emb_all, self.eligible_indices, meta)
 
         except Exception as e:
+            flush, self._pending_flush = self._pending_flush, None
+            if flush is not None:
+                try:  # keep the batches finished before the error
+                    flush()
+                except Exception:
+                    logger.debug("Embedding cache flush failed", exc_info=True)
             self.failed.emit(str(e))
 
 
@@ -1765,46 +1618,3 @@ class IncrementalEmbeddingCache:
         for p in [self.embeddings_path, self.index_path, self.meta_path]:
             if p.exists():
                 p.unlink()
-
-
-# -----------------------------
-# Utility: Filter Near-Duplicates
-# -----------------------------
-
-
-def filter_near_duplicates(
-    embeddings: np.ndarray, indices: List[int], threshold: float = 0.95
-) -> List[int]:
-    """
-    Remove near-duplicate frames based on cosine similarity.
-    Returns filtered indices.
-
-    Args:
-        embeddings: All embeddings (N x D)
-        indices: List of frame indices to filter
-        threshold: Cosine similarity threshold (0-1). Higher = more strict filtering.
-
-    Returns:
-        Filtered list of indices with near-duplicates removed
-    """
-    if len(indices) <= 1:
-        return indices
-
-    sub_emb = embeddings[indices]
-
-    # Compute pairwise similarities
-    sims = _cosine_sim_matrix(sub_emb, sub_emb)
-
-    # Greedy filtering: keep first frame, then only add frames dissimilar to kept ones
-    keep = []
-    for i in range(len(indices)):
-        if not keep:
-            keep.append(i)
-            continue
-
-        # Check similarity to all kept frames
-        max_sim = max(sims[i, j] for j in keep)
-        if max_sim < threshold:
-            keep.append(i)
-
-    return [indices[i] for i in keep]

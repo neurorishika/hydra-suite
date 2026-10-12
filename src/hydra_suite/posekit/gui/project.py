@@ -247,6 +247,13 @@ def find_project(dataset_dir: Path) -> Optional[Path]:
     return None
 
 
+def _has_labels(labels_dir: Path) -> bool:
+    try:
+        return labels_dir.is_dir() and any(labels_dir.glob("*.txt"))
+    except OSError:
+        return False
+
+
 def _repair_project_paths(proj: Project, dataset_dir: Path) -> bool:
     """Repair project paths when moved across machines. Returns True if changed."""
     (
@@ -260,6 +267,11 @@ def _repair_project_paths(proj: Project, dataset_dir: Path) -> bool:
     if proj.images_dir.resolve() != expected_images_dir.resolve():
         proj.images_dir = expected_images_dir
         changed = True
+    # Legacy layouts kept labels in <dataset>/labels: keep using them rather
+    # than pointing the project at an empty posekit_project/labels.
+    legacy_labels = expected_images_dir.parent / "labels"
+    if not _has_labels(expected_labels_dir) and _has_labels(legacy_labels):
+        expected_labels_dir = legacy_labels
     if proj.labels_dir.resolve() != expected_labels_dir.resolve():
         proj.labels_dir = expected_labels_dir
         changed = True

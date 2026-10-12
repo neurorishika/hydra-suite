@@ -63,6 +63,54 @@ paths, device, epochs, batch size, and other hyperparameters).
 - Visibility flags encode present/occluded/missing states.
 - Project settings changes can require label migration.
 
+## Smart Select
+
+**Smart Select…** (left panel) picks the next frames to label with the same
+methodology as ClassKit's candidate batches:
+
+1. Every frame is embedded (DINOv2 by default; cached per model, so later runs
+   are instant) and clustered with K-means (about √N clusters by default).
+2. A batch is built from a mix of signals, in this order:
+
+    | Slot | Default | Picks |
+    |---|---|---|
+    | Near model errors | 20% | Unlabeled frames that look like labeled frames the model gets wrong (mean keypoint error / object size above *Error above*, 0.05 by default) |
+    | Model unsure | 25% | Frames with the lowest mean keypoint confidence |
+    | Rare clusters | 10% | Frames from small or barely-labeled clusters (weight `size^-α`) |
+    | Fill gaps | 30% | Frames that most reduce the distance from unlabeled frames to their nearest labeled one |
+    | Typical | 10% | Frames from dense clusters with few labels |
+    | Random checks | the rest | Random frames |
+
+    The model slots use the cached predictions of the model selected in the
+    Model panel (run **Predict Dataset…** first). Without predictions their
+    share goes to *Fill gaps*.
+3. The candidate table lists the batch in order with the reason for each pick.
+   Remove rows with Delete, or open the **Embedding Explorer** to see every
+   frame on a UMAP map with the batch highlighted and click points in or out.
+4. **Start Labeling** adds the batch to the labeling set, switches the list to the
+   *Smart Select batch* sort and opens the first unlabeled frame; Next / Next
+   unlabeled follow the batch order (Next unlabeled wraps around to open frames
+   earlier in the batch). **Add to Labeling Set** adds it without changing the
+   sort. The batch order is saved with the project, and reopening a project with
+   an unfinished batch switches back to the batch sort.
+
+In Frame Mode, Smart Select picks whole source frames and adds every individual on
+each picked frame; a frame that is partly labeled says so in the Detail column.
+Frame Mode groups images by the `did<detection id>` crop names that FilterKit
+exports; with other file names every image counts as its own frame, and the
+dialog says so.
+
+The labeling set is saved by image path, so it (and the batch) survives images
+being added or removed between sessions.
+
+Images that can't be read are skipped (the status line counts them) and are never
+picked; they are remembered, so later runs don't retry them until the file
+changes. Choosing HDBSCAN as the clustering method makes the cluster count a
+minimum cluster size; it is slow above ~10,000 frames.
+
+Clustering also writes `posekit/clusters/clusters.csv` for every frame, which the
+*Cluster id* sort and the cluster-stratified export split use.
+
 ## Core Hotkeys
 
 - `A/D`: previous/next frame

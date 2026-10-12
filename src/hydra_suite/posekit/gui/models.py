@@ -114,6 +114,15 @@ class Project:
     sources: List["DataSource"] = field(default_factory=list)
     last_source_id: str = ""
 
+    # Smart Select's last batch, in pick order (image paths).  Drives the
+    # "Smart Select batch" sort and frame navigation in that order.
+    smart_batch: List[str] = field(default_factory=list)
+
+    # The labeling set by image path.  ``labeling_frames`` (indices) shifts
+    # when images are added or removed between sessions; paths do not, so
+    # they win on load when present.
+    labeling_frame_paths: List[str] = field(default_factory=list)
+
     def to_json(self) -> dict:
         """Serialize project state to a JSON-compatible dictionary."""
         base = self.project_path.parent
@@ -164,6 +173,12 @@ class Project:
             "edge_width": self.edge_width,
             "sources": [s.to_dict(base) for s in self.sources],
             "last_source_id": self.last_source_id,
+            "smart_batch": [
+                str(_relativize_path(Path(p), base)) for p in self.smart_batch
+            ],
+            "labeling_frame_paths": [
+                str(_relativize_path(Path(p), base)) for p in self.labeling_frame_paths
+            ],
         }
 
     @staticmethod
@@ -223,6 +238,16 @@ class Project:
                 if isinstance(s, dict)
             ],
             last_source_id=str(data.get("last_source_id", "")),
+            smart_batch=[
+                str(_resolve_project_path(Path(str(p)), base, data))
+                for p in data.get("smart_batch", []) or []
+                if str(p).strip()
+            ],
+            labeling_frame_paths=[
+                str(_resolve_project_path(Path(str(p)), base, data))
+                for p in data.get("labeling_frame_paths", []) or []
+                if str(p).strip()
+            ],
         )
 
 

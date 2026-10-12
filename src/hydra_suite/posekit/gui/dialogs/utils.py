@@ -12,11 +12,97 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import yaml
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.hidden_files import is_hidden_file
+
+# Background threads that outlived their dialog ------------------------------
+#
+# A dialog closed mid-job hands its still-running QThreads here: they are
+# unparented (so the dialog's teardown can't destroy a running thread) and kept
+# referenced until they finish.  On application quit they are canceled and
+# waited for, because Qt aborts the process if a running QThread is destroyed.
+
+_LIVE_THREADS: list = []
+_QUIT_HOOKED = False
+
+
+def keep_thread_until_finished(thread, *refs, cancel=None) -> None:
+    """Keep ``thread`` (and ``refs``, e.g. its worker) alive until it finishes."""
+    if thread is None or thread.isFinished():
+        return
+    thread.setParent(None)
+    entry = [thread, refs, cancel]
+    _LIVE_THREADS.append(entry)
+
+    def _release() -> None:
+        if entry in _LIVE_THREADS:
+            _LIVE_THREADS.remove(entry)
+        # Break thread -> connection -> closure -> entry -> thread, which the
+        # garbage collector can't see through Qt (it kept every worker, and
+        # e.g. its full embedding matrix, alive).
+        try:
+            thread.finished.disconnect(_release)
+        except (RuntimeError, TypeError):
+            pass
+        entry.clear()
+
+    thread.finished.connect(_release)
+    _hook_quit()
+
+
+def _hook_quit() -> None:
+    global _QUIT_HOOKED
+    app = QCoreApplication.instance()
+    if app is None or _QUIT_HOOKED:
+        return
+    app.aboutToQuit.connect(drain_live_threads)
+    _QUIT_HOOKED = True
+
+
+DRAIN_WAIT_MS = 5000
+
+
+def drain_live_threads(wait_ms: int = DRAIN_WAIT_MS) -> int:
+    """Cancel every thread a closed dialog left running and wait for it.
+
+    Each thread gets up to ``wait_ms``; returns how many are still running
+    afterwards (e.g. stuck in a model download).  Those stay referenced: the
+    caller should then end the process without destroying them (see
+    ``exit_after_threads``).
+    """
+    entries = [e for e in _LIVE_THREADS if e]
+    for thread, _refs, cancel in entries:
+        if cancel is not None:
+            try:
+                cancel()
+            except Exception:  # best effort; we wait below regardless
+                pass
+        thread.quit()
+    for thread, _refs, _cancel in entries:
+        thread.wait(wait_ms)
+    return sum(1 for e in _LIVE_THREADS if e and not e[0].isFinished())
+
+
+def exit_after_threads(code: int) -> None:
+    """``sys.exit(code)``, unless a background thread is still running.
+
+    Destroying a running QThread aborts the process, so when one is stuck
+    (after the quit-time drain) the process ends with ``os._exit`` instead.
+    """
+    import os
+    import sys
+
+    if any(e and not e[0].isFinished() for e in _LIVE_THREADS):
+        logging.getLogger("pose_label").warning(
+            "Exiting with background work still running."
+        )
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(int(code or 0))
+    sys.exit(code)
 
 
 # Settings helpers
