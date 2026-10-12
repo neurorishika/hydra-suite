@@ -120,9 +120,53 @@ class MultiHeadTorchvisionClassifier(nn.Module):
         feat = self.backbone(x)
         return [h(feat) for h in self.heads]
 
+    def fused_for_export(self) -> nn.Module:
+        """Return an inference module computing the same concatenated logits
+        with the parallel heads merged into one block-diagonal MLP.
+
+        TensorRT 10.13-10.16 cannot build ViT-B/16 followed by parallel GELU
+        MLP heads + concat in fp16 at batch > 1 (CUDA 716 / "compile resulted
+        in null program"); the merged form builds and is exact: the first
+        Linear layers stack, the second ones sit on the block diagonal so each
+        factor still reads only its own hidden units. Dropout is dropped
+        (identity at inference).
+        """
+        firsts = [h[0] for h in self.heads]
+        acts = [h[1] for h in self.heads]
+        lasts = [h[-1] for h in self.heads]
+        hidden = sum(lin.out_features for lin in firsts)
+        out = sum(lin.out_features for lin in lasts)
+        first = nn.Linear(firsts[0].in_features, hidden)
+        last = nn.Linear(hidden, out)
+        with torch.no_grad():
+            first.weight.copy_(torch.cat([lin.weight for lin in firsts]))
+            first.bias.copy_(torch.cat([lin.bias for lin in firsts]))
+            last.weight.zero_()
+            row = col = 0
+            for a, b in zip(firsts, lasts):
+                last.weight[row : row + b.out_features, col : col + a.out_features] = (
+                    b.weight
+                )
+                row += b.out_features
+                col += a.out_features
+            last.bias.copy_(torch.cat([lin.bias for lin in lasts]))
+        return _FusedHeadClassifier(self.backbone, nn.Sequential(first, acts[0], last))
+
     def unfreeze_all(self) -> None:
         for p in self.parameters():
             p.requires_grad = True
+
+
+class _FusedHeadClassifier(nn.Module):
+    """Export-only form of :class:`MultiHeadTorchvisionClassifier`."""
+
+    def __init__(self, backbone: nn.Module, head: nn.Sequential) -> None:
+        super().__init__()
+        self.backbone = backbone
+        self.head = head
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(self.backbone(x))
 
 
 def build_multihead_torchvision_classifier(
