@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,8 +15,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def build_dataset_analysis_report(project: "DetectKitProject") -> tuple[str, list[str]]:
-    """Return a merged dataset-analysis report and any warnings."""
+def build_dataset_analysis_report(
+    project: "DetectKitProject",
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[str, list[str]]:
+    """Return a merged dataset-analysis report and any warnings.
+
+    Reads every source and decodes sampled images, so GUI callers must run it
+    off the GUI thread.  *should_cancel* is polled between files.
+    """
     sources = project.sources
     if not sources:
         return "No dataset sources configured.", []
@@ -36,6 +45,8 @@ def build_dataset_analysis_report(project: "DetectKitProject") -> tuple[str, lis
 
     merged = DatasetInspection(root_dir="(merged)")
     for src in sources:
+        if should_cancel is not None and should_cancel():
+            return "Dataset analysis cancelled.", []
         if not src.path:
             continue
         try:
@@ -64,6 +75,7 @@ def build_dataset_analysis_report(project: "DetectKitProject") -> tuple[str, lis
         pad_ratio=project.crop_pad_ratio,
         min_crop_size_px=project.min_crop_size_px,
         enforce_square=project.enforce_square,
+        should_cancel=should_cancel,
     )
 
     report_seq, warnings_seq = format_size_analysis(

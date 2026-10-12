@@ -9,8 +9,8 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QCoreApplication, Qt, Signal
-from PySide6.QtGui import QImageReader, QPixmap
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractSpinBox,
@@ -52,7 +52,11 @@ from hydra_suite.training.contracts import (
 from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.training.registry import finalize_run_record
 from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
-from hydra_suite.widgets.workers import BaseWorker, bounded_worker_message
+from hydra_suite.widgets.workers import (
+    AbandonableWorker,
+    BaseWorker,
+    bounded_worker_message,
+)
 
 from ...jobs.dataset_preparation_sidecar import (
     prepare_role_datasets_contained as _prepare_role_datasets_contained,
@@ -276,10 +280,16 @@ class _BoundedLogWorker(BaseWorker):
 @dataclass(frozen=True)
 class _DatasetFitRequest:
     cache_key: tuple
-    source_paths: tuple[str, ...]
+    # (path, name, level) for each source that satisfies required_level.
+    sources: tuple[tuple[str, str, str], ...]
+    required_level: GeometryLevel
     pad_ratio: float
     min_crop_size_px: int
     enforce_square: bool
+    # Report-formatting inputs, snapshotted with the analysis settings so a
+    # result is always rendered with the settings it was computed for.
+    imgsz_by_role: tuple[tuple[str, int], ...]
+    selected_roles: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -289,7 +299,7 @@ class _DatasetFitResult:
     valid_items: int
 
 
-class _DatasetFitWorker(BaseWorker):
+class _DatasetFitWorker(AbandonableWorker):
     """Inspect sources and sample object sizes for the Dataset Fit card.
 
     Every sampled image is opened and decoded, so on cold or network storage
@@ -299,21 +309,12 @@ class _DatasetFitWorker(BaseWorker):
     result_ready = Signal(object)
 
     def __init__(self, request: _DatasetFitRequest) -> None:
-        # Parented to the application so the thread outlives a dialog that is
-        # closed (or garbage-collected) mid-analysis; deleteLater on finished
-        # reclaims it. A QThread destroyed while running aborts the process.
-        super().__init__(QCoreApplication.instance())
+        super().__init__()
         self._request = request
-        self._cancel = False
-        self.finished.connect(self.deleteLater)
-
-    def cancel(self) -> None:
-        self._cancel = True
-
-    def is_cancelled(self) -> bool:
-        return bool(self._cancel)
 
     def execute(self) -> None:
+        from hydra_suite.training.contracts import SourceDataset
+        from hydra_suite.training.dataset_builders import resolve_source_path_for_target
         from hydra_suite.training.dataset_inspector import (
             DatasetInspection,
             DatasetItemStore,
@@ -324,9 +325,15 @@ class _DatasetFitWorker(BaseWorker):
         request = self._request
         merged = DatasetInspection(root_dir="overview")
         valid_items = 0
-        for source_path in request.source_paths:
+        for path, name, level in request.sources:
             if self.is_cancelled():
                 return
+            source_path = str(
+                resolve_source_path_for_target(
+                    SourceDataset(path=path, name=name, level=level),
+                    request.required_level,
+                )
+            )
             if not Path(source_path).exists():
                 continue
             try:
@@ -361,6 +368,143 @@ class _DatasetFitWorker(BaseWorker):
             )
         if not self.is_cancelled():
             self.result_ready.emit(_DatasetFitResult(request, stats, valid_items))
+
+
+_SOURCE_PREVIEW_THUMB_SIZE = (146, 108)
+
+
+@dataclass(frozen=True)
+class _SourcePreviewRequest:
+    # (path, name, level) per configured source.
+    sources: tuple[tuple[str, str, str], ...]
+    required_level: GeometryLevel
+    max_items: int = 6
+
+
+@dataclass(frozen=True)
+class _SourcePreviewResult:
+    # Each record: path, source, split, thumbnail (QImage, null if unreadable).
+    records: list[dict]
+    frame_options: list[tuple[int, int, int]]
+
+
+def _load_source_preview_thumbnail(path: Path) -> QImage:
+    image = QImageReader(str(path)).read()
+    if image.isNull():
+        return image
+    width, height = _SOURCE_PREVIEW_THUMB_SIZE
+    return image.scaled(
+        width,
+        height,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+
+def _collect_source_preview(
+    request: _SourcePreviewRequest,
+    should_cancel=lambda: False,
+) -> _SourcePreviewResult:
+    """Pick representative labeled frames per source (file I/O; worker thread)."""
+    from hydra_suite.training.contracts import SourceDataset
+    from hydra_suite.training.dataset_builders import resolve_source_path_for_target
+    from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
+
+    max_items = request.max_items
+    buckets: dict[str, list[dict]] = {}
+    frame_size_counts: dict[tuple[int, int], int] = {}
+    seen_frame_paths: set[Path] = set()
+    for path, name, level in request.sources:
+        if should_cancel():
+            break
+        if GeometryLevel.from_str(level) < request.required_level:
+            continue
+        source_path = str(
+            resolve_source_path_for_target(
+                SourceDataset(path=path, name=name, level=level),
+                request.required_level,
+            )
+        )
+        if not source_path or not Path(source_path).exists():
+            continue
+        try:
+            inspection = inspect_obb_or_detect_dataset(source_path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to inspect DetectKit source samples %s: %s",
+                source_path,
+                exc,
+            )
+            continue
+
+        source_name = name.strip() or Path(source_path).name
+        records: list[dict] = []
+        for split_name in ("train", "val", "test", "all"):
+            for item in inspection.splits.get(split_name, []):
+                image_path = Path(item.image_path)
+                if not image_path.exists():
+                    continue
+                resolved_path = image_path.resolve()
+                if resolved_path not in seen_frame_paths:
+                    seen_frame_paths.add(resolved_path)
+                    image_size = QImageReader(str(image_path)).size()
+                    if image_size.isValid():
+                        frame_wh = (image_size.width(), image_size.height())
+                        frame_size_counts[frame_wh] = (
+                            frame_size_counts.get(frame_wh, 0) + 1
+                        )
+                records.append(
+                    {
+                        "path": image_path,
+                        "source": source_name,
+                        "split": split_name if split_name != "all" else "dataset",
+                    }
+                )
+                if len(records) >= max_items:
+                    break
+            if len(records) >= max_items:
+                break
+        if records:
+            buckets[source_name] = records
+
+    selected: list[dict] = []
+    while len(selected) < max_items:
+        added = False
+        for source_name in sorted(buckets):
+            bucket = buckets[source_name]
+            if not bucket:
+                continue
+            selected.append(bucket.pop(0))
+            added = True
+            if len(selected) >= max_items:
+                break
+        if not added:
+            break
+    selected = selected[:max_items]
+    for record in selected:
+        if should_cancel():
+            break
+        record["thumbnail"] = _load_source_preview_thumbnail(record["path"])
+
+    frame_options = [
+        (width, height, count) for (width, height), count in frame_size_counts.items()
+    ]
+    return _SourcePreviewResult(selected, frame_options)
+
+
+class _SourcePreviewWorker(AbandonableWorker):
+    """Load the source-preview cards' frames and thumbnails off the GUI thread."""
+
+    result_ready = Signal(object)
+
+    def __init__(self, request: _SourcePreviewRequest) -> None:
+        super().__init__()
+        self._request = request
+
+    def execute(self) -> None:
+        result = _collect_source_preview(self._request, self.is_cancelled)
+        if not self.is_cancelled():
+            self.result_ready.emit(result)
 
 
 class _DatasetPreparationWorker(_BoundedLogWorker):
@@ -564,6 +708,7 @@ class TrainingDialog(DetectKitDialog):
         self._dataset_fit_cache_text = ""
         self._dataset_fit_dirty = True
         self._dataset_fit_worker: _DatasetFitWorker | None = None
+        self._source_preview_worker: _SourcePreviewWorker | None = None
         self._training_running = False
         self.role_dataset_dirs: dict[str, str] = {}
         # Test/caller affordance only -- NOT a source of truth for what
@@ -2265,11 +2410,8 @@ QTabBar::tab:selected {
             return
 
         try:
+            from hydra_suite.training import dataset_builders  # noqa: F401
             from hydra_suite.training import dataset_inspector  # noqa: F401
-            from hydra_suite.training.contracts import SourceDataset
-            from hydra_suite.training.dataset_builders import (
-                resolve_source_path_for_target,
-            )
         except ImportError:
             self.dataset_fit_status.setText(
                 "Dataset analysis is unavailable because the training inspector could not be imported."
@@ -2278,22 +2420,13 @@ QTabBar::tab:selected {
             return
 
         required_level = self._selected_required_level()
-        source_paths = [
-            str(
-                resolve_source_path_for_target(
-                    SourceDataset(
-                        path=str(src.path).strip(),
-                        name=src.name,
-                        level=getattr(src, "level", "obb"),
-                    ),
-                    required_level,
-                )
-            )
+        sources = tuple(
+            (str(src.path).strip(), src.name, getattr(src, "level", "obb"))
             for src in self._project.sources
             if str(src.path).strip()
             and GeometryLevel.from_str(getattr(src, "level", "obb")) >= required_level
-        ]
-        if not source_paths:
+        )
+        if not sources:
             self.dataset_fit_status.setText("No source datasets configured yet.")
             self.dataset_fit_view.setPlainText(
                 f"Add one or more {required_level.label}-compatible sources to see guidance for this plan."
@@ -2305,58 +2438,76 @@ QTabBar::tab:selected {
 
         request = _DatasetFitRequest(
             cache_key=cache_key,
-            source_paths=tuple(source_paths),
+            sources=sources,
+            required_level=required_level,
             pad_ratio=self.spin_crop_pad.value(),
             min_crop_size_px=self.spin_crop_min_px.value(),
             enforce_square=self.chk_crop_square.isChecked(),
+            imgsz_by_role=(
+                ("seq_crop_obb", self.spin_imgsz_seq_crop_obb.value()),
+                ("obb_direct", self.spin_imgsz_obb_direct.value()),
+                ("detect_direct", self.spin_imgsz_detect_direct.value()),
+                ("segment_direct", self.spin_imgsz_segment_direct.value()),
+                ("seq_crop_segment", self.spin_imgsz_seq_crop_segment.value()),
+            ),
+            selected_roles=tuple(self._selected_role_keys()),
         )
         worker = _DatasetFitWorker(request)
         worker.result_ready.connect(self._on_dataset_fit_ready)
         worker.error.connect(self._on_dataset_fit_error)
         worker.finished.connect(self._on_dataset_fit_worker_finished)
         self._dataset_fit_worker = worker
-        self.btn_refresh_dataset_fit.setEnabled(False)
+        self._sync_overview_refresh_enabled()
         self.dataset_fit_status.setText(
-            f"Analyzing {len(source_paths)} source(s) in the background…"
+            f"Analyzing {len(sources)} source(s) in the background…"
         )
         worker.start()
 
     def _on_dataset_fit_error(self, message: str) -> None:
-        if self.sender() is not self._dataset_fit_worker:
+        if (
+            self._dataset_fit_worker is None
+            or self.sender() is not self._dataset_fit_worker
+        ):
             return
         self.dataset_fit_status.setText(f"Dataset analysis failed: {message}")
         self.dataset_fit_view.setPlainText("")
 
     def _on_dataset_fit_worker_finished(self) -> None:
-        if self.sender() is not self._dataset_fit_worker:
+        if (
+            self._dataset_fit_worker is None
+            or self.sender() is not self._dataset_fit_worker
+        ):
             return
         self._dataset_fit_worker = None
-        self.btn_refresh_dataset_fit.setEnabled(True)
+        self._sync_overview_refresh_enabled()
 
-    def _stop_dataset_fit_worker(self) -> None:
-        """Detach and cancel a running analysis; the app owns its teardown."""
+    def _sync_overview_refresh_enabled(self) -> None:
+        idle = self._dataset_fit_worker is None and self._source_preview_worker is None
+        self.btn_refresh_dataset_fit.setEnabled(idle)
+
+    def _abandon_dataset_fit_worker(self) -> None:
         worker = self._dataset_fit_worker
         if worker is None:
             return
         self._dataset_fit_worker = None
-        for signal, slot in (
-            (worker.result_ready, self._on_dataset_fit_ready),
-            (worker.error, self._on_dataset_fit_error),
-            (worker.finished, self._on_dataset_fit_worker_finished),
-        ):
-            try:
-                signal.disconnect(slot)
-            except (RuntimeError, TypeError):
-                pass
         worker.cancel()
 
+    def _abandon_overview_workers(self) -> None:
+        """Cancel background overview loading; the app owns thread teardown."""
+        self._abandon_dataset_fit_worker()
+        self._abandon_source_preview_worker()
+
     def _on_dataset_fit_ready(self, result: _DatasetFitResult) -> None:
-        if self.sender() is not self._dataset_fit_worker:
+        if (
+            self._dataset_fit_worker is None
+            or self.sender() is not self._dataset_fit_worker
+        ):
             return
         stats = result.stats
         valid_items = result.valid_items
         cache_key = result.request.cache_key
-        source_paths = result.request.source_paths
+        sources = result.request.sources
+        imgsz = dict(result.request.imgsz_by_role)
 
         if valid_items <= 0 or stats is None:
             self.dataset_fit_status.setText(
@@ -2372,18 +2523,18 @@ QTabBar::tab:selected {
 
         from hydra_suite.training.dataset_inspector import format_size_analysis
 
-        selected_roles = set(self._selected_role_keys())
+        selected_roles = set(result.request.selected_roles)
         lines: list[str] = []
         all_warnings: list[str] = []
         if selected_roles & {"seq_detect", "seq_crop_obb"}:
             report_seq, warnings_seq = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_seq_crop_obb.value(),
+                training_imgsz=imgsz["seq_crop_obb"],
                 pipeline_mode="crop",
             )
             lines += [
                 "=== Sequential Pipeline ===",
-                f"(stage-2 imgsz = {self.spin_imgsz_seq_crop_obb.value()})",
+                f"(stage-2 imgsz = {imgsz['seq_crop_obb']})",
                 "",
                 report_seq,
             ]
@@ -2396,14 +2547,14 @@ QTabBar::tab:selected {
         if "obb_direct" in selected_roles:
             report_direct, warnings_direct = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_obb_direct.value(),
+                training_imgsz=imgsz["obb_direct"],
                 pipeline_mode="full_image",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Direct OBB ===",
-                f"(imgsz = {self.spin_imgsz_obb_direct.value()})",
+                f"(imgsz = {imgsz['obb_direct']})",
                 "",
                 report_direct,
             ]
@@ -2416,14 +2567,14 @@ QTabBar::tab:selected {
         if "detect_direct" in selected_roles:
             report_detect_direct, warnings_detect_direct = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_detect_direct.value(),
+                training_imgsz=imgsz["detect_direct"],
                 pipeline_mode="full_image",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Direct Detect ===",
-                f"(imgsz = {self.spin_imgsz_detect_direct.value()})",
+                f"(imgsz = {imgsz['detect_direct']})",
                 "",
                 report_detect_direct,
             ]
@@ -2436,14 +2587,14 @@ QTabBar::tab:selected {
         if "segment_direct" in selected_roles:
             report_segment_direct, warnings_segment_direct = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_segment_direct.value(),
+                training_imgsz=imgsz["segment_direct"],
                 pipeline_mode="full_image",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Direct Segment ===",
-                f"(imgsz = {self.spin_imgsz_segment_direct.value()})",
+                f"(imgsz = {imgsz['segment_direct']})",
                 "",
                 report_segment_direct,
             ]
@@ -2456,14 +2607,14 @@ QTabBar::tab:selected {
         if "seq_crop_segment" in selected_roles:
             report_seq_crop_segment, warnings_seq_crop_segment = format_size_analysis(
                 stats,
-                training_imgsz=self.spin_imgsz_seq_crop_segment.value(),
+                training_imgsz=imgsz["seq_crop_segment"],
                 pipeline_mode="crop",
             )
             if lines:
                 lines += [""]
             lines += [
                 "=== Sequential Crop-Segment ===",
-                f"(stage-2 imgsz = {self.spin_imgsz_seq_crop_segment.value()})",
+                f"(stage-2 imgsz = {imgsz['seq_crop_segment']})",
                 "",
                 report_seq_crop_segment,
             ]
@@ -2484,7 +2635,7 @@ QTabBar::tab:selected {
             )
         else:
             self.dataset_fit_status.setText(
-                f"Analysis ready for {valid_items} discovered labeled items across {len(source_paths)} source(s)."
+                f"Analysis ready for {valid_items} discovered labeled items across {len(sources)} source(s)."
             )
 
         self._dataset_fit_cache_key = cache_key
@@ -2493,103 +2644,6 @@ QTabBar::tab:selected {
         if cache_key != self._dataset_fit_key():
             # Settings changed while the analysis ran.
             self._mark_dataset_fit_dirty()
-
-    def _source_preview_records(
-        self, max_items: int = 6
-    ) -> list[dict[str, str | Path]]:
-        try:
-            from hydra_suite.training.contracts import SourceDataset
-            from hydra_suite.training.dataset_builders import (
-                resolve_source_path_for_target,
-            )
-            from hydra_suite.training.dataset_inspector import (
-                inspect_obb_or_detect_dataset,
-            )
-        except ImportError:
-            return []
-
-        buckets: dict[str, list[dict[str, str | Path]]] = {}
-        frame_size_counts: dict[tuple[int, int], int] = {}
-        seen_frame_paths: set[Path] = set()
-        required_level = self._selected_required_level()
-        for src in self._project.sources:
-            if GeometryLevel.from_str(getattr(src, "level", "obb")) < required_level:
-                continue
-            source_path = str(
-                resolve_source_path_for_target(
-                    SourceDataset(
-                        path=str(src.path).strip(),
-                        name=src.name,
-                        level=getattr(src, "level", "obb"),
-                    ),
-                    required_level,
-                )
-            )
-            if not source_path or not Path(source_path).exists():
-                continue
-            try:
-                inspection = inspect_obb_or_detect_dataset(source_path)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to inspect DetectKit source samples %s: %s",
-                    source_path,
-                    exc,
-                )
-                continue
-
-            source_name = src.name.strip() or Path(source_path).name
-            records: list[dict[str, str | Path]] = []
-            for split_name in ("train", "val", "test", "all"):
-                for item in inspection.splits.get(split_name, []):
-                    image_path = Path(item.image_path)
-                    if not image_path.exists():
-                        continue
-                    resolved_path = image_path.resolve()
-                    if resolved_path not in seen_frame_paths:
-                        seen_frame_paths.add(resolved_path)
-                        image_size = QImageReader(str(image_path)).size()
-                        if image_size.isValid():
-                            frame_wh = (image_size.width(), image_size.height())
-                            frame_size_counts[frame_wh] = (
-                                frame_size_counts.get(frame_wh, 0) + 1
-                            )
-                    records.append(
-                        {
-                            "path": image_path,
-                            "source": source_name,
-                            "split": split_name if split_name != "all" else "dataset",
-                        }
-                    )
-                    if len(records) >= max_items:
-                        break
-                if len(records) >= max_items:
-                    break
-            if records:
-                buckets[source_name] = records
-
-        self._source_preview_frame_options = [
-            (width, height, count)
-            for (width, height), count in frame_size_counts.items()
-        ]
-
-        selected: list[dict[str, str | Path]] = []
-        while len(selected) < max_items:
-            added = False
-            for source_name in sorted(buckets):
-                bucket = buckets[source_name]
-                if not bucket:
-                    continue
-                selected.append(bucket.pop(0))
-                added = True
-                if len(selected) >= max_items:
-                    break
-            if not added:
-                break
-        return selected[:max_items]
-
-    @staticmethod
-    def _source_preview_pixmap(path: Path) -> QPixmap:
-        return QPixmap(str(path))
 
     def _build_source_preview_card(self, record: dict[str, str | Path]) -> QWidget:
         card = QFrame()
@@ -2610,18 +2664,16 @@ QTabBar::tab:selected {
         image_label.setStyleSheet(
             "background:#111111; border:1px solid #3e3e42; border-radius:4px; color:#cfcfcf;"
         )
-        pixmap = self._source_preview_pixmap(image_path)
+        thumbnail = record.get("thumbnail")
+        pixmap = (
+            QPixmap.fromImage(thumbnail)
+            if isinstance(thumbnail, QImage) and not thumbnail.isNull()
+            else QPixmap()
+        )
         if pixmap.isNull():
             image_label.setText("Preview\nunavailable")
         else:
-            image_label.setPixmap(
-                pixmap.scaled(
-                    146,
-                    108,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
+            image_label.setPixmap(pixmap)
         layout.addWidget(image_label)
 
         caption = QLabel(
@@ -2642,55 +2694,107 @@ QTabBar::tab:selected {
         if hasattr(self, "sam3_panel"):
             self.sam3_panel.slice_group.set_preview_frame_options(options)
 
-    def _refresh_source_preview(self) -> None:
-        if not hasattr(self, "source_preview_cards_layout"):
-            return
-
+    def _clear_source_preview_cards(self) -> None:
         while self.source_preview_cards_layout.count():
             item = self.source_preview_cards_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
 
-        records = self._source_preview_records()
+    def _show_source_preview_message(self, status: str, message: str) -> None:
+        self._clear_source_preview_cards()
+        self.source_preview_status.setText(status)
+        label = QLabel(message)
+        label.setWordWrap(True)
+        label.setStyleSheet("color:#cfcfcf; font-size:11px;")
+        self.source_preview_cards_layout.addWidget(label)
+
+    def _refresh_source_preview(self) -> None:
+        if not hasattr(self, "source_preview_cards_layout"):
+            return
+
         if not self._project.sources:
+            self._abandon_source_preview_worker()
             self._set_tiling_preview_frame_options([])
-            self.source_preview_status.setText(
-                "No sources configured yet. Add one or more DetectKit datasets to preview sample frames here."
+            self._show_source_preview_message(
+                "No sources configured yet. Add one or more DetectKit datasets to preview sample frames here.",
+                "No source datasets are connected to this project yet.",
             )
-            empty_label = QLabel(
-                "No source datasets are connected to this project yet."
-            )
-            empty_label.setWordWrap(True)
-            empty_label.setStyleSheet("color:#cfcfcf; font-size:11px;")
-            self.source_preview_cards_layout.addWidget(empty_label)
+            self._sync_overview_refresh_enabled()
             return
 
-        if not records:
-            self._set_tiling_preview_frame_options([])
-            self.source_preview_status.setText(
-                "Source datasets are configured, but DetectKit could not discover previewable image-label pairs yet."
-            )
-            empty_label = QLabel(
-                "Preview unavailable. Check that each source has a valid images/labels layout or dataset.yaml."
-            )
-            empty_label.setWordWrap(True)
-            empty_label.setStyleSheet("color:#cfcfcf; font-size:11px;")
-            self.source_preview_cards_layout.addWidget(empty_label)
+        if self._source_preview_worker is not None:
             return
 
-        self._set_tiling_preview_frame_options(
-            getattr(self, "_source_preview_frame_options", [])
+        request = _SourcePreviewRequest(
+            sources=tuple(
+                (str(src.path).strip(), src.name, getattr(src, "level", "obb"))
+                for src in self._project.sources
+            ),
+            required_level=self._selected_required_level(),
         )
-
+        worker = _SourcePreviewWorker(request)
+        worker.result_ready.connect(self._on_source_preview_ready)
+        worker.error.connect(self._on_source_preview_error)
+        worker.finished.connect(self._on_source_preview_worker_finished)
+        self._source_preview_worker = worker
+        self._sync_overview_refresh_enabled()
         self.source_preview_status.setText(
-            f"Showing {len(records)} representative labeled sample(s) from {len(self._project.sources)} source dataset(s)."
+            f"Loading sample frames from {len(self._project.sources)} source dataset(s)…"
         )
-        for record in records:
+        worker.start()
+
+    def _on_source_preview_ready(self, result: _SourcePreviewResult) -> None:
+        if (
+            self._source_preview_worker is None
+            or self.sender() is not self._source_preview_worker
+        ):
+            return
+        if not result.records:
+            self._set_tiling_preview_frame_options([])
+            self._show_source_preview_message(
+                "Source datasets are configured, but DetectKit could not discover previewable image-label pairs yet.",
+                "Preview unavailable. Check that each source has a valid images/labels layout or dataset.yaml.",
+            )
+            return
+
+        self._set_tiling_preview_frame_options(result.frame_options)
+        self._clear_source_preview_cards()
+        self.source_preview_status.setText(
+            f"Showing {len(result.records)} representative labeled sample(s) from {len(self._project.sources)} source dataset(s)."
+        )
+        for record in result.records:
             self.source_preview_cards_layout.addWidget(
                 self._build_source_preview_card(record)
             )
         self.source_preview_cards_layout.addStretch()
+
+    def _on_source_preview_error(self, message: str) -> None:
+        if (
+            self._source_preview_worker is None
+            or self.sender() is not self._source_preview_worker
+        ):
+            return
+        self._show_source_preview_message(
+            f"Source preview failed: {message}",
+            "Preview unavailable.",
+        )
+
+    def _on_source_preview_worker_finished(self) -> None:
+        if (
+            self._source_preview_worker is None
+            or self.sender() is not self._source_preview_worker
+        ):
+            return
+        self._source_preview_worker = None
+        self._sync_overview_refresh_enabled()
+
+    def _abandon_source_preview_worker(self) -> None:
+        worker = self._source_preview_worker
+        if worker is None:
+            return
+        self._source_preview_worker = None
+        worker.cancel()
 
     def _build_device_options(self) -> list[str]:
         """Return PyTorch-only training device choices (no ONNX/TRT)."""
@@ -3692,7 +3796,7 @@ QTabBar::tab:selected {
             )
             event.ignore()
             return
-        self._stop_dataset_fit_worker()
+        self._abandon_overview_workers()
         try:
             self._save_persistent_state()
         except Exception:
@@ -3702,6 +3806,13 @@ QTabBar::tab:selected {
         super().closeEvent(event)
 
     def done(self, result: int) -> None:  # noqa: D401
-        """Stop any background dataset analysis when the dialog finishes."""
-        self._stop_dataset_fit_worker()
+        """Refuse while training; otherwise stop background dataset analysis."""
+        if self._training_running:
+            QMessageBox.information(
+                self,
+                "Training in progress",
+                "Stop the running training session before closing this dialog.",
+            )
+            return
+        self._abandon_overview_workers()
         super().done(result)
