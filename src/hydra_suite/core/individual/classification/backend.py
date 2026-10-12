@@ -816,6 +816,9 @@ class ClassifierBackend:
     def _load_onnx(self) -> None:
         import onnxruntime as ort
 
+        from hydra_suite.core.individual.classification.trt_probe import (
+            probe_trt_session_in_child,
+        )
         from hydra_suite.runtime.artifact_lock import artifact_build_lock
         from hydra_suite.runtime.onnx_providers import (
             execution_providers_for,
@@ -854,6 +857,15 @@ class ClassifierBackend:
                 # The lock lives in that cache dir (writable by construction),
                 # not beside the model, which may be read-only.
                 with artifact_build_lock(tensorrt_ep_lock_target(peer)):
+                    # Build the engine in a child first: some TRT builder
+                    # failures (e.g. CUDA 716 in the autotuner) poison this
+                    # process's CUDA context and would break any fallback.
+                    probe = probe_trt_session_in_child(str(peer), providers)
+                    if not probe.ok:
+                        raise RuntimeError(
+                            "TensorRT engine build failed in an isolated probe "
+                            f"process (exit {probe.returncode}): {probe.detail}"
+                        )
                     self._model = ort.InferenceSession(str(peer), providers=providers)
             else:
                 self._model = ort.InferenceSession(str(peer), providers=providers)
