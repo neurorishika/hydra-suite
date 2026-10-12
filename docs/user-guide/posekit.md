@@ -69,13 +69,14 @@ settings* restores these defaults (an mmpose ViTPose / RTMPose-style fine-tune):
 | | EMA, mixed precision | on | Averaged weights are validated and saved; bf16 on NVIDIA GPUs |
 | Validation | fraction, split by, seed | 0.2, source frame, 0 | Whole source frames are held out, so validation crops are not near-copies of training crops |
 | | ignore occluded | off | Occluded keypoints get no loss |
-| | flip test | on | Validate on the crop and its mirror, averaged |
+| | flip test | on | Also score the crop + mirror average (an extra number; `best.pt` and early stopping use the plain prediction, which is what PoseKit runs). Needs left-right flips with all left/right keypoints paired. |
 
 Epochs, batch size and device are in the Config group (shared with YOLO), as are
 auxiliary datasets, which ViTPose now uses too. The loss plot follows the run,
 and the log reports PCK@0.05, PCK@0.1 and the mean normalised error (NME: pixel
 error / √animal box area) every epoch. `best.pt` is the epoch with the highest
-PCK@0.05 (lower NME breaks ties). The settings are kept between sessions.
+PCK@0.05 (lower NME breaks ties). *Split by source frame* falls back to single
+images when the project has only one frame (or video). The settings are kept between sessions.
 
 ViTPose can also be trained/fine-tuned outside the GUI via its standalone CLI:
 
