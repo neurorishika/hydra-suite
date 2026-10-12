@@ -676,3 +676,61 @@ def test_identity_rejoin_disabled_when_committed_map_is_none() -> None:
         "Identity-rejoin must be skipped when committed_slot_identities is None; "
         f"got {identity_rejoin_pairs}"
     )
+
+
+def _shape_mismatch_case():
+    """Two tracks, two detections. Track 0's detection is 1 px away but its box
+    area tripled since the track's last match (ant boxes do this often);
+    track 1's detection is a clean match. Pose keypoints are present."""
+    kf = _DummyKF(2)
+    kf.X[0, :3] = [10.0, 10.0, 0.0]
+    kf.X[1, :3] = [200.0, 200.0, 0.0]
+    predictions = np.array([[10.0, 10.0, 0.0], [200.0, 200.0, 0.0]], dtype=np.float32)
+    measurements = [
+        np.array([11.0, 10.0, 0.0], dtype=np.float32),
+        np.array([201.0, 200.0, 0.0], dtype=np.float32),
+    ]
+    shapes = [(60.0, 1.3), (20.0, 1.3)]
+    last_shape_info = [(20.0, 1.3), (20.0, 1.3)]
+    kpts = np.array(
+        [[0.0, 0.0, 1.0], [0.4, 0.0, 1.0], [0.8, 0.0, 1.0], [1.2, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    association_data = {
+        "detection_pose_keypoints": [kpts, kpts.copy()],
+        "detection_pose_visibility": np.array([1.0, 1.0], dtype=np.float32),
+        "track_pose_prototypes": [kpts.copy(), kpts.copy()],
+        "track_avg_step": [4.0, 4.0],
+    }
+    return kf, predictions, measurements, shapes, last_shape_info, association_data
+
+
+def _cost(params, with_pose):
+    kf, preds, meas, shapes, last, assoc = _shape_mismatch_case()
+    cost, _ = TrackAssigner(params).compute_cost_matrix(
+        N=2,
+        measurements=meas,
+        predictions=preds,
+        shapes=shapes,
+        kf_manager=kf,
+        last_shape_info=last,
+        association_data=assoc if with_pose else {"track_avg_step": [4.0, 4.0]},
+    )
+    return float(cost[0, 0])
+
+
+def test_pose_extraction_alone_does_not_change_association_cost() -> None:
+    """Regression: enabling the pose extractor silently switched on a stage-1
+    area/aspect gate that vetoed a 1 px match whenever the box area changed
+    >2x since the last match, so the detection went to a lost slot and
+    X1_d1 fragmented 8x (2446 raw tracks vs 303). With pose rejection off,
+    pose data must not alter matching."""
+    params = {**_params(), "ENABLE_POSE_REJECTION": False}
+    with_pose = _cost(params, with_pose=True)
+    assert with_pose < 1e6
+    assert with_pose == _cost(params, with_pose=False)
+
+
+def test_pose_rejection_on_keeps_the_stage1_shape_gate() -> None:
+    params = {**_params(), "ENABLE_POSE_REJECTION": True}
+    assert _cost(params, with_pose=True) >= 1e6
