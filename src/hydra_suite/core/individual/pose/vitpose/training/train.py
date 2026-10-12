@@ -192,11 +192,7 @@ def _write_val_overlays(
                 coords[0], s["center"].numpy(), s["scale"].numpy(), geom.heatmap_size_wh
             )
             img = cv2.imread(
-                str(
-                    image_path(
-                        val_ds.dir, val_ds.index[val_ds.ids[i]][1]["file_name"]
-                    )
-                )
+                str(image_path(val_ds.dir, val_ds.index[val_ds.ids[i]][1]["file_name"]))
             )
             for j in range(k):
                 cv2.circle(img, (int(pred[j, 0]), int(pred[j, 1])), 3, (0, 0, 255), -1)
