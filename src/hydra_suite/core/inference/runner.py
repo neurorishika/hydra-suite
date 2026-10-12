@@ -541,6 +541,62 @@ def partial_reuse_plan(
     )
 
 
+class MixedCacheCoverageError(RuntimeError):
+    """A resumed batch pass would leave cache members with unequal coverage."""
+
+
+def _merge_ranges(
+    ranges: "tuple[tuple[int, int], ...] | list[tuple[int, int]]",
+) -> tuple[tuple[int, int], ...]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted((int(a), int(b)) for a, b in ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def check_resume_coverage(caches: _CacheSet, start_frame: int, end_frame: int) -> None:
+    """Refuse a resumed pass whose result could never be promoted.
+
+    Resume mode clones the active generation: a reusable member keeps its
+    coverage and gains the window, while a stale member (re-keyed, e.g. by a
+    replay-filter change) is rebuilt over the window alone. When those
+    predicted coverages differ, ``_CacheSet.close`` refuses the promotion --
+    after the whole pass has run. ``caches`` is the read-only probe of the
+    active generation; raise before anything is cloned or computed.
+    """
+
+    if not caches.set_manifest_valid or caches.generation_id is None:
+        return
+    window = ((int(start_frame), int(end_frame)),)
+    predicted: dict[str, tuple[tuple[int, int], ...]] = {}
+    stale: list[str] = []
+    cached: tuple[tuple[int, int], ...] = ()
+    for handle in caches.all_handles():
+        name = Path(handle.path).name.removesuffix(".npz")
+        if handle.is_reusable() and handle._store.generation_id == caches.generation_id:
+            cached = _merge_ranges(handle.coverage_ranges())
+            predicted[name] = _merge_ranges(cached + window)
+        else:
+            stale.append(name)
+            predicted[name] = window
+    if len(set(predicted.values())) <= 1:
+        return
+    covered = ", ".join(f"{a}-{b}" for a, b in cached)
+    raise MixedCacheCoverageError(
+        f"Frames {start_frame}-{end_frame} cannot be run against the existing "
+        f"inference cache (frames {covered}): its {', '.join(stale)} results "
+        "were computed under different settings (e.g. a changed detection "
+        "filter such as the IoU threshold), and recomputing them for this "
+        "window alone would leave the cache inconsistent. Either restore the "
+        "settings the cache was built with, or run the full frame range once "
+        "with cached detections enabled (detections are reused; only the "
+        "stale per-animal stages are recomputed)."
+    )
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -2105,15 +2161,32 @@ class InferenceRunner:
                         reuse_plan,
                     )
 
+            write_mode = (
+                "fresh" if start_frame == 0 and reuse_plan is None else "resume"
+            )
+            if write_mode == "resume" and reuse_plan is None:
+                probe = _open_caches(
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    read_only=True,
+                )
+                try:
+                    check_resume_coverage(probe, start_frame, end_frame)
+                except MixedCacheCoverageError:
+                    frame_source.close()
+                    raise
+                finally:
+                    probe.close()
+
             with span(N.OPEN_CACHES):
                 caches = _open_caches(
                     self.config,
                     self.cache_dir,
                     self._video_sig,
                     self._roi_mask,
-                    write_mode=(
-                        "fresh" if start_frame == 0 and reuse_plan is None else "resume"
-                    ),
+                    write_mode=write_mode,
                 )
             self._caches = caches
 
