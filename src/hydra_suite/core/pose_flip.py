@@ -17,19 +17,27 @@ Pair = Tuple[int, int]
 # (group "s"); swapping it gives the partner's name.  Strong markers are
 # unambiguous; a weak one (a lone l/r glued to a word: lhip, rear) counts only
 # when the mirrored name exists too ("rear" alone is not a side).
+# A side letter ends its token: end of name, a separator or digit, or the
+# start of a capitalised word (LFoot).  So LEG, RAY1, BRAIN are not sides.
+_END = r"(?=$|[^A-Za-z]|[A-Z][a-z])"
 _SIDE_RULES = (
-    # left / right as a word or word start (left_eye, eyeLeft, leftwing; not
-    # "bright")
+    # left / right as a word or word start (left_eye, leftwing; not "bright")
     (re.compile(r"(?<![a-z])(?P<s>[Ll]eft|LEFT|[Rr]ight|RIGHT)"), True),
     (re.compile(r"(?<=[a-z0-9])(?P<s>Left|Right)"), True),  # eyeLeft
     # a lone l/r: l_ear, ear_r, L1, l.ant, LFoot
-    (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?![a-z])"), True),
+    (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])" + _END), True),
     # camelCase suffix: antL, eyeR, legL1
-    (re.compile(r"(?<=[a-z0-9])(?P<s>[LR])(?![a-z])"), True),
-    # l/r + front/hind/middle/back: lf_leg, rh, lfpaw
-    (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?=[fFhHmMbB](?![a-z]{3}))"), True),
-    # front/hind/middle/back + l/r: FL, hr_paw, paw_fl
-    (re.compile(r"(?<![A-Za-z])[fFhHmMbB](?P<s>[lLrR])(?![a-z])"), True),
+    (re.compile(r"(?<=[a-z0-9])(?P<s>[LR])" + _END), True),
+    # l/r + front/hind/middle/back: lf_leg, RH, lfpaw (weak: BL, MR can be
+    # other things)
+    (
+        re.compile(
+            r"(?<![A-Za-z])(?P<s>[lLrR])(?=[fFhHmMbB](?:$|[^A-Za-z]|[A-Z][a-z]|[a-z]{2,}))"
+        ),
+        False,
+    ),
+    # front/hind/middle/back + l/r: FL, hr_paw, paw_fl (weak)
+    (re.compile(r"(?<![A-Za-z])[fFhHmMbB](?P<s>[lLrR])" + _END), False),
     # l/r glued to a word: lhip, Leye, lantenna (weak)
     (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?=[a-z]{2,})"), False),
 )

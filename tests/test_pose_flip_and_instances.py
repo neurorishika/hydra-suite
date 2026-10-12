@@ -202,6 +202,25 @@ SIDE_PAIRS = [
     ["lear", "rear"],
     ["LFoot", "RFoot"],
 ]
+MIDLINE_CAPS = [
+    "HEAD",
+    "THORAX",
+    "ABDOMEN",
+    "LEG_TIP",
+    "STING",
+    "RAY1",
+    "BRAIN",
+    "FLANK",
+    "MRI_MARK",
+    "LEG",
+    "LIP",
+    "ROOT",
+    "REAR",
+    "RUMP",
+    "LOBE",
+    "LR",
+    "BL",
+]
 MIDLINE = [
     "head",
     "thorax",
@@ -239,31 +258,43 @@ def test_midline_names_are_not_sides():
     from hydra_suite.core.pose_flip import is_side_named
 
     assert [n for n in MIDLINE if is_side_named(n, MIDLINE)] == []
+    assert [n for n in MIDLINE_CAPS if is_side_named(n, MIDLINE_CAPS)] == []
 
 
-def test_yolo_trained_imgsz_reading(tmp_path, monkeypatch):
+def test_flip_override_for_side_like_midline_names():
+    from hydra_suite.posekit.core.training_options import plan_flips
+
+    names = ["head", "l-r", "tail"]  # flagged, but no partner exists
+    assert plan_flips(names, [], 0.5, 0.5).blocked
+    plan = plan_flips(names, [], 0.5, 0.5, allow_unpaired=True)
+    assert plan.enabled and plan.flip_idx == [0, 1, 2]
+
+
+def test_yolo_predict_size_from_model_or_export_metadata(tmp_path):
     pytest.importorskip("torch")
+    import json
+
     from hydra_suite.core.individual.pose.backends import yolo as Y
 
     assert Y._imgsz_value([128, 192]) == 192
     assert Y._imgsz_value("x") is None and Y._imgsz_value(0) is None
-    model = SimpleNamespace(overrides={"imgsz": 192})
-    assert Y._trained_imgsz(model, str(tmp_path / "m.pt")) == 192
-    # an exported artifact takes the size of the .pt beside it
-    (tmp_path / "m.pt").write_bytes(b"x")
-    import ultralytics
+    pt = SimpleNamespace(overrides={"imgsz": 192})
+    assert Y._trained_imgsz(pt, str(tmp_path / "m.pt")) == 192
 
-    monkeypatch.setattr(
-        ultralytics, "YOLO", lambda p: SimpleNamespace(overrides={"imgsz": 224})
-    )
-    assert (
-        Y._trained_imgsz(SimpleNamespace(overrides={}), str(tmp_path / "m.engine"))
-        == 224
-    )
-    assert (
-        Y._trained_imgsz(SimpleNamespace(overrides={}), str(tmp_path / "x.onnx"))
-        is None
-    )
+    def engine(name, meta):
+        blob = json.dumps(meta).encode()
+        path = tmp_path / name
+        path.write_bytes(len(blob).to_bytes(4, "little") + blob + b"\0" * 16)
+        return str(path)
+
+    none = SimpleNamespace(overrides={})
+    dyn = engine("d.engine", {"imgsz": [192, 192], "args": {"dynamic": True}})
+    static = engine("s.engine", {"imgsz": [320, 320], "args": {"dynamic": False}})
+    assert Y._trained_imgsz(none, dyn) == 192  # would otherwise run at 640
+    assert Y._trained_imgsz(none, static) is None  # its fixed input is used
+    junk = tmp_path / "j.engine"
+    junk.write_bytes(b"\xff\xff\xff\x7fgarbage")
+    assert Y._trained_imgsz(none, str(junk)) is None
 
 
 def test_prediction_cache_version_bumped_for_yolo_only(tmp_path):

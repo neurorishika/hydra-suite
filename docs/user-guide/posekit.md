@@ -144,8 +144,9 @@ Clustering also writes `posekit/clusters/clusters.csv` for every frame, which th
   `left_*`/`right_*`, `l_*`/`r_*`). They are saved in the project and in skeleton
   files (`flip_pairs`). If any keypoint whose name marks a side (`left_*`, `l_*`,
   `antL`, `L1`, `lf_*`, ...) is not in a pair, flips stay off and the Training
-  Runner names the keypoints; a skeleton with only midline keypoints flips without
-  swapping. Loading a skeleton file saved without pairs keeps the current pairs only
+  Runner names the keypoints (tick *Flip with unpaired side-like names* in Config
+  when they are really midline keypoints); a skeleton with only midline keypoints
+  flips without swapping. Loading a skeleton file saved without pairs keeps the current pairs only
   for keypoints it still has, matched by name.
 - **Mosaic off.** Ultralytics' mosaic tiles four crops into one image, which puts
   the labelled animal off-centre next to unlabelled ones; it is off by default and

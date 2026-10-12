@@ -136,26 +136,59 @@ def _imgsz_value(value) -> Optional[int]:
     return size if size > 0 else None
 
 
+def _export_metadata(path: Path) -> Dict[str, Any]:
+    """Ultralytics' export metadata of an ``.engine`` / ``.onnx`` ({} if none)."""
+    import ast
+    import json
+
+    try:
+        if path.suffix.lower() == ".engine":
+            with open(path, "rb") as fh:
+                size = int.from_bytes(fh.read(4), byteorder="little")
+                if not 0 < size < 1 << 20:
+                    return {}
+                return json.loads(fh.read(size).decode("utf-8"))
+        if path.suffix.lower() == ".onnx":
+            try:  # onnx is optional; onnxruntime is always installed
+                import onnx
+
+                props = onnx.load(str(path), load_external_data=False)
+                raw = {p.key: p.value for p in props.metadata_props}
+            except ImportError:
+                import onnxruntime as ort
+
+                session = ort.InferenceSession(
+                    str(path), providers=["CPUExecutionProvider"]
+                )
+                raw = dict(session.get_modelmeta().custom_metadata_map)
+            meta: Dict[str, Any] = {}
+            for key, value in raw.items():
+                try:
+                    meta[key] = ast.literal_eval(value)
+                except (ValueError, SyntaxError):
+                    meta[key] = value
+            return meta
+    except Exception:
+        logger.debug("No export metadata in %s", path, exc_info=True)
+    return {}
+
+
 def _trained_imgsz(model, model_path: str) -> Optional[int]:
-    """Image size a YOLO pose model was trained at, or None when unknown.
+    """Image size to predict at, or None to leave it to Ultralytics.
 
-    A ``.pt`` carries it in its training args; an exported ``.onnx`` /
-    ``.engine`` next to its ``.pt`` (how auto-export writes them) takes the
-    ``.pt``'s.  Predicting at this size keeps every runtime on the same input
-    (and inside a dynamic TensorRT profile).
+    A ``.pt`` carries its training size.  A *dynamic* ``.onnx`` / ``.engine``
+    would otherwise run at Ultralytics' 640, whatever it was exported at
+    (auto-export uses the training size), so it gets its export size.  A static
+    export gets None: Ultralytics already uses its fixed input, and passing any
+    other size breaks it.
     """
-    size = _imgsz_value(getattr(model, "overrides", {}).get("imgsz"))
-    if size is not None:
-        return size
     path = Path(model_path)
-    sibling = path.with_suffix(".pt")
-    if path.suffix.lower() != ".pt" and sibling.is_file():
-        try:
-            from ultralytics import YOLO
-
-            return _imgsz_value(YOLO(str(sibling)).overrides.get("imgsz"))
-        except Exception:
-            logger.debug("Could not read training imgsz from %s", sibling)
+    if path.suffix.lower() == ".pt":
+        return _imgsz_value(getattr(model, "overrides", {}).get("imgsz"))
+    meta = _export_metadata(path)
+    args = meta.get("args") if isinstance(meta.get("args"), dict) else {}
+    if args.get("dynamic"):
+        return _imgsz_value(meta.get("imgsz"))
     return None
 
 

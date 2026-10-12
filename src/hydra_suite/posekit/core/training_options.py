@@ -58,6 +58,7 @@ def plan_flips(
     flip_pairs: Sequence[Sequence[int]],
     fliplr: float,
     flipud: float,
+    allow_unpaired: bool = False,
 ) -> FlipPlan:
     """Decide the flips for a run.
 
@@ -66,6 +67,8 @@ def plan_flips(
     pair; any left unpaired would teach the model to confuse the sides, so
     flips are off until the Skeleton Editor pairs them.  A skeleton with only
     midline keypoints flips with every keypoint kept in place.
+    ``allow_unpaired`` overrides the check for names that only look like sides
+    (the user says they are midline keypoints).
     """
     k = len(keypoint_names)
     fliplr = max(0.0, min(1.0, float(fliplr)))
@@ -73,7 +76,7 @@ def plan_flips(
     pairs = normalize_flip_pairs(flip_pairs, k)
     if fliplr <= 0 and flipud <= 0:
         return FlipPlan(0.0, 0.0, None, pairs, "Flips off.")
-    unpaired = unpaired_side_keypoints(keypoint_names, pairs)
+    unpaired = [] if allow_unpaired else unpaired_side_keypoints(keypoint_names, pairs)
     if unpaired:
         listed = ", ".join(str(keypoint_names[i]) for i in unpaired)
         return FlipPlan(
@@ -83,7 +86,8 @@ def plan_flips(
             pairs,
             f"Flips off: {listed} look like left/right keypoints but are not in "
             "a left/right pair. Pair them in the Skeleton Editor (Suggest from "
-            "names), then flips swap them.",
+            "names), then flips swap them. If they are not left/right keypoints, "
+            "tick 'Flip with unpaired side-like names'.",
             blocked=True,
         )
     if pairs:

@@ -46,9 +46,13 @@ On the ant pose project (8,633 crops of 192x128, crowded colonies):
   the mirrored name exists; Suggest from names uses the same rules);
   otherwise flips are off with a note naming the keypoints. A midline-only
   skeleton flips with the identity mapping.
-- `YoloNativeBackend` predicts at the model's training size (from the `.pt`,
-  or the `.pt` beside an exported artifact), so ONNX/TensorRT artifacts
-  exported at that size stay inside their dynamic profile.
+- `YoloNativeBackend` predicts at the model's training size for a `.pt`, and
+  at the export size for a dynamic `.onnx`/`.engine` (read from Ultralytics'
+  export metadata; auto-export uses the training size), so dynamic artifacts
+  stay inside their TensorRT profile. Static exports are left at their fixed
+  input. A side letter must end its token (LEG, RAY1 are not sides); FL/lf/l+word
+  forms need their partner name; a per-run override covers midline names that
+  only look like sides.
 - `training/pose_geometry_measure.measure_crop_geometry`: YOLO `imgsz` = the
   p90 crop long side rounded up to 32 (64..640); ViTPose `[H, W]` = median crop
   x 1.25 box padding x Detail on the 32 grid (cap 384). Prediction passes no

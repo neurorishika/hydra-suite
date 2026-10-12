@@ -891,6 +891,14 @@ class TrainingRunnerDialog(QDialog):
         self.cb_ignore_occluded.setChecked(True)
         cfg_layout.addRow("", self.cb_ignore_occluded)
 
+        self.cb_flip_unpaired = QCheckBox("Flip with unpaired side-like names")
+        self.cb_flip_unpaired.setToolTip(
+            "Flips stay off while a keypoint whose name looks like a left/right "
+            "side (l_*, *_R, L1, ...) is not in a left/right pair. Tick this when "
+            "those keypoints are really midline ones. Applies to this session only."
+        )
+        cfg_layout.addRow("", self.cb_flip_unpaired)
+
         self.lbl_labeled = QLabel("")
         self._refresh_labeled_count()
         cfg_layout.addRow("Labeled status", self.lbl_labeled)
@@ -1197,6 +1205,7 @@ class TrainingRunnerDialog(QDialog):
         ):
             spin.valueChanged.connect(self._update_flip_notes)
         self.cb_augment.toggled.connect(self._update_flip_notes)
+        self.cb_flip_unpaired.toggled.connect(self._update_flip_notes)
         self._crop_stats = None
         self._crop_stats_error = ""
 
@@ -1984,6 +1993,7 @@ class TrainingRunnerDialog(QDialog):
             getattr(self.project, "flip_pairs", []) or [],
             lr,
             ud,
+            allow_unpaired=self.cb_flip_unpaired.isChecked(),
         )
 
     def _update_flip_notes(self, *_args) -> None:
