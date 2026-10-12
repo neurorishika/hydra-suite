@@ -28,6 +28,8 @@ always recomputed fresh (`use_cached_detections=False`).
   (FrameID, track id) when schemas match.
 - `run_matrix.sh` — one-shot: legacy ×1, new ×2, per video, then prints the
   determinism baseline and the equivalence comparison.
+- `fragmentation.py` — track-fragmentation gates on raw forward CSVs (see
+  "Fragmentation checks" below).
 
 ## Portable fixtures (default)
 
@@ -185,6 +187,27 @@ The new pipeline must not be meaningfully slower than legacy: `PERFORMANCE: SLOW
 when `new/legacy` wall-clock ratio exceeds `PERF_TOLERANCE` (default 1.25). This
 catches throughput regressions that the CSV comparison can't — e.g. a cold
 per-frame pose service running seconds/frame even when the trajectories match.
+
+## Fragmentation checks
+
+EQUIVALENCE says *that* tracking changed, not whether it got worse. An 8x
+fragmentation regression (enabling pose silently switched on an association
+gate; X1_d1 went from 298 to 2446 raw tracks) passed unnoticed for that reason.
+The matrix now also prints, per clip:
+
+- **FRAGMENTATION legacy vs new_a** — raw forward track count, median track
+  length and *handoffs* (a track ending at frame f followed at f+1 by a new track
+  within one body length: the same animal re-born under a new ID). Fails when
+  tracks or handoffs grow by more than 1.25x + 5.
+- **POSE-INVARIANCE new_a vs new_nopose** — for every clip that extracts pose
+  with pose rejection off, one extra run with pose disabled. Pose extraction must
+  not change association: ≥99.5% of tracked positions shared (IDs and heading are
+  ignored — pose legitimately sets heading) and tracks/handoffs within
+  1.10x + 3. Skip with `POSE_INVARIANCE=0`.
+
+Either failure lands in the matrix's untrustworthy list (non-zero exit).
+`fragmentation.py regression|invariance A.csv B.csv --body-px N` runs the same
+checks on any pair of raw forward CSVs, e.g. a full video on a GPU box.
 
 For profiling a real fixture, `runner.py` can override each independent batching
 control without editing the fixture config:

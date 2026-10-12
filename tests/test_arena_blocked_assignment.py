@@ -137,8 +137,6 @@ def _e2e_params(spatial: bool) -> dict:
         "ENABLE_SPATIAL_OPTIMIZATION": spatial,
         "MIN_RESPAWN_DISTANCE": 15.0,
         "REFERENCE_BODY_SIZE": 20.0,
-        "W_POSE_DIRECTION": 0.75,
-        "W_POSE_LENGTH": 0.1,
         "POSE_VALID_ORIENTATION_SCALE": 0.15,
         "ASSOCIATION_STAGE1_MOTION_GATE_MULTIPLIER": 1.4,
         "ASSOCIATION_STAGE1_MAX_AREA_RATIO": 2.5,

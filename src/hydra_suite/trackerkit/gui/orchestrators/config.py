@@ -1937,8 +1937,6 @@ class ConfigOrchestrator:
                 "weight_orientation": self._panels.tracking.spin_Wo.value(),
                 "weight_area": self._panels.tracking.spin_Wa.value(),
                 "weight_aspect_ratio": self._panels.tracking.spin_Wasp.value(),
-                "weight_pose_direction": 0.5,
-                "weight_pose_length": 0.0,
                 "pose_valid_orientation_scale": 0.15,
                 "use_mahalanobis_distance": self._panels.tracking.chk_use_mahal.isChecked(),
                 # === ASSIGNMENT ALGORITHM ===

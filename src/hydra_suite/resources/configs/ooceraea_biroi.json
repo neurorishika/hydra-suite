@@ -83,8 +83,6 @@
   "weight_orientation": 3.87,
   "weight_area": 0.0111,
   "weight_aspect_ratio": 0.17,
-  "weight_pose_direction": 0.5,
-  "weight_pose_length": 0.0,
   "pose_valid_orientation_scale": 0.15,
   "use_mahalanobis_distance": true,
   "enable_greedy_assignment": false,
