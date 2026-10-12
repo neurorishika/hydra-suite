@@ -662,3 +662,45 @@ def test_trained_weights_follow_the_training_backend(tmp_path):
     )
     MainWindow._use_trained_weights(fake, dlg)
     assert calls == {"vit": str(weights), "backend": "ViTPose"}
+
+
+def test_skeleton_shorter_file_keeps_pairs_by_name(qapp, tmp_path, monkeypatch):
+    from hydra_suite.posekit.gui.dialogs import skeleton as S
+
+    dlg = S.SkeletonEditorDialog(
+        ["head", "thorax", "abd", "left_x", "right_x"], [], None, flip_pairs=[(3, 4)]
+    )
+    monkeypatch.setattr(S.QMessageBox, "question", lambda *a, **k: S.QMessageBox.Yes)
+    out = tmp_path / "s.json"
+    out.write_text(
+        json.dumps({"keypoint_names": ["left_x", "right_x"], "edges": [[0, 1]]})
+    )
+    monkeypatch.setattr(dlg, "_pick_skeleton_path", lambda save: out)
+    dlg._load_config()
+    assert dlg.get_flip_pairs() == [(0, 1)]
+
+
+def test_backend_recorded_only_when_a_run_finishes(runner, tmp_path):
+    w = tmp_path / "best.pt"
+    w.write_bytes(b"x")
+    runner._begin_run("YOLO Pose")
+    runner._on_finished({"weights": str(w)})
+    assert runner._trained_backend == "YOLO Pose" and runner._last_weights == str(w)
+    runner._begin_run("ViTPose")  # this one fails: no _on_finished
+    assert runner._last_weights is None and runner._trained_backend == ""
+
+
+def test_close_asks_before_stopping_a_running_training(runner, monkeypatch):
+    import hydra_suite.posekit.gui.dialogs.training as T
+
+    asked = []
+    monkeypatch.setattr(runner, "_training_running", lambda: True)
+    monkeypatch.setattr(
+        T.QMessageBox,
+        "question",
+        lambda *a, **k: asked.append(1) or T.QMessageBox.No,
+    )
+    stopped = []
+    monkeypatch.setattr(runner, "_shutdown", lambda: stopped.append(1))
+    runner.done(0)
+    assert asked and not stopped  # declined: training keeps running

@@ -32,9 +32,15 @@ from hydra_suite.utils.conda_utils import popen_conda, run_conda
 class PoseInferenceService:
     """PoseInferenceService API surface documentation."""
 
-    # 4: YOLO keys were Ultralytics' image0.jpg placeholders before; the
-    # pose nearest the crop centre is reported (core.pose_instances).
-    CACHE_VERSION = 4
+    CACHE_VERSION = 3
+    # YOLO only: keys were Ultralytics' image0.jpg placeholders before, and the
+    # pose nearest the crop centre is reported now (core.pose_instances).
+    YOLO_CACHE_VERSION = 4
+
+    def _cache_version(self, backend: str) -> int:
+        if (backend or "yolo").lower() == "yolo":
+            return self.YOLO_CACHE_VERSION
+        return self.CACHE_VERSION
 
     def __init__(
         self,
@@ -85,7 +91,8 @@ class PoseInferenceService:
     def _cache_key(self, model_path: Path, backend: str) -> str:
         m = self._model_sig(model_path, backend) or "missing"
         token = (
-            f"v{self.CACHE_VERSION}|k{self.kpt_sig}|n{len(self.keypoint_names)}|"
+            f"v{self._cache_version(backend)}|k{self.kpt_sig}|"
+            f"n{len(self.keypoint_names)}|"
             f"b{backend}|m{m}"
         )
         return hashlib.sha1(token.encode("utf-8")).hexdigest()[:12]
@@ -104,7 +111,7 @@ class PoseInferenceService:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             meta = data.get("meta", {})
-            if int(meta.get("version", -1)) != self.CACHE_VERSION:
+            if int(meta.get("version", -1)) != self._cache_version(backend):
                 return None
             if meta.get("backend") and str(meta.get("backend")) != backend:
                 return None
@@ -142,7 +149,7 @@ class PoseInferenceService:
     ):
         self._cache_dir().mkdir(parents=True, exist_ok=True)
         meta = {
-            "version": self.CACHE_VERSION,
+            "version": self._cache_version(backend),
             "kpt_sig": self.kpt_sig,
             "num_kpts": len(self.keypoint_names),
             "backend": backend,

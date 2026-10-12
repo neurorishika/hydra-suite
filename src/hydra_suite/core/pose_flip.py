@@ -13,45 +13,68 @@ from typing import Iterable, List, Sequence, Tuple
 
 Pair = Tuple[int, int]
 
-_SIDE_PATTERNS = (
-    # (regex for one side, replacement giving the other side)
-    (re.compile(r"left", re.IGNORECASE), "right"),
-    (re.compile(r"right", re.IGNORECASE), "left"),
-    (re.compile(r"(^|[_\-\s])l($|[_\-\s])", re.IGNORECASE), r"\1r\2"),
-    (re.compile(r"(^|[_\-\s])r($|[_\-\s])", re.IGNORECASE), r"\1l\2"),
+# Ways a keypoint name marks its side.  Each rule matches the side marker
+# (group "s"); swapping it gives the partner's name.  Strong markers are
+# unambiguous; a weak one (a lone l/r glued to a word: lhip, rear) counts only
+# when the mirrored name exists too ("rear" alone is not a side).
+_SIDE_RULES = (
+    # left / right as a word or word start (left_eye, eyeLeft, leftwing; not
+    # "bright")
+    (re.compile(r"(?<![a-z])(?P<s>[Ll]eft|LEFT|[Rr]ight|RIGHT)"), True),
+    (re.compile(r"(?<=[a-z0-9])(?P<s>Left|Right)"), True),  # eyeLeft
+    # a lone l/r: l_ear, ear_r, L1, l.ant, LFoot
+    (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?![a-z])"), True),
+    # camelCase suffix: antL, eyeR, legL1
+    (re.compile(r"(?<=[a-z0-9])(?P<s>[LR])(?![a-z])"), True),
+    # l/r + front/hind/middle/back: lf_leg, rh, lfpaw
+    (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?=[fFhHmMbB](?![a-z]{3}))"), True),
+    # front/hind/middle/back + l/r: FL, hr_paw, paw_fl
+    (re.compile(r"(?<![A-Za-z])[fFhHmMbB](?P<s>[lLrR])(?![a-z])"), True),
+    # l/r glued to a word: lhip, Leye, lantenna (weak)
+    (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?=[a-z]{2,})"), False),
 )
+_SWAP = {"left": "right", "right": "left", "l": "r", "r": "l"}
 
 
-_SIDE_WORD = re.compile(r"left|right", re.IGNORECASE)
-# One-letter side tokens: l / r, l1 / r2 (leg numbers), lf / rh / lm / rb
-# (front, hind, middle, back).
-_SIDE_TOKEN = re.compile(r"^[lr](\d+|[fhmb])?$", re.IGNORECASE)
-_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=\d)")
+def _swap_side(marker: str) -> str:
+    other = _SWAP[marker.lower()]
+    if marker.isupper():
+        return other.upper()
+    if marker[:1].isupper():
+        return other[:1].upper() + other[1:]
+    return other
 
 
-def is_side_named(name: str) -> bool:
+def _side_variants(name: str) -> List[Tuple[str, bool]]:
+    """``(partner name, strong)`` for each side marker found in ``name``."""
+    out: List[Tuple[str, bool]] = []
+    for pattern, strong in _SIDE_RULES:
+        for m in pattern.finditer(name):
+            a, b = m.span("s")
+            out.append((name[:a] + _swap_side(m.group("s")) + name[b:], strong))
+    return out
+
+
+def is_side_named(name: str, names: Sequence[str] = ()) -> bool:
     """Whether a keypoint name marks a left or right side.
 
-    Deliberately broad (left/right anywhere; l/r tokens such as ``l_ear``,
-    ``antL``, ``L1``, ``lf_leg``, ``l.ant``): a missed side name lets a flip
-    train the model to confuse sides, a false alarm only asks for pairs.
+    Broad on purpose (left_eye, l_ear, antL, L1, lf_leg, FL, l.ant; lhip when
+    rhip is among ``names``): a missed side name lets a flip train the model to
+    confuse sides, a false alarm only asks for pairs.
     """
-    text = str(name)
-    if _SIDE_WORD.search(text):
-        return True
-    tokens = [t for t in _TOKEN_SPLIT.split(text) if t]
-    # Re-join a letter split from its leg number ("L1" -> "L", "1").
-    joined = list(tokens)
-    for i in range(len(tokens) - 1):
-        if tokens[i + 1].isdigit():
-            joined.append(tokens[i] + tokens[i + 1])
-    return any(_SIDE_TOKEN.match(t) for t in joined)
+    known = {str(n).strip().lower() for n in names}
+    for partner, strong in _side_variants(str(name).strip()):
+        if strong or partner.lower() in known:
+            return True
+    return False
 
 
 def unpaired_side_keypoints(names: Sequence[str], pairs: Iterable[Pair]) -> List[int]:
     """Side-named keypoints (see :func:`is_side_named`) that no pair covers."""
     paired = {i for pair in pairs for i in pair}
-    return [i for i, n in enumerate(names) if i not in paired and is_side_named(n)]
+    return [
+        i for i, n in enumerate(names) if i not in paired and is_side_named(n, names)
+    ]
 
 
 def remap_pairs_by_name(
@@ -99,37 +122,17 @@ def flip_index(pairs: Iterable[Sequence[int]], k: int) -> List[int]:
     return idx
 
 
-def _mirror_name(name: str) -> str:
-    for pattern, repl in _SIDE_PATTERNS:
-        if pattern.search(name):
-            swapped = pattern.sub(
-                lambda m, r=repl: _match_case(m.expand(r), m.group(0)),
-                name,
-                count=1,
-            )
-            if swapped != name:
-                return swapped
-    return name
-
-
-def _match_case(new: str, old: str) -> str:
-    if old.isupper():
-        return new.upper()
-    if old[:1].isupper():
-        return new[:1].upper() + new[1:]
-    return new
-
-
 def suggest_flip_pairs(names: Sequence[str]) -> List[Pair]:
-    """Pairs whose names differ only by a left/right word (left_eye/right_eye,
-    l_ear/r_ear, ...).  Matching ignores case."""
+    """Pairs whose names differ only by their side marker (left_eye/right_eye,
+    l_ear/r_ear, antL/antR, L1/R1, FL/FR, lhip/rhip, ...).  Ignores case."""
     lookup = {str(n).strip().lower(): i for i, n in enumerate(names)}
     pairs: List[Pair] = []
     for i, name in enumerate(names):
-        other = _mirror_name(str(name).strip()).lower()
-        j = lookup.get(other)
-        if j is not None and j != i:
-            pairs.append((i, j))
+        for partner, _strong in _side_variants(str(name).strip()):
+            j = lookup.get(partner.lower())
+            if j is not None and j != i:
+                pairs.append((i, j))
+                break
     return normalize_flip_pairs(pairs, len(names))
 
 

@@ -359,6 +359,9 @@ class SkeletonEditorDialog(QDialog):
     ):
         if not names:
             return
+        # Before any row changes: pairs are carried over by these names.
+        old_names = self._current_names()
+        old_pairs = self.flip_panel.pairs()
         if len(names) != self.kpt_table.rowCount():
             resp = QMessageBox.question(
                 self,
@@ -370,8 +373,6 @@ class SkeletonEditorDialog(QDialog):
                 return
             self.kpt_table.setRowCount(len(names))
 
-        old_names = self._current_names()
-        old_pairs = self.flip_panel.pairs()
         self.kpt_names = list(names)
         for i, name in enumerate(self.kpt_names):
             self.kpt_table.setItem(i, 0, QTableWidgetItem(str(i)))

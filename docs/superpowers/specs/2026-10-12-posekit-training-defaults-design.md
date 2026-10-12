@@ -40,9 +40,15 @@ On the ant pose project (8,633 crops of 192x128, crowded colonies):
   prediction cache is bumped to v4 and only stores model-size predictions. `MAX_POSES_PER_CROP = 10` replaces the
   per-crop limit of 1 in PoseKit prediction, `PoseRuntimeConfig` and
   TrackerKit's `PoseYOLOConfig`.
-- `posekit/core/training_options.plan_flips`: flips run with pairs; a skeleton
-  whose names have sides but no pairs gets flips switched off (with a note);
-  a midline-only skeleton flips with the identity mapping.
+- `posekit/core/training_options.plan_flips`: flips run only when every
+  side-named keypoint is paired (`core/pose_flip` side rules: left/right
+  words, l/r tokens, camelCase L/R, L1, lf/FL, and l/r glued to a word when
+  the mirrored name exists; Suggest from names uses the same rules);
+  otherwise flips are off with a note naming the keypoints. A midline-only
+  skeleton flips with the identity mapping.
+- `YoloNativeBackend` predicts at the model's training size (from the `.pt`,
+  or the `.pt` beside an exported artifact), so ONNX/TensorRT artifacts
+  exported at that size stay inside their dynamic profile.
 - `training/pose_geometry_measure.measure_crop_geometry`: YOLO `imgsz` = the
   p90 crop long side rounded up to 32 (64..640); ViTPose `[H, W]` = median crop
   x 1.25 box padding x Detail on the 32 grid (cap 384). Prediction passes no

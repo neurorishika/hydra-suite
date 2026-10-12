@@ -1685,25 +1685,58 @@ class TrainingRunnerDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         """Persist dialog settings and cancel any running training or export worker before closing."""
+        if not self._confirm_stop():
+            event.ignore()
+            return
         self._shutdown()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:
         """Close / Esc go through here (not closeEvent): save and stop too."""
+        if not self._confirm_stop():
+            return
         self._shutdown()
         super().done(result)
 
+    def _training_running(self) -> bool:
+        if not self._thread:
+            return False
+        try:
+            return bool(self._thread.isRunning())
+        except RuntimeError:  # thread object already deleted
+            return False
+
+    def _confirm_stop(self) -> bool:
+        """Closing stops a running training: ask first (once per close)."""
+        if not self._training_running() or getattr(self, "_stop_confirmed", False):
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Stop training?",
+            "Training is still running. Closing the Training Runner stops it.\n"
+            "Stop training and close?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        self._stop_confirmed = answer == QMessageBox.Yes
+        return self._stop_confirmed
+
     def _shutdown(self) -> None:
         self._save_settings()
-        if self._thread:
+        if not self._training_running():
+            return
+        # The dialog is going away: no "Training failed: Canceled." box after.
+        for signal, slot in (
+            (self._worker.failed, self._on_failed),
+            (self._worker.finished, self._on_finished),
+        ):
             try:
-                running = self._thread.isRunning()
-            except RuntimeError:  # thread object already deleted
-                running = False
-            if running:
-                self._worker.cancel()
-                self._thread.quit()
-                self._thread.wait()
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._worker.cancel()
+        self._thread.quit()
+        self._thread.wait()
 
     def _remove_aux_project(self):
         row = self.aux_list.currentRow()
@@ -1759,7 +1792,6 @@ class TrainingRunnerDialog(QDialog):
 
         self._apply_auto_sizes()
         flips = self._flip_plan(yolo=True)
-        self._trained_backend = "YOLO Pose"
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = self.project.out_root / "runs" / "yolo_pose" / timestamp
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -1831,6 +1863,7 @@ class TrainingRunnerDialog(QDialog):
         self._train_start_ts = time.time()
         self._loss_source_path = None
         self.lbl_run_dir.setText(f"Run dir: {run_dir}")
+        self._begin_run("YOLO Pose")
         self.log_view.clear()
         self.progress.setValue(0)
         self.lbl_loss_plot.clear()
@@ -1989,12 +2022,12 @@ class TrainingRunnerDialog(QDialog):
 
         self._apply_auto_sizes()
         flips = self._flip_plan(yolo=False)
-        self._trained_backend = "ViTPose"
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = get_training_runs_dir() / "vitpose" / timestamp
         cache_dir = get_vitpose_cache_dir()
 
         self._last_run_dir = run_dir
+        self._begin_run("ViTPose")
         self._train_start_ts = time.time()
         self._loss_source_path = None
         self.lbl_run_dir.setText(f"Run dir: {run_dir}")
@@ -2055,7 +2088,15 @@ class TrainingRunnerDialog(QDialog):
             pct = int((epoch / epochs) * 100)
             self.progress.setValue(min(100, max(0, pct)))
 
+    def _begin_run(self, backend: str) -> None:
+        """A run starts: forget the previous run's weights until this one ends."""
+        self._run_backend = backend
+        self._last_weights = None
+        self._trained_backend = ""
+
     def _on_finished(self, info: dict):
+        # The weights below belong to the run that just finished.
+        self._trained_backend = getattr(self, "_run_backend", "")
         self._append_log("Training complete.")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -2151,7 +2192,9 @@ class TrainingRunnerDialog(QDialog):
                 self, "Missing weights", "No valid weights found to evaluate."
             )
             return
-        backend = self._trained_backend or self.backend_combo.currentText()
+        backend = self._trained_backend or (
+            "ViTPose" if is_vitpose_run(weights) else self.backend_combo.currentText()
+        )
         trained_backend = "vitpose" if backend == "ViTPose" else "yolo"
         dlg = EvaluationDashboardDialog(
             self,

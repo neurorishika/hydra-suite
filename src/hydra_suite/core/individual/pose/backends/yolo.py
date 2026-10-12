@@ -88,9 +88,10 @@ def auto_export_yolo_model(
         model = YOLO(str(model_path))
     export_kwargs: Dict[str, Any] = {
         "format": "onnx" if runtime == "onnx" else "engine",
-        # The size the model was trained at (a dynamic ONNX/engine artifact
-        # otherwise predicts at this export size, not the training size).
-        "imgsz": int(getattr(model, "overrides", {}).get("imgsz") or 640),
+        # Export at the training size; YoloNativeBackend predicts at that size
+        # too (a dynamic artifact would otherwise run at Ultralytics' 640,
+        # outside a TensorRT profile built for a small model).
+        "imgsz": _trained_imgsz(model, str(model_path)) or 640,
         "verbose": False,
         "project": str(target_path.parent),
         "name": model_path.stem,
@@ -123,6 +124,39 @@ def auto_export_yolo_model(
         shutil.copy2(out_path, target_path)
     write_artifact_meta(target_path, sig)
     return str(target_path.resolve())
+
+
+def _imgsz_value(value) -> Optional[int]:
+    if isinstance(value, (list, tuple)):
+        value = max(value) if value else None
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
+def _trained_imgsz(model, model_path: str) -> Optional[int]:
+    """Image size a YOLO pose model was trained at, or None when unknown.
+
+    A ``.pt`` carries it in its training args; an exported ``.onnx`` /
+    ``.engine`` next to its ``.pt`` (how auto-export writes them) takes the
+    ``.pt``'s.  Predicting at this size keeps every runtime on the same input
+    (and inside a dynamic TensorRT profile).
+    """
+    size = _imgsz_value(getattr(model, "overrides", {}).get("imgsz"))
+    if size is not None:
+        return size
+    path = Path(model_path)
+    sibling = path.with_suffix(".pt")
+    if path.suffix.lower() != ".pt" and sibling.is_file():
+        try:
+            from ultralytics import YOLO
+
+            return _imgsz_value(YOLO(str(sibling)).overrides.get("imgsz"))
+        except Exception:
+            logger.debug("Could not read training imgsz from %s", sibling)
+    return None
 
 
 class YoloNativeBackend:
@@ -166,6 +200,7 @@ class YoloNativeBackend:
             self.model.to(self.device)
         except Exception:
             pass
+        self.imgsz = _trained_imgsz(self.model, self.model_path)
 
     @property
     def preferred_input_size(self) -> int:
@@ -206,6 +241,7 @@ class YoloNativeBackend:
             iou=self.iou,
             max_det=self.max_det,
             batch=min(self.batch_size, max(1, len(crops))),
+            **({"imgsz": self.imgsz} if self.imgsz else {}),
             verbose=False,
             device=self.device,
         )

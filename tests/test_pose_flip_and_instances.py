@@ -165,10 +165,9 @@ def test_central_ignores_low_confidence_fragments():
 
 
 def test_yolo_pose_cache_key_tracks_the_selection_rule():
+    from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
     from hydra_suite.core.inference.cache.keys import pose_cache_key
     from hydra_suite.core.inference.config import PoseConfig, PoseYOLOConfig
-
-    from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 
     geom = CanonicalGeometry(canvas_wh=(96, 48), margin=1.3, aspect_ratio=2.0)
     one = PoseConfig(
@@ -179,3 +178,97 @@ def test_yolo_pose_cache_key_tracks_the_selection_rule():
     assert (
         pose_cache_key(one, geom).config_hash != pose_cache_key(ten, geom).config_hash
     )
+
+
+SIDE_PAIRS = [
+    ["left_antenna_tip", "right_antenna_tip"],
+    ["Left Eye", "right eye"],
+    ["eyeLeft", "eyeRight"],
+    ["l_ear", "r_ear"],
+    ["ear_l", "ear_r"],
+    ["l.ant", "r.ant"],
+    ["antL", "antR"],
+    ["forelegL4", "forelegR4"],
+    ["L1", "R1"],
+    ["legL1", "legR1"],
+    ["LF", "RF"],
+    ["lf_leg", "rf_leg"],
+    ["lfpaw", "rfpaw"],
+    ["FL", "FR"],
+    ["FL_paw", "FR_paw"],
+    ["paw_fl", "paw_fr"],
+    ["lhip", "rhip"],
+    ["Leye", "Reye"],
+    ["lear", "rear"],
+    ["LFoot", "RFoot"],
+]
+MIDLINE = [
+    "head",
+    "thorax",
+    "abdomen_tip",
+    "tail_root",
+    "throat",
+    "clypeus",
+    "neck",
+    "petiole_post_petiole",
+    "tip_of_gaster",
+    "rostrum",
+    "rear",
+    "bright",
+    "tarsus",
+    "front",
+    "hind",
+    "mid",
+    "withers",
+    "labrum",
+    "frons",
+    "rump",
+]
+
+
+@pytest.mark.parametrize("pair", SIDE_PAIRS, ids=lambda p: p[0])
+def test_every_detected_side_style_is_suggestible(pair):
+    from hydra_suite.core.pose_flip import is_side_named
+
+    names = ["head"] + pair
+    assert all(is_side_named(n, names) for n in pair)
+    assert suggest_flip_pairs(names) == [(1, 2)]
+
+
+def test_midline_names_are_not_sides():
+    from hydra_suite.core.pose_flip import is_side_named
+
+    assert [n for n in MIDLINE if is_side_named(n, MIDLINE)] == []
+
+
+def test_yolo_trained_imgsz_reading(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from hydra_suite.core.individual.pose.backends import yolo as Y
+
+    assert Y._imgsz_value([128, 192]) == 192
+    assert Y._imgsz_value("x") is None and Y._imgsz_value(0) is None
+    model = SimpleNamespace(overrides={"imgsz": 192})
+    assert Y._trained_imgsz(model, str(tmp_path / "m.pt")) == 192
+    # an exported artifact takes the size of the .pt beside it
+    (tmp_path / "m.pt").write_bytes(b"x")
+    import ultralytics
+
+    monkeypatch.setattr(
+        ultralytics, "YOLO", lambda p: SimpleNamespace(overrides={"imgsz": 224})
+    )
+    assert (
+        Y._trained_imgsz(SimpleNamespace(overrides={}), str(tmp_path / "m.engine"))
+        == 224
+    )
+    assert (
+        Y._trained_imgsz(SimpleNamespace(overrides={}), str(tmp_path / "x.onnx"))
+        is None
+    )
+
+
+def test_prediction_cache_version_bumped_for_yolo_only(tmp_path):
+    from hydra_suite.integrations.sleap.service import PoseInferenceService
+
+    svc = PoseInferenceService(tmp_path, ["a", "b"])
+    assert svc._cache_version("yolo") == PoseInferenceService.YOLO_CACHE_VERSION
+    assert svc._cache_version("sleap") == svc._cache_version("vitpose") == 3
