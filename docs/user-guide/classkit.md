@@ -30,6 +30,14 @@ classkit
 - Active learning for efficient labeling
 - Export to Parquet/CSV, ImageFolder, and Ultralytics classification formats
 
+## Approving Predictions While Labeling
+
+With a trained model loaded, labeling mode shows **Approve** / **Reject** (default keys `+` / `-`) for any image that has a proposal: either a staged unverified machine label or the live model prediction. No review-mode staging is needed.
+
+- **Approve** stores the proposed label as a human-verified label and moves on.
+- **Reject** asks for the correct label, stores that, and moves on.
+- Images that already have a verified label, and `unknown` predictions, have nothing to approve.
+
 ## Training Augmentation Defaults
 
 The training dialog's *Space and Augmentations* tab starts with conservative
@@ -82,4 +90,15 @@ replacement, so a 20-image cluster is far likelier to be picked from than a
 `alpha`: 0% is proportional to size (no bias), 100% gives every cluster the same
 expected share. Cluster noise points count as rare. If the *Errors* and *Rare
 clusters* shares push the recipe above 100%, every slot is scaled down evenly.
+
+### Combination balancing (multi-factor schemes)
+
+The **Combos** share (default 15%) targets factor combinations that are rare or missing in the labeled set, e.g. `blue_pink` with no labels.
+
+- It works on **per-factor predictions** (head slices for multi-head models, marginals over composite classes for flat models), so it can surface combinations the model has never output. An image predicted `blue` in factor 1 and `pink` in factor 2 is a likely `blue_pink` even if no `blue_pink` was ever labeled.
+- Picks are greedy with diminishing returns: each pick lowers the weight of the combination it is expected to fill, so a batch spreads over several under-represented combinations instead of one.
+- Combinations containing `unknown` are not targeted, and unverified machine labels do not count as labeled examples.
+- Each candidate is tagged `likely <combo>` in the candidate table.
+
+Default recipe: 25% uncertainty, 20% diversity, 20% errors, 15% combinations, 10% rare clusters, 5% representative, 5% audit.
 

@@ -1351,6 +1351,9 @@ class ALBatchWorker(QRunnable):
         error_fraction: float | None = None,
         rare_cluster_fraction: float | None = None,
         rare_alpha: float | None = None,
+        combination_fraction: float | None = None,
+        factor_probs=None,
+        factor_labels=None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -1368,6 +1371,9 @@ class ALBatchWorker(QRunnable):
         self.error_fraction = error_fraction
         self.rare_cluster_fraction = rare_cluster_fraction
         self.rare_alpha = rare_alpha
+        self.combination_fraction = combination_fraction
+        self.factor_probs = factor_probs
+        self.factor_labels = factor_labels
         self.signals = TaskSignals()
 
     @Slot()
@@ -1419,6 +1425,8 @@ class ALBatchWorker(QRunnable):
                 cfg_kwargs["rare_cluster_fraction"] = float(self.rare_cluster_fraction)
             if self.rare_alpha is not None:
                 cfg_kwargs["rare_alpha"] = float(self.rare_alpha)
+            if self.combination_fraction is not None:
+                cfg_kwargs["combination_fraction"] = float(self.combination_fraction)
             cfg = BatchConfig(
                 batch_size=min(self.batch_size, int(unlabeled_mask.sum())),
                 balance_mode=self.balance_mode,
@@ -1437,6 +1445,8 @@ class ALBatchWorker(QRunnable):
                 predicted_labels=self.predicted_labels,
                 prediction_confidence=self.prediction_confidence,
                 trusted_label_mask=self.trusted_label_mask,
+                factor_probs=self.factor_probs,
+                factor_labels=self.factor_labels,
             )
 
             self.signals.progress.emit(100, f"Selected {len(selected)} candidates!")

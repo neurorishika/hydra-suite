@@ -67,6 +67,12 @@ def compute_metrics(
     # Overall accuracy
     acc = accuracy_score(labels, predictions)
 
+    # sklearn reports only the class ids that occur in labels or predictions, in
+    # sorted order, so row ``i`` of every per-class array belongs to
+    # ``present[i]``, not to ``class_names[i]``.  Indexing names by row position
+    # silently relabels classes whenever any class is absent.
+    present = np.unique(np.concatenate([np.asarray(labels), np.asarray(predictions)]))
+
     # Per-class metrics
     precision, recall, f1, support = precision_recall_fscore_support(
         labels, predictions, average=None, zero_division=0
@@ -88,14 +94,18 @@ def compute_metrics(
     # Per-class details
     num_classes = len(precision)
     if class_names is None:
-        class_names = [f"Class_{i}" for i in range(num_classes)]
+        class_names = [f"Class_{int(c)}" for c in present]
 
     per_class = []
     for i in range(num_classes):
         per_class.append(
             ClassMetrics(
-                class_id=i,
-                class_name=class_names[i] if i < len(class_names) else f"Class_{i}",
+                class_id=int(present[i]),
+                class_name=(
+                    class_names[int(present[i])]
+                    if int(present[i]) < len(class_names)
+                    else f"Class_{int(present[i])}"
+                ),
                 precision=float(precision[i]),
                 recall=float(recall[i]),
                 f1=float(f1[i]),

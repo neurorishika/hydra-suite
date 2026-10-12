@@ -1161,9 +1161,10 @@ class MainWindow(QMainWindow):
         )
         self.al_build_btn.setToolTip(
             "Select the highest-value unlabeled images for labeling —\n"
-            "30% uncertain · 25% diverse · 20% similar to model errors · "
-            "10% rare clusters · 10% representative (or balance) · 5% audit\n"
-            "(the error and rare-cluster shares are set below)"
+            "25% uncertain · 20% diverse · 20% similar to model errors · "
+            "15% rare/missing combinations · 10% rare clusters · "
+            "5% representative (or balance) · 5% audit\n"
+            "(the error, combination and rare-cluster shares are set below)"
         )
         self.al_build_btn.clicked.connect(self._build_al_batch)
         al_ctrl_row.addWidget(self.al_build_btn)
@@ -1217,6 +1218,21 @@ class MainWindow(QMainWindow):
             "share goes to uncertainty. 0 = off.",
         )
         al_mining_row.addWidget(self.al_error_spin)
+
+        _combo_lbl = QLabel("Combos:")
+        _combo_lbl.setStyleSheet(_mining_label_style)
+        al_mining_row.addWidget(_combo_lbl)
+        self.al_combo_spin = _mining_spin(
+            50,
+            15,
+            "%",
+            "Share of the batch aimed at factor COMBINATIONS that are rare or\n"
+            "missing in the labeled set (e.g. blue_pink with 0 labels). Works on\n"
+            "per-factor predictions, so it can find combinations the model has\n"
+            "never output. Picks spread over the under-represented combinations.\n"
+            "Needs a trained model. 0 = off.",
+        )
+        al_mining_row.addWidget(self.al_combo_spin)
 
         _rare_lbl = QLabel("Rare clusters:")
         _rare_lbl.setStyleSheet(_mining_label_style)
@@ -1543,7 +1559,7 @@ class MainWindow(QMainWindow):
         preview_layout.addLayout(preview_review_actions)
 
         self.preview_review_hint = QLabel(
-            "Use Approve / Reject here to expand labels while reviewing model predictions."
+            "Approve / Reject (+ / -) accept or correct the model's prediction, in labeling or review mode."
         )
         self.preview_review_hint.setWordWrap(True)
         self.preview_review_hint.setStyleSheet("color:#9a9a9a; font-size:11px;")
@@ -2604,10 +2620,13 @@ class MainWindow(QMainWindow):
             self._model_class_names
         )
 
-        if hasattr(self, "review_selected_btn"):
-            self.review_selected_btn.setEnabled(selected_can_approve)
-        if hasattr(self, "review_reject_btn"):
-            self.review_reject_btn.setEnabled(selected_can_approve)
+        if self.explorer_mode == "labeling":
+            self._update_labeling_approve_buttons()
+        else:
+            if hasattr(self, "review_selected_btn"):
+                self.review_selected_btn.setEnabled(selected_can_approve)
+            if hasattr(self, "review_reject_btn"):
+                self.review_reject_btn.setEnabled(selected_can_approve)
         if hasattr(self, "review_clear_unverified_btn"):
             self.review_clear_unverified_btn.setEnabled(has_pending)
         if hasattr(self, "review_all_btn"):
@@ -3952,7 +3971,7 @@ class MainWindow(QMainWindow):
             ("Next unlabeled", self.on_next_image),
             ("Undo last label (Ctrl+Z)", self.undo_last_assignment),
         ]
-        if self.explorer_mode == "review":
+        if self.explorer_mode in {"review", "labeling"}:
             for action_name, callback in review_only_actions:
                 self._register_label_shortcut(_key(action_name), callback)
         for action_name, callback in always_actions:
@@ -3989,7 +4008,7 @@ class MainWindow(QMainWindow):
         # so that scheme label shortcuts for the same keys don't cause Qt ambiguity.
         # In labeling mode (and other non-review modes), approve/reject are not
         # registered, so scheme shortcuts have free use of those keys.
-        if self.explorer_mode == "review":
+        if self.explorer_mode in {"review", "labeling"}:
             review_keys = {
                 QKeySequence(active.get(a, defaults.get(a, ""))).toString()
                 for a in ("Approve review label", "Reject review label")
@@ -5796,8 +5815,10 @@ class MainWindow(QMainWindow):
         image_path = self.image_paths[index]
 
         self.preview_canvas.set_image(str(image_path))
+        self._prefetch_upcoming_images(index)
 
         self.last_preview_index = index
+        self._update_labeling_approve_buttons()
         current_label = (
             self.image_labels[index] if index < len(self.image_labels) else None
         )
@@ -9053,7 +9074,12 @@ class MainWindow(QMainWindow):
             return
         self.selected_point_index = index
         if self.explorer_mode == "labeling":
-            self._labeling_navigation_scope = "database"
+            # With an active candidate batch, next/prev must keep walking the
+            # batch; clicking a point only jumps within (or out of) it.  Free
+            # whole-database navigation applies only when there is no batch.
+            self._labeling_navigation_scope = (
+                "pool" if self.candidate_indices else "database"
+            )
         self.hover_locked = True
         self.request_preview_for_index(index, source="click")
         self.request_update_explorer_selection(index)
@@ -9106,6 +9132,30 @@ class MainWindow(QMainWindow):
             else "n/a"
         )
         self.status.showMessage(f"Assigned label '{label}' to point {idx}")
+
+    _PREFETCH_AHEAD = 24
+
+    def _prefetch_upcoming_images(self, index: int) -> None:
+        """Warm the viewer cache with the images navigation will reach next."""
+        try:
+            pool = self._get_navigation_pool()
+            if pool and index in pool:
+                pos = pool.index(index)
+                ordered = pool[pos + 1 :] + pool[:pos]
+            else:
+                ordered = range(index + 1, len(self.image_paths))
+            labels = self.image_labels or []
+            paths = []
+            for i in ordered:
+                if self.explorer_mode == "labeling" and i < len(labels) and labels[i]:
+                    continue
+                if 0 <= i < len(self.image_paths):
+                    paths.append(self.image_paths[i])
+                if len(paths) >= self._PREFETCH_AHEAD:
+                    break
+            self.preview_canvas.prefetch(paths)
+        except Exception:
+            pass  # prefetch is an optimisation; never break navigation
 
     def _advance_pool_index(self, pool, step: int) -> int | None:
         """Advance within the current navigation pool with wraparound."""
@@ -10480,8 +10530,13 @@ class MainWindow(QMainWindow):
             if text and text not in ordered:
                 ordered.append(text)
 
-        for value in self.classes:
-            _add(value)
+        # With a multi-factor scheme ``self.classes`` holds one factor's labels
+        # (the label buttons), never a full composite class: skip it so metrics
+        # don't gain phantom single-factor classes.
+        scheme, _shortcuts = self._load_label_scheme()
+        if scheme is None or len(scheme.factors) <= 1:
+            for value in self.classes:
+                _add(value)
         for value in self._model_class_names or []:
             _add(value)
         for value in self.image_labels:
@@ -10861,7 +10916,17 @@ class MainWindow(QMainWindow):
         left_layout.setSpacing(0)
         left_layout.addWidget(table)
         left_layout.addStretch(1)
-        splitter.addWidget(left_pane)
+        # The table is fixed-height (one row per class, 47+ for identity), so it
+        # must live in a scroll area: otherwise its height becomes the minimum
+        # height of the whole window, which then outgrows the screen and can
+        # no longer be resized.
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.NoFrame)
+        left_scroll.setStyleSheet("background:#1e1e1e; border:none;")
+        left_scroll.setMinimumHeight(120)
+        left_scroll.setWidget(left_pane)
+        splitter.addWidget(left_scroll)
 
         # Right: matplotlib figure in a scroll area
         fig_label = QLabel("Rendering…")
@@ -11278,6 +11343,8 @@ class MainWindow(QMainWindow):
             self._collect_error_mining_inputs()
         )
 
+        factor_probs, factor_labels = self._collect_combination_inputs()
+
         from ..jobs.task_workers import ALBatchWorker
 
         worker = ALBatchWorker(
@@ -11301,6 +11368,9 @@ class MainWindow(QMainWindow):
             error_fraction=self.al_error_spin.value() / 100.0,
             rare_cluster_fraction=self.al_rare_spin.value() / 100.0,
             rare_alpha=self.al_rare_alpha_spin.value() / 100.0,
+            combination_fraction=self.al_combo_spin.value() / 100.0,
+            factor_probs=factor_probs,
+            factor_labels=factor_labels,
         )
         worker.signals.success.connect(self._on_al_batch_success)
         worker.signals.error.connect(
@@ -11314,6 +11384,45 @@ class MainWindow(QMainWindow):
         self._prepared_candidate_indices = []
         self._refresh_prepared_candidate_table("Building active-learning batch…")
         self._threadpool_start(worker)
+
+    def _collect_combination_inputs(self):
+        """Per-factor prediction marginals + the scheme's labels, for combo balancing.
+
+        Returns ``(factor_probs, factor_labels)`` or ``(None, None)`` when the
+        model output can't be mapped onto the scheme's factors.  Multi-head
+        outputs are sliced per head; flat composite models are marginalised
+        over the composite class names.
+        """
+        from ..core.al.combination import (
+            factor_marginals_from_composite,
+            factor_marginals_from_heads,
+        )
+
+        if self._model_probs is None:
+            return None, None
+        scheme = self._resolve_training_scheme()
+        factors = list(getattr(scheme, "factors", []) or [])
+        if factors:
+            factor_labels = [[str(v) for v in f.labels] for f in factors]
+        elif self.classes:
+            factor_labels = [[str(c) for c in self.classes]]
+        else:
+            return None, None
+        probs = np.asarray(self._model_probs)
+        try:
+            heads = self._current_prediction_heads()
+            marginals = None
+            if len(heads) > 1:
+                marginals = factor_marginals_from_heads(probs, heads, factor_labels)
+            elif self._model_class_names:
+                marginals = factor_marginals_from_composite(
+                    probs, list(self._model_class_names), factor_labels
+                )
+        except Exception:
+            return None, None
+        if not marginals:
+            return None, None
+        return marginals, factor_labels
 
     def _collect_error_mining_inputs(self):
         """Head-aware predictions + which labels are trustworthy, for AL error mining.
@@ -11363,6 +11472,9 @@ class MainWindow(QMainWindow):
             for idx, err in sources.items()
             if err in pairs
         }
+
+        for idx, combo in (info.get("combination_targets") or {}).items():
+            self._prepared_candidate_reason_detail[int(idx)] = f"likely {combo}"
 
         n = len(self._al_candidates)
         self.al_candidates_badge.setText(f"  {n} selected")
@@ -11948,8 +12060,66 @@ class MainWindow(QMainWindow):
         )
         return scopes
 
+    def _labeling_prediction_for_selected(self) -> str | None:
+        """Return the label the model proposes for the selected image, if any.
+
+        An unverified machine label already staged on the image wins; otherwise
+        the live model prediction is used, so approve/reject work in labeling
+        mode without first staging predictions through review mode.  Images
+        that already carry a human-verified label have nothing to approve.
+        """
+        index = self.selected_point_index
+        if index is None or not (0 <= index < len(self.image_paths)):
+            return None
+        status = self._review_status_for_index(index)
+        if status.get("label"):
+            if status.get("verified"):
+                return None
+            return str(status["label"]).strip() or None
+        labels = self.image_labels or []
+        if index < len(labels) and labels[index]:
+            return None
+        payload = self._review_prediction_for_index(index)
+        if payload is None:
+            return None
+        label = str(payload.get("label") or "").strip()
+        return label if label and label.lower() != "unknown" else None
+
+    def _approve_prediction_while_labeling(self) -> None:
+        """Accept the proposed label as a human label and advance."""
+        label = self._labeling_prediction_for_selected()
+        if label is None:
+            self.status.showMessage(
+                "No model prediction to approve for this image", 3000
+            )
+            return
+        self.assign_label_to_selected(label)
+
+    def _reject_prediction_while_labeling(self) -> None:
+        """Dismiss the proposed label, ask for the right one and advance."""
+        label = self._labeling_prediction_for_selected()
+        if label is None:
+            self.status.showMessage("No model prediction to reject for this image", 3000)
+            return
+        replacement = self._prompt_review_relabel_choice({"label": label})
+        if replacement is None:
+            return
+        self.assign_label_to_selected(replacement)
+
+    def _update_labeling_approve_buttons(self) -> None:
+        """Enable Approve / Reject when the selected image has a proposal."""
+        if self.explorer_mode != "labeling":
+            return
+        has_proposal = self._labeling_prediction_for_selected() is not None
+        for name in ("review_selected_btn", "review_reject_btn"):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(has_proposal)
+
     def approve_selected_review_label(self) -> None:
         """Mark the currently selected machine label as verified."""
+        if self.explorer_mode == "labeling":
+            self._approve_prediction_while_labeling()
+            return
         if self.explorer_mode != "review":
             return
         if self.selected_point_index is None:
@@ -12010,6 +12180,9 @@ class MainWindow(QMainWindow):
 
     def reject_selected_review_label(self) -> None:
         """Replace the selected machine label with a human-reviewed label."""
+        if self.explorer_mode == "labeling":
+            self._reject_prediction_while_labeling()
+            return
         if self.explorer_mode != "review":
             return
         if self.selected_point_index is None:

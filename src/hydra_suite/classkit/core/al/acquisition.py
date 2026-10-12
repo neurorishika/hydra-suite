@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from .density import select_diverse_samples
+from .combination import CombinationBalanceSelector
 from .error_mining import (
     ErrorNeighborSelector,
     RareClusterSelector,
@@ -38,9 +39,11 @@ class BatchConfig:
     """Configuration for batch acquisition."""
 
     batch_size: int = 100
-    uncertainty_fraction: float = 0.30
-    diversity_fraction: float = 0.25
-    representative_fraction: float = 0.10
+    uncertainty_fraction: float = 0.25
+    diversity_fraction: float = 0.20
+    representative_fraction: float = 0.05
+    combination_fraction: float = 0.15  # images likely to be missing / rare combos
+    combination_power: float = 1.0  # weight = (count + 1) ** -power per combination
     error_fraction: float = 0.20  # unlabeled images similar to known model errors
     rare_cluster_fraction: float = 0.10  # bias toward small / under-labeled clusters
     rare_alpha: float = 0.75  # 0 = proportional to cluster size, 1 = equal per cluster
@@ -310,6 +313,9 @@ class BatchAcquisition:
         self.audit_selector = AuditSelector()
         self.error_selector = ErrorNeighborSelector(self.config.error_same_pred_boost)
         self.rare_selector = RareClusterSelector(self.config.rare_alpha)
+        self.combination_selector = CombinationBalanceSelector(
+            self.config.combination_power
+        )
         self._rng = np.random.default_rng(seed)
         # Diagnostics for the most recent select_batch call (not part of the
         # (indices, breakdown) return so existing callers are unaffected).
@@ -329,6 +335,8 @@ class BatchAcquisition:
         predicted_labels: Optional[List[Optional[str]]] = None,
         prediction_confidence: Optional[np.ndarray] = None,
         trusted_label_mask: Optional[np.ndarray] = None,
+        factor_probs: Optional[List[np.ndarray]] = None,
+        factor_labels: Optional[List[List[str]]] = None,
     ) -> Tuple[np.ndarray, Dict[str, List[int]]]:
         """
         Select a batch using the full recipe.
@@ -352,6 +360,10 @@ class BatchAcquisition:
             trusted_label_mask: (N,) True where ``image_labels`` is human-verified
                 ground truth.  Unverified machine labels must be excluded or the
                 model's own guesses would count as errors / ground truth.
+            factor_probs / factor_labels: per-factor marginals ``[(N, L_f)]`` and
+                the scheme's label list per factor; enable the combination slot,
+                which targets under-represented (or never-seen) factor
+                combinations.
 
         Returns:
             selected_indices: (batch_size,) selected indices
@@ -369,6 +381,7 @@ class BatchAcquisition:
         fractions = {
             "error": max(0.0, cfg.error_fraction),
             "rare": max(0.0, cfg.rare_cluster_fraction),
+            "combination": max(0.0, cfg.combination_fraction),
             "uncertainty": max(0.0, cfg.uncertainty_fraction),
             "diversity": max(0.0, cfg.diversity_fraction),
             "representative": max(0.0, cfg.representative_fraction),
@@ -378,13 +391,21 @@ class BatchAcquisition:
             fractions = {k: v / total for k, v in fractions.items()}
         n_error = int(batch_size * fractions["error"])
         n_rare = int(batch_size * fractions["rare"])
+        n_combo = int(batch_size * fractions["combination"])
         n_uncertainty = int(batch_size * fractions["uncertainty"])
         n_diversity = int(batch_size * fractions["diversity"])
         n_representative = int(batch_size * fractions["representative"])
         n_audit = max(
             0,
             batch_size
-            - (n_error + n_rare + n_uncertainty + n_diversity + n_representative),
+            - (
+                n_error
+                + n_rare
+                + n_combo
+                + n_uncertainty
+                + n_diversity
+                + n_representative
+            ),
         )
 
         chosen: List[int] = []
@@ -423,6 +444,27 @@ class BatchAcquisition:
                         errors.indices, errors.true_labels, errors.pred_labels
                     )
                 }
+
+        # 1b. Combination balance: likely members of rare / missing combinations.
+        if (
+            n_combo > 0
+            and factor_probs is not None
+            and factor_labels is not None
+            and image_labels is not None
+        ):
+            res = self.combination_selector.select(
+                factor_probs,
+                factor_labels,
+                image_labels,
+                avail,
+                n_combo,
+                trusted_label_mask,
+            )
+            claim("combination", res.indices)
+            info["combination_targets"] = {
+                int(i): c for i, c in res.target_combo.items()
+            }
+            info["combination_missing"] = list(res.missing)
 
         # 2. Uncertainty
         if n_uncertainty > 0:
