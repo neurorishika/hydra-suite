@@ -2504,6 +2504,7 @@ class MainWindow(QMainWindow):
         usage_role=None,
         repository_dir=None,
         recursive=False,
+        unregistered_dirs=None,
     ):
         """Populate a YOLO-model combo with optional metadata role filtering."""
         self._config_orch._populate_yolo_model_combo(
@@ -2515,6 +2516,7 @@ class MainWindow(QMainWindow):
             usage_role=usage_role,
             repository_dir=repository_dir,
             recursive=recursive,
+            unregistered_dirs=unregistered_dirs,
         )
 
     def _set_model_selection_for_selector(self, combo, model_path, default_path=""):
