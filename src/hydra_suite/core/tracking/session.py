@@ -642,6 +642,7 @@ class TrackingSessionCore:
             # exporter falls back to a DEFAULT geometry that silently diverges
             # from the canvas every other stage of this session used.
             geometry=canonical_geometry_from_params(self.params),
+            params=self.params,
             progress=self.callbacks.progress,
             should_stop=self.callbacks.should_stop,
         )

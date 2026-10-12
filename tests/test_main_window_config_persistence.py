@@ -2089,3 +2089,44 @@ def test_pose_backend_type_roundtrip_restores_combo(
 
     assert reloaded_window._identity_panel.combo_pose_model_type.currentText() == label
     reloaded_window.close()
+
+
+def test_oriented_video_output_controls_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    window = _make_main_window(monkeypatch)
+    panel = window._dataset_panel
+    panel.chk_generate_individual_track_videos.setChecked(True)
+    panel.spin_oriented_video_scale.setValue(2.5)
+    panel.chk_oriented_video_show_pose.setChecked(True)
+    panel.combo_oriented_video_pose_color_mode.setCurrentIndex(1)
+    panel._oriented_video_pose_color = (1, 2, 3)
+    panel.spin_oriented_video_pose_point_radius.setValue(5)
+    panel.spin_oriented_video_pose_point_thickness.setValue(2)
+    panel.spin_oriented_video_pose_line_thickness.setValue(4)
+
+    config_path = tmp_path / "oriented_video_output_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["final_media_export_video_scale"] == 2.5
+    assert saved["final_media_export_show_pose"] is True
+    assert saved["final_media_export_pose_color_mode"] == "fixed"
+    assert saved["final_media_export_pose_color"] == [1, 2, 3]
+    assert saved["final_media_export_pose_point_radius"] == 5
+    assert saved["final_media_export_pose_point_thickness"] == 2
+    assert saved["final_media_export_pose_line_thickness"] == 4
+    window.close()
+
+    reloaded = _make_main_window(monkeypatch)
+    reloaded._load_config_from_file(str(config_path), preset_mode=True)
+    rpanel = reloaded._dataset_panel
+    assert rpanel.spin_oriented_video_scale.value() == 2.5
+    assert rpanel.chk_oriented_video_show_pose.isChecked() is True
+    assert rpanel.combo_oriented_video_pose_color_mode.currentIndex() == 1
+    assert rpanel._oriented_video_pose_color == (1, 2, 3)
+    assert rpanel.spin_oriented_video_pose_point_radius.value() == 5
+    assert rpanel.spin_oriented_video_pose_point_thickness.value() == 2
+    assert rpanel.spin_oriented_video_pose_line_thickness.value() == 4
+    reloaded.close()

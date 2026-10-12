@@ -16,6 +16,7 @@ import pandas as pd
 
 from hydra_suite.core.individual.dataset.oriented_video import (
     OrientedTrackVideoExporter,
+    TrackPoseOverlay,
 )
 from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.properties.export import build_pose_keypoint_labels
@@ -24,7 +25,7 @@ from hydra_suite.core.post.video_output_scale import (
     scaled_output_size,
 )
 from hydra_suite.utils.pose_visualization import (
-    is_renderable_pose_keypoint,
+    draw_pose_skeleton,
     normalize_pose_render_min_conf,
 )
 from hydra_suite.utils.profiling import bind_target
@@ -196,15 +197,26 @@ def build_video_track_label_array(trajectories_df, *, show_identity: bool = True
             ],
             dtype=object,
         )
+    track_ids = trajectories_df["TrajectoryID"].tolist()
+    labels = [
+        format_video_track_label(track_id, chosen_token)
+        for track_id, chosen_token in zip(
+            track_ids, _resolve_row_identity_tokens(trajectories_df)
+        )
+    ]
+    return np.asarray(labels, dtype=object)
+
+
+def _resolve_row_identity_tokens(trajectories_df) -> list:
+    """Per-row resolved identity token (or None), by the overlay priority chain."""
     # Prioritize resolved final identity over raw per-frame classifier evidence (audit S8).
     identity_columns = [
         C.FINAL_LABEL,
         C.FINAL_SMOOTHED_LABEL,
         C.UNIQUE_IDENTITY_KEY,
     ]
-    track_ids = trajectories_df["TrajectoryID"].tolist()
-    labels = []
-    for row_index, track_id in enumerate(track_ids):
+    tokens = []
+    for row_index in range(len(trajectories_df)):
         chosen_token = None
         for column in identity_columns:
             if column not in trajectories_df.columns:
@@ -222,8 +234,150 @@ def build_video_track_label_array(trajectories_df, *, show_identity: bool = True
             if token:
                 chosen_token = token
                 break
-        labels.append(format_video_track_label(track_id, chosen_token))
-    return np.asarray(labels, dtype=object)
+        tokens.append(chosen_token)
+    return tokens
+
+
+def _filename_token(text) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(text)).strip("._-")
+
+
+def build_identity_track_video_names(trajectories_df) -> dict:
+    """``{TrajectoryID: "<identity>_track<n>"}`` for identity-resolved tracks.
+
+    A track's identity is its most frequent resolved token (same priority
+    chain as the overlay label); ``n`` counts 1..k per identity in order of
+    first appearance. Tracks with no resolved identity are omitted, so they
+    keep their ``trajectory_XXXX`` name.
+    """
+    if trajectories_df is None or len(trajectories_df) == 0:
+        return {}
+    if "TrajectoryID" not in trajectories_df.columns:
+        return {}
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": pd.to_numeric(
+                trajectories_df["TrajectoryID"], errors="coerce"
+            ),
+            "FrameID": pd.to_numeric(
+                trajectories_df.get(
+                    "FrameID", pd.Series(0, index=trajectories_df.index)
+                ),
+                errors="coerce",
+            ),
+            "token": _resolve_row_identity_tokens(trajectories_df),
+        }
+    ).dropna(subset=["TrajectoryID"])
+    first_frame = df.groupby("TrajectoryID")["FrameID"].min()
+    labelled = df.dropna(subset=["token"])
+    identity_by_track = {}
+    for traj_id, tokens in labelled.groupby("TrajectoryID")["token"]:
+        counts = tokens.value_counts()
+        # Most frequent; ties broken by token text so the result is stable.
+        best = sorted(counts[counts == counts.max()].index)[0]
+        name = _filename_token(format_video_track_label(int(traj_id), best))
+        if name:
+            identity_by_track[int(traj_id)] = name
+    ordered = sorted(
+        identity_by_track,
+        key=lambda t: (float(first_frame.get(t, np.inf)), t),
+    )
+    counters: dict = {}
+    names = {}
+    for traj_id in ordered:
+        ident = identity_by_track[traj_id]
+        counters[ident] = counters.get(ident, 0) + 1
+        names[traj_id] = f"{ident}_track{counters[ident]}"
+    return names
+
+
+def build_track_pose_overlay(trajectories_df, params, config, *, scale=1.0):
+    """Pose overlay for the per-track canonical videos, or None.
+
+    Uses the oriented-video export's own ``final_media_export_pose_*``
+    settings (same set as the annotated-video preview, set independently).
+    """
+    if trajectories_df is None or len(trajectories_df) == 0:
+        return None
+    if not bool(config.get("final_media_export_show_pose", False)):
+        return None
+    params = params or {}
+    pose_edges, pose_column_triplets, show_pose = get_pose_column_info(
+        params, {"video_show_pose": True}, trajectories_df
+    )
+    if not show_pose:
+        return None
+    _K = len(pose_column_triplets)
+    _N = len(trajectories_df)
+    keypoints = np.full((_N, _K, 3), np.nan, dtype=np.float32)
+    for k, cols in enumerate(pose_column_triplets):
+        for axis, col in enumerate(cols):
+            keypoints[:, k, axis] = pd.to_numeric(
+                trajectories_df[col], errors="coerce"
+            ).to_numpy(dtype=np.float32)
+    frame_ids = pd.to_numeric(trajectories_df["FrameID"], errors="coerce").to_numpy()
+    track_ids = pd.to_numeric(
+        trajectories_df["TrajectoryID"], errors="coerce"
+    ).to_numpy()
+    row_index = {}
+    for row, (fid, tid) in enumerate(zip(frame_ids, track_ids)):
+        if np.isfinite(fid) and np.isfinite(tid):
+            row_index[(int(fid), int(tid))] = row
+
+    color_mode = str(config.get("final_media_export_pose_color_mode", "track"))
+    if color_mode.strip().lower() == "fixed":
+        raw = config.get("final_media_export_pose_color", [255, 255, 255])
+        try:
+            fixed = tuple(int(max(0, min(255, float(v)))) for v in raw)
+            if len(fixed) != 3:
+                raise ValueError
+        except Exception:
+            fixed = (255, 255, 255)
+        row_colors = [fixed] * _N
+    else:
+        show_identity = should_show_identity_video_overlay(config)
+        row_colors = build_precomputed_color_palette(
+            params.get("TRAJECTORY_COLORS", []),
+            trajectories_df["TrajectoryID"].to_numpy(),
+            build_video_track_color_key_array(
+                trajectories_df, show_identity=show_identity
+            ),
+        )
+    scale = float(scale)
+    return TrackPoseOverlay(
+        keypoints=keypoints,
+        row_index=row_index,
+        row_colors=[tuple(int(c) for c in color) for color in row_colors],
+        edges=list(pose_edges),
+        min_conf=normalize_pose_render_min_conf(
+            params.get("POSE_MIN_KPT_CONF_VALID", 0.2)
+        ),
+        point_radius=max(
+            1,
+            _scaled_size(
+                max(1, int(config.get("final_media_export_pose_point_radius", 3))),
+                scale,
+            ),
+        ),
+        point_thickness=_scaled_thickness(
+            int(config.get("final_media_export_pose_point_thickness", -1)), scale
+        ),
+        line_thickness=_scaled_thickness(
+            max(1, int(config.get("final_media_export_pose_line_thickness", 2))),
+            scale,
+        ),
+    )
+
+
+def resolve_final_media_video_scale(config) -> float:
+    """``final_media_export_video_scale`` (1.0 = source pixel scale)."""
+    try:
+        value = float(config.get("final_media_export_video_scale", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    if not np.isfinite(value) or value <= 0.0:
+        return 1.0
+    return float(min(8.0, max(0.1, value)))
 
 
 def build_video_track_color_key_array(trajectories_df, *, show_identity: bool = True):
@@ -638,47 +792,16 @@ def draw_single_track_on_frame(
                 if draw_p["pose_color_mode"] == "track"
                 else draw_p["pose_fixed_color"]
             )
-            if pose_edges:
-                for e0, e1 in pose_edges:
-                    if e0 < 0 or e1 < 0 or e0 >= len(kpts_arr) or e1 >= len(kpts_arr):
-                        continue
-                    if not is_renderable_pose_keypoint(
-                        kpts_arr[e0, 0],
-                        kpts_arr[e0, 1],
-                        kpts_arr[e0, 2],
-                        draw_p["pose_min_conf"],
-                    ) or not is_renderable_pose_keypoint(
-                        kpts_arr[e1, 0],
-                        kpts_arr[e1, 1],
-                        kpts_arr[e1, 2],
-                        draw_p["pose_min_conf"],
-                    ):
-                        continue
-                    cv2.line(
-                        frame,
-                        (
-                            int(round(float(kpts_arr[e0, 0]))),
-                            int(round(float(kpts_arr[e0, 1]))),
-                        ),
-                        (
-                            int(round(float(kpts_arr[e1, 0]))),
-                            int(round(float(kpts_arr[e1, 1]))),
-                        ),
-                        pose_color,
-                        draw_p["pose_line_thickness"],
-                    )
-            for kpt in kpts_arr:
-                if not is_renderable_pose_keypoint(
-                    kpt[0], kpt[1], kpt[2], draw_p["pose_min_conf"]
-                ):
-                    continue
-                cv2.circle(
-                    frame,
-                    (int(round(float(kpt[0]))), int(round(float(kpt[1])))),
-                    draw_p["pose_point_radius"],
-                    pose_color,
-                    draw_p["pose_point_thickness"],
-                )
+            draw_pose_skeleton(
+                frame,
+                kpts_arr,
+                pose_edges,
+                pose_color,
+                min_conf=draw_p["pose_min_conf"],
+                line_thickness=draw_p["pose_line_thickness"],
+                point_radius=draw_p["pose_point_radius"],
+                point_thickness=draw_p["pose_point_thickness"],
+            )
 
 
 class AnnotatedDrawState(NamedTuple):
@@ -1057,6 +1180,7 @@ def export_final_media(
     export_videos,
     background_color,
     geometry=None,
+    params=None,
     progress=None,
     should_stop=None,
 ):
@@ -1105,6 +1229,21 @@ def export_final_media(
     suppress_videos = bool(config.get("suppress_foreign_obb_oriented_videos", False))
     suppress_foreign_obb = suppress_videos if export_videos else suppress_dataset
 
+    render_scale = resolve_final_media_video_scale(config)
+    track_video_names = {}
+    pose_overlay = None
+    if export_videos:
+        # Pose keypoints and resolved identity live in the rich CSV (relink
+        # rewrites the final CSV with the same TrajectoryIDs, so rows join on
+        # (FrameID, TrajectoryID)).
+        media_df, _ = load_video_trajectories(final_csv_path)
+        if media_df is not None and not media_df.empty:
+            if should_show_identity_video_overlay(config):
+                track_video_names = build_identity_track_video_names(media_df)
+            pose_overlay = build_track_pose_overlay(
+                media_df, params, config, scale=render_scale
+            )
+
     exporter = OrientedTrackVideoExporter(
         str(export_root),
         final_csv_path,
@@ -1135,6 +1274,30 @@ def export_final_media(
         ),
         output_subdir="",
         geometry=geometry,
+        render_scale=render_scale,
+        track_video_names=track_video_names,
+        pose_overlay=pose_overlay,
     )
     result = exporter.export(progress_callback=progress, should_stop=should_stop)
+    if track_video_names and exporter.output_dir is not None:
+        _write_track_video_index(exporter.output_dir, track_video_names)
     return result.to_dict()
+
+
+def _write_track_video_index(output_dir, track_video_names) -> None:
+    """``track_index.csv``: which TrajectoryID each identity-named video holds."""
+    from pathlib import Path
+
+    rows = [
+        {"video": f"{name}.mp4", "TrajectoryID": int(traj_id)}
+        for traj_id, name in sorted(track_video_names.items())
+        if (Path(output_dir) / f"{name}.mp4").exists()
+    ]
+    if not rows:
+        return
+    try:
+        pd.DataFrame(rows).to_csv(Path(output_dir) / "track_index.csv", index=False)
+    except Exception:
+        logger.warning(
+            "Failed to write track_index.csv in %s", output_dir, exc_info=True
+        )

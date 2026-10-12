@@ -780,6 +780,11 @@ class SessionOrchestrator:
         self._mw._postprocess_panel.lbl_video_pose_disabled_hint.setText(
             "Pose overlay will use keypoints from pose-augmented tracking output."
         )
+        dataset_panel = getattr(self._mw, "_dataset_panel", None)
+        if dataset_panel is not None and hasattr(
+            dataset_panel, "_sync_oriented_video_pose_controls"
+        ):
+            dataset_panel._sync_oriented_video_pose_controls()
 
     def _sync_pose_backend_ui(self):
         """Show/hide backend-specific pose controls."""

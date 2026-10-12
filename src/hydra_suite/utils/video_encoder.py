@@ -44,6 +44,13 @@ _AV_CODEC_OPTS: dict[str, dict[str, str]] = {
     "pyav_software": {"preset": "fast", "crf": "23"},
 }
 
+# ``quality="high"``: near-transparent libx264 for outputs that must keep every
+# source detail (per-track canonical crops). These frames are small, so
+# software encoding is cheap, and it sidesteps both the hardware bitrate cap
+# below and NVENC's ~145 px minimum frame edge (a rejected first frame would
+# otherwise poison the process-wide backend cache to mp4v).
+_HIGH_QUALITY_X264_OPTS: dict[str, str] = {"preset": "medium", "crf": "16"}
+
 # Hardware encoders get an explicit bitrate target. Unset, VideoToolbox and
 # NVENC run effectively unconstrained: measured 8-19x the bitrate of libx264
 # CRF 23 for < 1 dB PSNR, so a 0.5x render came out larger than its source.
@@ -159,6 +166,14 @@ def _probe_backend() -> str:
     return "opencv"
 
 
+def _libx264_available() -> bool:
+    try:
+        import av
+    except ImportError:
+        return False
+    return "libx264" in av.codecs_available  # type: ignore[attr-defined]
+
+
 def probe_video_backend() -> str:
     """Return the best available video encoding backend (result is cached)."""
     global _BACKEND_CACHE
@@ -229,6 +244,7 @@ class VideoEncoder:
         width: int,
         height: int,
         backend: Optional[str] = None,
+        quality: str = "standard",
     ) -> None:
         self._path = Path(path)
         self._fps_exact = fps
@@ -236,6 +252,10 @@ class VideoEncoder:
         self._width = int(width)
         self._height = int(height)
         self._backend: str = backend or probe_video_backend()
+        self._high_quality = str(quality).strip().lower() == "high"
+        if self._high_quality and self._backend in _AV_CODEC_NAME:
+            if _libx264_available():
+                self._backend = "pyav_software"
         self._used_nvenc: bool = False
         self._container = None
         self._stream = None
@@ -265,6 +285,8 @@ class VideoEncoder:
 
             codec = _resolve_codec(self._backend, self._width, self._height)
             opts = _AV_CODEC_OPTS[self._backend]
+            if self._high_quality and self._backend == "pyav_software":
+                opts = _HIGH_QUALITY_X264_OPTS
             try:
                 self._container = av.open(str(self._path), mode="w")
                 self._stream = self._container.add_stream(
