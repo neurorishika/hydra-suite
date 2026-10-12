@@ -281,6 +281,41 @@ PY
   fi
 }
 
+# Fragmentation gates (tools/equivalence/fragmentation.py). Byte-level EQUIVALENCE
+# says *that* tracking changed, not whether it got worse: an 8x fragmentation
+# regression (pose extraction silently enabling an association gate) shipped
+# unnoticed. FRAGMENTATION compares legacy vs new_a raw forward tracks;
+# POSE-INVARIANCE re-runs every clip that extracts pose (with pose rejection
+# off) with pose disabled and requires the same association. POSE_INVARIANCE=0
+# skips that extra run.
+POSE_INVARIANCE=${POSE_INVARIANCE:-1}
+
+body_px_of() {  # config -> one body length in px
+  python - "$1" <<'PY'
+import json, sys
+print(float(json.load(open(sys.argv[1])).get("reference_body_size") or 20.0))
+PY
+}
+
+pose_invariance_applies() {  # config -> exit 0 when pose is on and rejection off
+  python - "$1" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+sys.exit(0 if c.get("enable_pose_extractor") and not c.get("enable_pose_rejection") else 1)
+PY
+}
+
+fragcmp() {  # mode a b title clip body_px
+  echo "--- $4 ---"
+  python "$WT/tools/equivalence/fragmentation.py" "$1" "$2" "$3" --body-px "$6"
+  local rc=$?
+  if [ "$rc" -eq 1 ]; then
+    note_failure "$5" "$4 -- fragmentation gate failed"
+  elif [ "$rc" -ne 0 ]; then
+    note_failure "$5" "$4 -- no data"
+  fi
+}
+
 for entry in "${VIDEOS[@]}"; do
   IFS='|' read -r name video config skeleton <<< "$entry"
   base="$OUT/$RUNTIME/$name"
@@ -323,6 +358,34 @@ for entry in "${VIDEOS[@]}"; do
   cmp "$base/legacy/${stem}_tracking_final_with_individual.csv" \
       "$base/new_a/${stem}_tracking_final_with_individual.csv" \
       "$EQV_TITLE" "$name" --strict-columns
+
+  body_px=$(body_px_of "$config")
+  echo; echo ">>> $name : fragmentation (raw forward tracks)"
+  if has_rows "$base/legacy/${stem}_tracking_forward.csv" \
+      && has_rows "$base/new_a/${stem}_tracking_forward.csv"; then
+    fragcmp regression "$base/legacy/${stem}_tracking_forward.csv" \
+      "$base/new_a/${stem}_tracking_forward.csv" \
+      "FRAGMENTATION  legacy vs new_a" "$name" "$body_px"
+  else
+    echo "  (no raw forward CSV on both sides -- skipped)"
+  fi
+
+  if [ "$POSE_INVARIANCE" = "1" ] && pose_invariance_applies "$config"; then
+    echo; echo ">>> $name : pose invariance (pose extraction must not change association)"
+    nopose_cfg="$base/nopose_config.json"
+    python - "$config" "$nopose_cfg" <<'PY'
+import json, sys
+c = json.load(open(sys.argv[1]))
+c["enable_pose_extractor"] = False
+json.dump(c, open(sys.argv[2], "w"), indent=2)
+PY
+    run "$WT_SRC" "$base/new_nopose" "$nopose_cfg" "$video" "new_nopose" "$skeleton" \
+      ${TUNED_ARGS[@]+"${TUNED_ARGS[@]}"} \
+      || { echo "!! new_nopose run FAILED"; note_failure "$name" "new_nopose run exited non-zero"; }
+    fragcmp invariance "$base/new_a/${stem}_tracking_forward.csv" \
+      "$base/new_nopose/${stem}_tracking_forward.csv" \
+      "POSE-INVARIANCE  new_a vs new_nopose" "$name" "$body_px"
+  fi
 
   echo; echo ">>> $name : performance"
   perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json" "$name"
