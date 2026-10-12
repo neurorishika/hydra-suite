@@ -76,7 +76,15 @@ def plan_flips(
     pairs = normalize_flip_pairs(flip_pairs, k)
     if fliplr <= 0 and flipud <= 0:
         return FlipPlan(0.0, 0.0, None, pairs, "Flips off.")
-    unpaired = [] if allow_unpaired else unpaired_side_keypoints(keypoint_names, pairs)
+    flagged = unpaired_side_keypoints(keypoint_names, pairs)
+    overridden = ""
+    if allow_unpaired and flagged:
+        overridden = (
+            " Kept in place as midline (override): "
+            + ", ".join(str(keypoint_names[i]) for i in flagged)
+            + "."
+        )
+    unpaired = [] if allow_unpaired else flagged
     if unpaired:
         listed = ", ".join(str(keypoint_names[i]) for i in unpaired)
         return FlipPlan(
@@ -99,12 +107,12 @@ def plan_flips(
             flipud,
             flip_index(pairs, k),
             pairs,
-            f"Flips swap {len(pairs)} left/right pair(s): {names}.",
+            f"Flips swap {len(pairs)} left/right pair(s): {names}.{overridden}",
         )
     return FlipPlan(
         fliplr,
         flipud,
         list(range(k)),
         [],
-        "No left/right keypoints: flips keep every keypoint in place.",
+        ("No left/right pairs: flips keep every keypoint in place." + overridden),
     )

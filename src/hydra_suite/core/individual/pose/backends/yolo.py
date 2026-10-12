@@ -147,7 +147,8 @@ def _export_metadata(path: Path) -> Dict[str, Any]:
                 size = int.from_bytes(fh.read(4), byteorder="little")
                 if not 0 < size < 1 << 20:
                     return {}
-                return json.loads(fh.read(size).decode("utf-8"))
+                meta = json.loads(fh.read(size).decode("utf-8"))
+                return meta if isinstance(meta, dict) else {}
         if path.suffix.lower() == ".onnx":
             try:  # onnx is optional; onnxruntime is always installed
                 import onnx

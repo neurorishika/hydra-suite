@@ -201,6 +201,13 @@ SIDE_PAIRS = [
     ["Leye", "Reye"],
     ["lear", "rear"],
     ["LFoot", "RFoot"],
+    ["LEYE", "REYE"],
+    ["LW_tip", "RW_tip"],
+    ["LSHO", "RSHO"],
+    ["EyeLEFT", "EyeRIGHT"],
+    ["pawFL", "pawFR"],
+    ["FLpaw", "FRpaw"],
+    ["eyeleft", "eyeright"],
 ]
 MIDLINE_CAPS = [
     "HEAD",
@@ -268,6 +275,7 @@ def test_flip_override_for_side_like_midline_names():
     assert plan_flips(names, [], 0.5, 0.5).blocked
     plan = plan_flips(names, [], 0.5, 0.5, allow_unpaired=True)
     assert plan.enabled and plan.flip_idx == [0, 1, 2]
+    assert "l-r" in plan.note  # the note says what was overridden
 
 
 def test_yolo_predict_size_from_model_or_export_metadata(tmp_path):

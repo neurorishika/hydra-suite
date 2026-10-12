@@ -23,7 +23,7 @@ _END = r"(?=$|[^A-Za-z]|[A-Z][a-z])"
 _SIDE_RULES = (
     # left / right as a word or word start (left_eye, leftwing; not "bright")
     (re.compile(r"(?<![a-z])(?P<s>[Ll]eft|LEFT|[Rr]ight|RIGHT)"), True),
-    (re.compile(r"(?<=[a-z0-9])(?P<s>Left|Right)"), True),  # eyeLeft
+    (re.compile(r"(?<=[a-z0-9])(?P<s>Left|Right|LEFT|RIGHT)"), True),  # eyeLeft
     # a lone l/r: l_ear, ear_r, L1, l.ant, LFoot
     (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])" + _END), True),
     # camelCase suffix: antL, eyeR, legL1
@@ -40,6 +40,17 @@ _SIDE_RULES = (
     (re.compile(r"(?<![A-Za-z])[fFhHmMbB](?P<s>[lLrR])" + _END), False),
     # l/r glued to a word: lhip, Leye, lantenna (weak)
     (re.compile(r"(?<![A-Za-z])(?P<s>[lLrR])(?=[a-z]{2,})"), False),
+    # L/R glued to an upper-case word: LEYE, LW_tip, LSHO (weak; LEG, ROOT and
+    # BRAIN have no partner)
+    (
+        re.compile(r"(?<![A-Za-z])(?P<s>[LR])(?=[A-Z]+(?:$|[^A-Za-z]|[A-Z][a-z]))"),
+        False,
+    ),
+    # front/hind + L/R inside or before a word: pawFL, FLpaw (weak)
+    (re.compile(r"(?<=[a-z0-9])[FHMB](?P<s>[LR])" + _END), False),
+    (re.compile(r"(?<![A-Za-z])[FHMB](?P<s>[LR])(?=[a-z])"), False),
+    # left/right ending a lower-case word: eyeleft (weak; "bright" has none)
+    (re.compile(r"(?<=[a-z])(?P<s>left|right)(?![a-z])"), False),
 )
 _SWAP = {"left": "right", "right": "left", "l": "r", "r": "l"}
 
