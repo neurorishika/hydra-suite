@@ -211,3 +211,47 @@ def test_tracking_blocked_when_identity_has_no_source(qapp, main_window, monkeyp
     identity.g_identity.setChecked(False)
     identity.g_apriltags.setChecked(False)
     _settle(qapp)
+
+
+def test_oriented_video_pose_controls_follow_pose_availability(
+    qapp, main_window, monkeypatch
+):
+    """The oriented-video pose overlay option appears once pose extraction is
+    turned on (the identity panel's toggles route through
+    _sync_individual_analysis_mode_ui), not only after a config reload."""
+    dataset = main_window._dataset_panel
+    orch = main_window._session_orch
+    # Oriented videos need the individual pipeline plus a head-tail model.
+    monkeypatch.setattr(orch, "_is_individual_pipeline_enabled", lambda: True)
+    monkeypatch.setattr(
+        main_window._identity_panel,
+        "_get_selected_yolo_headtail_model_path",
+        lambda: "headtail.pt",
+    )
+    monkeypatch.setattr(orch, "_is_pose_inference_enabled", lambda: False)
+    main_window._sync_individual_analysis_mode_ui()
+    dataset.chk_generate_individual_track_videos.setChecked(True)
+    _settle(qapp)
+    assert dataset.oriented_video_output.isVisibleTo(dataset) is True
+    assert dataset.chk_oriented_video_show_pose.isVisibleTo(dataset) is False
+
+    try:
+        monkeypatch.setattr(orch, "_is_pose_inference_enabled", lambda: True)
+        main_window._sync_individual_analysis_mode_ui()
+        _settle(qapp)
+        assert dataset.chk_oriented_video_show_pose.isVisibleTo(dataset) is True
+        assert (
+            dataset.spin_oriented_video_pose_point_radius.isVisibleTo(dataset) is False
+        )
+        dataset.chk_oriented_video_show_pose.setChecked(True)
+        _settle(qapp)
+        assert (
+            dataset.spin_oriented_video_pose_point_radius.isVisibleTo(dataset) is True
+        )
+        assert dataset.btn_oriented_video_pose_color.isVisibleTo(dataset) is False
+    finally:
+        dataset.chk_oriented_video_show_pose.setChecked(False)
+        dataset.chk_generate_individual_track_videos.setChecked(False)
+        monkeypatch.undo()
+        main_window._sync_individual_analysis_mode_ui()
+        _settle(qapp)

@@ -278,3 +278,33 @@ def test_pose_overlay_track_colors_follow_the_preview_palette():
     assert overlay.row_colors[0] != overlay.row_colors[2]
     assert overlay.point_radius == 6  # default 3 source px at 2x
     assert media_export.build_track_pose_overlay(df, {}, {}) is None
+
+
+def test_non_dyadic_scale_keeps_proportions_and_centre(tmp_path: Path):
+    exporter = OrientedTrackVideoExporter(
+        tmp_path / "out",
+        tmp_path / "final.csv",
+        video_path=tmp_path / "source.mp4",
+        detection_cache_path=tmp_path / "detections.npz",
+        fps=5.0,
+        geometry=CanonicalGeometry(canvas_wh=(124, 62), margin=1.3, aspect_ratio=2.0),
+        render_scale=1.5,
+    )
+    task = exporter._build_task(
+        frame_id=0,
+        trajectory_id=1,
+        center_x=50.0,
+        center_y=40.0,
+        width=40.0,
+        height=20.0,
+        theta=0.3,
+        corners=_square(50.0, 40.0, 10.0),
+        polygon_index=0,
+    )
+    a = exporter._video_affine(task.affine)
+    sx = float(np.hypot(a[0, 0], a[1, 0]))
+    sy = float(np.hypot(a[0, 1], a[1, 1]))
+    assert sx == pytest.approx(1.5) and sy == pytest.approx(1.5)
+    vw, vh = exporter._video_canvas_size((124, 62))
+    centre = a @ np.array([50.0, 40.0, 1.0])
+    assert centre == pytest.approx([vw / 2.0, vh / 2.0])

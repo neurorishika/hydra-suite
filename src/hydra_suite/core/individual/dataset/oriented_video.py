@@ -1349,14 +1349,19 @@ class OrientedTrackVideoExporter:
         )
 
     def _video_affine(self, affine: np.ndarray) -> np.ndarray:
-        """Compose the render scale onto a canonical (frame -> canvas) affine."""
+        """Compose the render scale onto a canonical (frame -> canvas) affine.
+
+        One uniform factor keeps the animal's proportions; the half-pixel the
+        even-sized video canvas gains or loses is absorbed by re-centring.
+        """
         if not self._video_differs_from_still():
             return affine
-        sx = self._video_geometry.canvas_w / float(self._geometry.canvas_w)
-        sy = self._video_geometry.canvas_h / float(self._geometry.canvas_h)
-        scaled = np.asarray(affine, dtype=np.float64).copy()
-        scaled[0, :] *= sx
-        scaled[1, :] *= sy
+        s = self.render_scale
+        dx = (self._video_geometry.canvas_w - self._geometry.canvas_w * s) / 2.0
+        dy = (self._video_geometry.canvas_h - self._geometry.canvas_h * s) / 2.0
+        scaled = np.asarray(affine, dtype=np.float64) * s
+        scaled[0, 2] += dx
+        scaled[1, 2] += dy
         return scaled
 
     def _draw_pose(self, image: np.ndarray, task: FrameTask) -> None:
