@@ -41,7 +41,7 @@ run in separate conda envs that HYDRA launches as subprocesses:
   gets the same hydra-suite source as the main env (editable checkout, git
   commit or wheel). See
   [SAM3 training](../user-guide/sam-install-and-run.md#sam3-training-optional-cuda-only).
-- **`sleap`** holds `sleap==1.6.2` (which brings `sleap-nn` 0.1.x) with the torch
+- **`sleap`** holds `sleap==1.6.5` and `sleap-nn==0.3.3` with the torch
   build matching the host. See [Integrations](integrations.md).
 
 ### GPU library loading (CUDA)

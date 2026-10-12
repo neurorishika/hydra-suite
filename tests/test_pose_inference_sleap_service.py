@@ -211,6 +211,26 @@ def test_format_sleap_env_preflight_error_nccl_symbol() -> None:
     assert "conda run -n sleap" in msg
 
 
+def test_format_sleap_env_preflight_error_unsupported_sleap_nn() -> None:
+    mod = _load_pose_inference_module()
+    msg = mod._format_sleap_env_preflight_error(
+        "ERROR: unsupported sleap-nn 0.2.0", "sleap"
+    )
+    assert "sleap-nn 0.2.0" in msg
+    assert "0.3.x (or 0.1.x)" in msg
+    assert "sleap[nn,nn-export]==1.6.5" in msg
+
+
+@pytest.mark.parametrize(
+    "version, supported",
+    [("0.3.3", True), ("0.1.3", True), ("0.2.0", False), ("0.4.0", False)],
+)
+def test_supported_sleap_nn_versions(version: str, supported: bool) -> None:
+    from hydra_suite.runtime.sidecar_versions import SUPPORTED_SLEAP_NN_PREFIXES
+
+    assert version.startswith(SUPPORTED_SLEAP_NN_PREFIXES) is supported
+
+
 def test_sleap_service_start_returns_preflight_failure(
     tmp_path: Path, monkeypatch
 ) -> None:

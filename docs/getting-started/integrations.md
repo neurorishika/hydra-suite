@@ -29,33 +29,32 @@ python install.py --with-sleap        # or: make setup-sleap
 
 This creates `sleap` (Python 3.13) and installs:
 
-- `sleap[nn,nn-export-gpu]==1.6.2` on CUDA hosts, `sleap[nn,nn-export]==1.6.2`
-  elsewhere;
+- `sleap[nn,nn-export-gpu]==1.6.5` on CUDA hosts, `sleap[nn,nn-export]==1.6.5`
+  elsewhere, with `sleap-nn==0.3.3`;
 - then **force-reinstalls the sidecar's torch/torchvision to the same build the
   main env uses** (`cu128` on drivers older than 580, `cu130` on 580+, CPU or
   macOS wheels otherwise). Left alone, the `sleap` env would pick up whatever
   torch PyPI serves, which on a pre-580 driver is a CUDA 13 build that cannot
-  see the GPU.
+  see the GPU. A last step installs the CUDA libraries that pinned build needs.
 
 If the `sleap` env already exists it is reused and its packages are
 refreshed. For a clean rebuild, run `conda env remove -n sleap` first.
 
-**Why `sleap==1.6.2` is pinned.** An unpinned `pip install "sleap[nn,...]"`
-currently resolves `sleap-nn` to 0.3.x, which breaks the pipeline's
-shared-memory transport to the SLEAP service (it fails with an `AttributeError`
-from `sleap_nn.data.utils.imread_`). `sleap==1.6.2` pulls in the working
-`sleap-nn` 0.1.3. This was verified on a fresh Ubuntu/RTX 4090 box on
-2026-09-07. HYDRA's SLEAP preflight also checks the env and refuses any
-`sleap-nn` that is not 0.1.x with an "unsupported sleap-nn" error, instead of
-failing mid-run. Do not remove the pin without re-verifying against a fresh
-sleap-nn release.
+**Why `sleap==1.6.5` and `sleap-nn==0.3.3` are pinned.** These are the
+versions verified against the pose pipeline: on an Ubuntu/RTX 4090 box on
+2026-10-12, native, ONNX and TensorRT pose output was byte-identical to the
+previous pin (`sleap==1.6.2`, `sleap-nn` 0.1.3). Envs built from that older pin
+keep working. HYDRA's SLEAP preflight checks the env and refuses any `sleap-nn`
+other than 0.3.x or 0.1.x with an "unsupported sleap-nn" error, instead of
+failing mid-run. Re-verify before moving to a newer sleap-nn: 0.4 may remove
+the `sleap_nn.inference.predictors` module the pose service uses.
 
 **TensorRT export (optional, manual).** The installer does not install
 SLEAP's `nn-tensorrt` extra. If you want SLEAP TensorRT export, add it to the
 env by hand, keeping the pin:
 
 ```bash
-conda run -n sleap python -m pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"
+conda run -n sleap python -m pip install "sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.5" sleap-nn==0.3.3
 ```
 
 A `torch-tensorrt` version warning after the torch re-pin is expected. It
@@ -78,7 +77,7 @@ does not affect the SLEAP *service* backend, only TensorRT export.
 ```bash
 conda run -n sleap python -c "import importlib.util as u; print('sleap_nn', bool(u.find_spec('sleap_nn'))); print('onnx', bool(u.find_spec('onnx'))); print('onnxruntime', bool(u.find_spec('onnxruntime')))"
 conda run -n sleap python -c "import torch, torchvision; print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); print('torchvision', torchvision.__version__)"
-conda run -n sleap python -c "import importlib.metadata as m; print('sleap-nn', m.version('sleap-nn'))"   # must be 0.1.x
+conda run -n sleap python -c "import importlib.metadata as m; print('sleap-nn', m.version('sleap-nn'))"   # must be 0.3.x (or 0.1.x)
 conda run -n sleap sleap-nn export --help
 ```
 
@@ -143,10 +142,10 @@ In that case, remove conflicting CUDA/NCCL paths from `LD_LIBRARY_PATH` for SLEA
 
 #### 3) "unsupported sleap-nn"
 
-The env has a `sleap-nn` other than 0.1.x, usually from an unpinned
+The env has a `sleap-nn` other than 0.3.x or 0.1.x, usually from an unpinned
 `pip install sleap`. Reinstall with the pin
 (`python install.py --with-sleap` after removing the env, or
-`conda run -n sleap python -m pip install "sleap[nn,nn-export]==1.6.2"`).
+`conda run -n sleap python -m pip install "sleap[nn,nn-export]==1.6.5" sleap-nn==0.3.3`).
 
 For ONNX export smoke test:
 
