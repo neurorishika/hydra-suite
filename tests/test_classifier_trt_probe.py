@@ -110,3 +110,54 @@ def test_failed_probe_falls_back_to_native_without_touching_parent_session(
     backend._ensure_loaded()
     assert backend._active_execution_backend == "native"
     assert loaded["device"] == "cuda"
+
+
+def test_fp16_probe_failure_retries_tensorrt_in_fp32(tiny_flat_headtail, monkeypatch):
+    """TensorRT 10.16 cannot build ViT-B/16 in fp16 at batch > 1 (CUDA 716);
+    the same graph builds in fp32, which is ~1.9x faster than native fp32."""
+    import onnxruntime as ort
+
+    import hydra_suite.core.individual.classification.trt_probe as probe_module
+    import hydra_suite.runtime.onnx_providers as op
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+
+    probes = []
+
+    def _probe(model_path, providers, runner=None):
+        opts = providers[0][1]
+        probes.append(opts["trt_fp16_enable"])
+        if opts["trt_fp16_enable"]:
+            return probe_module.TrtProbeResult(
+                False, 1, "CUDA error 716: misaligned address"
+            )
+        return probe_module.TrtProbeResult(True, 0, "")
+
+    parent = {}
+
+    class _Session:
+        def __init__(self, path, providers):
+            parent["fp16"] = providers[0][1]["trt_fp16_enable"]
+
+    monkeypatch.setattr(probe_module, "probe_trt_session_in_child", _probe)
+    monkeypatch.setattr(ort, "InferenceSession", _Session)
+    monkeypatch.setattr(
+        op,
+        "execution_providers_for",
+        lambda resolved, **kw: ["TensorrtExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.setattr(
+        ClassifierBackend,
+        "_build_trt_providers_with_profiles",
+        lambda self, p, prov: [
+            ("TensorrtExecutionProvider", {"trt_fp16_enable": True}),
+            "CPUExecutionProvider",
+        ],
+    )
+    monkeypatch.setattr(ClassifierBackend, "_warmup_ort_session_trt", lambda self: None)
+
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("tensorrt", "cuda", False)
+    )
+    backend._load_onnx()
+    assert probes == [True, False]
+    assert parent["fp16"] is False

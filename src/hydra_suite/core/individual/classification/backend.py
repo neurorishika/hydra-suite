@@ -595,6 +595,22 @@ def _looks_like_cuda_alloc_failure(exc: BaseException) -> bool:
     )
 
 
+def _without_trt_fp16(providers: list) -> list | None:
+    """Return *providers* with TensorRT fp16 disabled, or None if it was off."""
+    changed = False
+    out: list = []
+    for p in providers:
+        if not isinstance(p, str) and "tensorrt" in p[0].lower():
+            opts = dict(p[1])
+            if opts.get("trt_fp16_enable"):
+                opts["trt_fp16_enable"] = False
+                changed = True
+            out.append((p[0], opts))
+        else:
+            out.append(p)
+    return out if changed else None
+
+
 def _native_accelerator_available(resolved: ResolvedBackend) -> bool:
     device = resolved.device
     if device == "cuda":
@@ -861,6 +877,20 @@ class ClassifierBackend:
                     # failures (e.g. CUDA 716 in the autotuner) poison this
                     # process's CUDA context and would break any fallback.
                     probe = probe_trt_session_in_child(str(peer), providers)
+                    fp32_providers = _without_trt_fp16(providers)
+                    if not probe.ok and fp32_providers is not None:
+                        # TensorRT 10.16 cannot build ViT-B/16 in fp16 at
+                        # batch > 1 (CUDA 716 in the Myelin autotuner) but
+                        # builds it in fp32, ~1.9x faster than native fp32.
+                        logger.warning(
+                            "ClassifierBackend: fp16 TensorRT build failed for %s; "
+                            "retrying TensorRT in fp32. (%s)",
+                            self._model_path,
+                            probe.detail[-300:],
+                        )
+                        probe = probe_trt_session_in_child(str(peer), fp32_providers)
+                        if probe.ok:
+                            providers = fp32_providers
                     if not probe.ok:
                         raise RuntimeError(
                             "TensorRT engine build failed in an isolated probe "
