@@ -91,7 +91,7 @@ Manage schema and export artifacts.
 
 | Control | Role | Notes |
 |---|---|---|
-| Skeleton editor | Update keypoint topology. | Prefer infrequent, versioned schema changes. |
+| Skeleton editor | Update keypoint topology and the left/right keypoint pairs that training swaps when it flips an image (*Suggest from names* pairs `left_*`/`right_*`). | Prefer infrequent, versioned schema changes; set pairs before training with flips. |
 | Project settings | Reopen setup/migration controls. | Use for controlled updates only. |
 | Export dataset + splits | Prepare training-ready data layout. | Validate split manifests before training. |
 
@@ -130,8 +130,10 @@ Launch and monitor model training/fine-tuning jobs.
 
 | Control group | Includes | Guidance |
 |---|---|---|
-| Backend/model | Backend (YOLO/SLEAP/ViTPose), base weights/model dir | Keep backend/model family aligned. For ViTPose: pick the auto-download COCO-B catalog entry, or Browse to a local/animal checkpoint. |
-| Training hyperparameters | Batch size, auto-batch, epochs, patience, image size, device | Increase complexity only after baseline convergence is stable. |
+| Backend/model | Backend (ViTPose by default, YOLO, SLEAP), base weights/model dir | Keep backend/model family aligned. ViTPose starts from the auto-download AP-10K animal checkpoint (`vitpose-b-ap10k`); COCO-B (human) or Browse to a local checkpoint are alternatives. |
+| Training hyperparameters | Batch size, auto-batch, epochs, patience, image size (*Auto from crop size*), device | Epochs, batch and device apply to ViTPose too; the other rows are YOLO-only. Leave the sizes on *Auto* unless you have a reason. |
+| Augmentations (YOLO) | HSV, rotation, translate/scale, scale/aspect jitter, flip left-right / up-down, mosaic | Flips swap the left/right pairs from the Skeleton Editor; mosaic is off by default for centred single-animal crops. |
+| ViTPose config | Variant, init checkpoint, input size (*Auto from crop size* + Detail), scale/aspect jitter, flip probabilities | The input follows the crops' aspect ratio at about one input pixel per crop pixel. |
 | Data controls | Train fraction, seed, ignore occluded, auxiliary datasets | Keep split/seed fixed for fair model comparisons. |
 | SLEAP export options | Env, output `.slp`, include aux, embed media | Validate export format before training job launch. |
 
@@ -155,7 +157,7 @@ Suggest high-value frames based on uncertainty/disagreement/error signals.
 | Control group | Includes | Guidance |
 |---|---|---|
 | Strategy | Uncertainty / disagreement / error-focused methods | Start with one strategy, compare lift before combining. |
-| Backend/inference config | Device, image size, confidence, batch, cache | Keep inference settings aligned with evaluation settings. |
+| Backend/inference config | Device, image size (default: the model's training size), confidence, batch, cache | Keep inference settings aligned with evaluation settings. |
 | Scope + N suggestions | Candidate pool and output count | Keep suggestion batches small and reviewable. |
 | Evaluation CSV / keypoint focus | Error-targeted sampling | Use when correcting specific keypoint failure modes. |
 

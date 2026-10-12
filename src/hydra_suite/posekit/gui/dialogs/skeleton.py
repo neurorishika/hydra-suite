@@ -21,7 +21,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from hydra_suite.core.pose_flip import parse_flip_pairs, remap_pairs_by_name
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+
+from ..panels.flip_pairs_panel import FlipPairsPanel
 
 
 class SkeletonEditorDialog(QDialog):
@@ -33,6 +36,7 @@ class SkeletonEditorDialog(QDialog):
         edges: List[Tuple[int, int]],
         parent=None,
         default_dir: Optional[Path] = None,
+        flip_pairs: Optional[List[Tuple[int, int]]] = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Skeleton Editor")
@@ -114,6 +118,9 @@ class SkeletonEditorDialog(QDialog):
         add_row.addWidget(self.btn_del)
         right.addLayout(add_row)
 
+        self.flip_panel = FlipPairsPanel(self.kpt_names, flip_pairs or [], self)
+        right.addWidget(self.flip_panel)
+
         root.addLayout(left, 3)
         root.addLayout(right, 2)
 
@@ -142,6 +149,7 @@ class SkeletonEditorDialog(QDialog):
         self.btn_kp_down.clicked.connect(lambda: self._kp_move(1))
         self.btn_ok.clicked.connect(self.accept)
         self.btn_cancel.clicked.connect(self.reject)
+        self.kpt_table.itemChanged.connect(self._on_kpt_item_changed)
 
         self._refresh_edges()
 
@@ -150,6 +158,17 @@ class SkeletonEditorDialog(QDialog):
         for r, (a, b) in enumerate(self.edges):
             self.edge_table.setItem(r, 0, QTableWidgetItem(str(a)))
             self.edge_table.setItem(r, 1, QTableWidgetItem(str(b)))
+
+    def _current_names(self) -> List[str]:
+        names = []
+        for i in range(self.kpt_table.rowCount()):
+            item = self.kpt_table.item(i, 1)
+            names.append(item.text().strip() if item else f"kp{i + 1}")
+        return names
+
+    def _on_kpt_item_changed(self, item) -> None:
+        if item is not None and item.column() == 1:
+            self.flip_panel.set_names(self._current_names())
 
     def _refresh_kpt_indices(self):
         for i in range(self.kpt_table.rowCount()):
@@ -177,6 +196,7 @@ class SkeletonEditorDialog(QDialog):
         self.kpt_table.setItem(i, 1, QTableWidgetItem(f"kp{i + 1}"))
         self.kpt_table.setCurrentCell(i, 1)
         self._update_kpt_ranges()
+        self.flip_panel.set_names(self._current_names())
 
     def _kp_del(self):
         r = self._selected_kpt_row()
@@ -184,6 +204,7 @@ class SkeletonEditorDialog(QDialog):
             return
         self.kpt_table.removeRow(r)
         self.edges = self._remap_edges_on_remove(self.edges, r)
+        self.flip_panel.keypoint_removed(r, self._current_names())
         self._refresh_kpt_indices()
         self._update_kpt_ranges()
         self._refresh_edges()
@@ -221,6 +242,7 @@ class SkeletonEditorDialog(QDialog):
         self.kpt_table.setCurrentCell(nr, 1)
 
         self.edges = self._remap_edges_on_move(self.edges, r, nr)
+        self.flip_panel.keypoint_moved(r, nr, self._current_names())
         self._refresh_kpt_indices()
         self._refresh_edges()
 
@@ -282,7 +304,8 @@ class SkeletonEditorDialog(QDialog):
         self._refresh_edges()
 
     def _make_chain(self):
-        self.edges = [(i, i + 1) for i in range(max(0, len(self.kpt_names) - 1))]
+        n = self.kpt_table.rowCount()
+        self.edges = [(i, i + 1) for i in range(max(0, n - 1))]
         self._refresh_edges()
 
     def _clear_edges(self):
@@ -328,9 +351,17 @@ class SkeletonEditorDialog(QDialog):
             )
         return Path(path) if path else None
 
-    def _apply_config(self, names: List[str], edges: List[Tuple[int, int]]):
+    def _apply_config(
+        self,
+        names: List[str],
+        edges: List[Tuple[int, int]],
+        flip_pairs: Optional[List[Tuple[int, int]]] = None,
+    ):
         if not names:
             return
+        # Before any row changes: pairs are carried over by these names.
+        old_names = self._current_names()
+        old_pairs = self.flip_panel.pairs()
         if len(names) != self.kpt_table.rowCount():
             resp = QMessageBox.question(
                 self,
@@ -355,6 +386,12 @@ class SkeletonEditorDialog(QDialog):
             (a, b) for (a, b) in edges if 0 <= a < k and 0 <= b < k and a != b
         ]
         self._refresh_edges()
+        self.flip_panel.set_names(self.kpt_names)
+        if flip_pairs is None:
+            # A file saved without pairs: keep the current pairs only for
+            # keypoints it still has, matched by name, never by position.
+            flip_pairs = remap_pairs_by_name(old_pairs, old_names, self.kpt_names)
+        self.flip_panel.set_pairs(flip_pairs)
 
     def _load_config(self):
         path = self._pick_skeleton_path(save=False)
@@ -382,7 +419,11 @@ class SkeletonEditorDialog(QDialog):
                 except Exception:
                     continue
 
-        self._apply_config([str(n) for n in names], parsed_edges)
+        self._apply_config(
+            [str(n) for n in names],
+            parsed_edges,
+            parse_flip_pairs(data) if "flip_pairs" in data else None,
+        )
 
     def _save_config(self):
         path = self._pick_skeleton_path(save=True)
@@ -392,6 +433,7 @@ class SkeletonEditorDialog(QDialog):
         data = {
             "keypoint_names": names,
             "skeleton_edges": [[a, b] for a, b in edges],
+            "flip_pairs": [[a, b] for a, b in self.get_flip_pairs()],
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -409,3 +451,7 @@ class SkeletonEditorDialog(QDialog):
         if not out_names:
             out_names = ["kp1", "kp2"]
         return out_names, list(self.edges)
+
+    def get_flip_pairs(self) -> List[Tuple[int, int]]:
+        """Left/right keypoint pairs, in the index space of :meth:`get_result`."""
+        return self.flip_panel.pairs()

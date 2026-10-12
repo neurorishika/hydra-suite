@@ -7,6 +7,8 @@ from typing import List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
+from hydra_suite.core.pose_instances import MAX_POSES_PER_CROP
+
 
 @dataclass
 class PoseResult:
@@ -33,7 +35,7 @@ class PoseRuntimeConfig:
     min_valid_conf: float = 0.2
     yolo_conf: float = 1e-4
     yolo_iou: float = 0.7
-    yolo_max_det: int = 1
+    yolo_max_det: int = MAX_POSES_PER_CROP
     yolo_batch: int = 4
     sleap_env: str = "sleap"
     sleap_device: str = "auto"

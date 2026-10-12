@@ -23,7 +23,7 @@ FEAT_STRIDE = (np.array(DEFAULT_GEOMETRY.image_size_wh, np.float32) - 1.0) / (
     np.array(DEFAULT_GEOMETRY.heatmap_size_wh, np.float32) - 1.0
 )
 
-# augmentation ranges (no flip, per spec)
+# augmentation ranges (flips are opt-in through ``fliplr`` / ``flipud``)
 _SCALE_JITTER = 0.30
 _ROT_RANGE = 40.0
 _ROT_PROB = 0.6
@@ -37,6 +37,19 @@ def load_coco_index(dataset_dir: Path) -> tuple[list[int], dict]:
     anns = [a for a in coco["annotations"] if a.get("num_keypoints", 0) > 0]
     index = {a["id"]: (a, images[a["image_id"]]) for a in anns}
     return list(index.keys()), index
+
+
+def image_path(dataset_dir: Path, file_name: str) -> Path:
+    """An annotation's image file.
+
+    PoseKit's COCO export names files relative to the dataset folder
+    (``images/x.png``, standard COCO); bare names (``x.png``) live in
+    ``images/``.
+    """
+    rel = Path(file_name)
+    if len(rel.parts) > 1:
+        return Path(dataset_dir) / rel
+    return Path(dataset_dir) / "images" / rel
 
 
 def _warp_joints(joints_xy: np.ndarray, matrix: np.ndarray) -> np.ndarray:
@@ -54,6 +67,9 @@ class CocoKeypointsDataset(Dataset):
         scale_jitter: float | None = None,
         aspect_jitter: float = 0.0,
         seed: int = 0,
+        flip_pairs: list | None = None,
+        fliplr: float = 0.0,
+        flipud: float = 0.0,
     ) -> None:
         # ``scale_jitter=None`` keeps the legacy hard-coded random zoom. Any
         # explicit value (including 0) switches to the centred window jitter:
@@ -71,9 +87,25 @@ class CocoKeypointsDataset(Dataset):
         self.sigma = float(sigma)
         self.augment = bool(augment)
         self.geom = geom
+        num_kpts = len(self.index[self.ids[0]][0]["keypoints"]) // 3 if self.ids else 0
+        self._flip_idx = np.asarray(flip_index(flip_pairs or [], num_kpts), np.int64)
+        self._fliplr = float(fliplr) if augment else 0.0
+        self._flipud = float(flipud) if augment else 0.0
         self._feat_stride = (np.array(geom.image_size_wh, np.float32) - 1.0) / (
             np.array(geom.heatmap_size_wh, np.float32) - 1.0
         )
+
+    def _maybe_flip(
+        self, img: np.ndarray, kp: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        flipped = False
+        if self._fliplr > 0 and np.random.rand() < self._fliplr:
+            img, kp = _mirror(img, kp, self._flip_idx, axis=1)
+            flipped = True
+        if self._flipud > 0 and np.random.rand() < self._flipud:
+            img, kp = _mirror(img, kp, self._flip_idx, axis=0)
+            flipped = True
+        return (np.ascontiguousarray(img) if flipped else img), kp
 
     def __len__(self) -> int:
         return len(self.ids)
@@ -81,7 +113,7 @@ class CocoKeypointsDataset(Dataset):
     def __getitem__(self, i: int) -> dict:
         ann, img_meta = self.index[self.ids[i]]
         img = cv2.imread(
-            str(self.dir / "images" / img_meta["file_name"]), cv2.IMREAD_COLOR
+            str(image_path(self.dir, img_meta["file_name"])), cv2.IMREAD_COLOR
         )
         kp = np.array(ann["keypoints"], np.float32).reshape(-1, 3)
         # PoseKit images are one-animal canonical crops (single annotation per
@@ -97,6 +129,7 @@ class CocoKeypointsDataset(Dataset):
         kp_warp = kp
         if self._window is not None:
             img, kp_warp = self._window.recrop(img, kp)
+        img, kp_warp = self._maybe_flip(img, kp_warp)
         img_h, img_w = img.shape[:2]
         full_box_xywh = np.array([0.0, 0.0, float(img_w), float(img_h)], np.float32)
         center, scale = box2cs(full_box_xywh, geom=self.geom)
@@ -153,6 +186,32 @@ class CocoKeypointsDataset(Dataset):
             "bbox": torch.tensor(ann["bbox"], dtype=torch.float32),
             "image_id": int(ann["image_id"]),
         }
+
+
+def flip_index(pairs, num_kpts: int) -> list[int]:
+    """Keypoint permutation for a mirror: each left/right pair swaps rows.
+
+    (``RunConfig`` validates the pairs; ``vitpose/`` stays free of
+    ``hydra_suite`` imports, so this mirrors ``core.pose_flip.flip_index``.)
+    """
+    idx = list(range(num_kpts))
+    for a, b in pairs or ():
+        if 0 <= a < num_kpts and 0 <= b < num_kpts:
+            idx[a], idx[b] = idx[b], idx[a]
+    return idx
+
+
+def _mirror(
+    img: np.ndarray, kp: np.ndarray, flip_idx: np.ndarray, axis: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Mirror ``img`` along ``axis`` (1 = left-right, 0 = up-down) and the
+    keypoints with it; left/right partners swap rows so names stay right."""
+    extent = img.shape[1] if axis == 1 else img.shape[0]
+    img = np.flip(img, axis=axis)
+    kp = kp.copy()
+    coord = 0 if axis == 1 else 1
+    kp[:, coord] = extent - kp[:, coord]
+    return img, kp[flip_idx]
 
 
 def _photometric(img_bgr: np.ndarray) -> np.ndarray:

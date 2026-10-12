@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.core.pose_flip import normalize_flip_pairs
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.widgets.dialogs import BaseDialog
 
@@ -55,6 +56,7 @@ class NewProjectDialog(BaseDialog):
 
         self._parent_dir: Optional[Path] = default_project_parent_dir()
         self._edges: List[Tuple[int, int]] = []
+        self._flip_pairs: List[Tuple[int, int]] = []
         self._kpt_names: List[str] = ["kp1", "kp2"]
 
         content = QWidget()
@@ -224,10 +226,15 @@ class NewProjectDialog(BaseDialog):
 
     def _edit_skeleton(self):
         dlg = SkeletonEditorDialog(
-            self._kpt_names, self._edges, self, default_dir=get_default_skeleton_dir()
+            self._kpt_names,
+            self._edges,
+            self,
+            default_dir=get_default_skeleton_dir(),
+            flip_pairs=self._flip_pairs,
         )
         if dlg.exec() == QDialog.Accepted:
             names, edges = dlg.get_result()
+            self._flip_pairs = dlg.get_flip_pairs()
             self._kpt_names = list(names) if names else ["kp1", "kp2"]
             k = len(self._kpt_names)
             self._edges = [
@@ -259,6 +266,10 @@ class NewProjectDialog(BaseDialog):
     def get_edges(self) -> List[Tuple[int, int]]:
         """Return the skeleton edge list as pairs of 0-based keypoint indices."""
         return list(self._edges)
+
+    def get_flip_pairs(self) -> List[Tuple[int, int]]:
+        """Left/right keypoint pairs set in the Skeleton Editor."""
+        return normalize_flip_pairs(self._flip_pairs, len(self.get_keypoints()))
 
     def get_options(self) -> Tuple[bool, float]:
         """Return ``(autosave_enabled, bbox_pad_fraction)`` from the wizard options page."""
@@ -305,6 +316,7 @@ class ProjectWizard(QDialog):
             default_edges = existing.skeleton_edges
 
         self._edges = list(default_edges)
+        self._flip_pairs = list(getattr(existing, "flip_pairs", []) or [])
         self._kpt_names = list(default_kpts)
 
         layout = QVBoxLayout(self)
@@ -424,10 +436,15 @@ class ProjectWizard(QDialog):
 
     def _edit_skeleton(self):
         dlg = SkeletonEditorDialog(
-            self._kpt_names, self._edges, self, default_dir=get_default_skeleton_dir()
+            self._kpt_names,
+            self._edges,
+            self,
+            default_dir=get_default_skeleton_dir(),
+            flip_pairs=self._flip_pairs,
         )
         if dlg.exec() == QDialog.Accepted:
             names, edges = dlg.get_result()
+            self._flip_pairs = dlg.get_flip_pairs()
             self._kpt_names = list(names) if names else ["kp1", "kp2"]
             k = len(self._kpt_names)
             self._edges = [
@@ -448,6 +465,10 @@ class ProjectWizard(QDialog):
     def get_edges(self) -> List[Tuple[int, int]]:
         """get_edges method documentation."""
         return list(self._edges)
+
+    def get_flip_pairs(self) -> List[Tuple[int, int]]:
+        """Left/right keypoint pairs set in the Skeleton Editor."""
+        return normalize_flip_pairs(self._flip_pairs, len(self.get_keypoints()))
 
     def get_paths(self) -> Tuple[Path, Path]:
         """get_paths method documentation."""

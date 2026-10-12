@@ -523,8 +523,14 @@ class EvaluationDashboardDialog(QDialog):
         cfg_layout.addRow("Device", self.device_combo)
 
         self.imgsz_spin = QSpinBox()
-        self.imgsz_spin.setRange(64, 4096)
-        self.imgsz_spin.setValue(640)
+        self.imgsz_spin.setRange(0, 4096)
+        self.imgsz_spin.setSingleStep(32)
+        self.imgsz_spin.setSpecialValueText("Model's training size")
+        self.imgsz_spin.setValue(0)
+        self.imgsz_spin.setToolTip(
+            "YOLO prediction size. The default uses the size the model was "
+            "trained at; predicting at another size lowers accuracy."
+        )
         cfg_layout.addRow("Image size", self.imgsz_spin)
 
         self.batch_spin = QSpinBox()
@@ -650,7 +656,7 @@ class EvaluationDashboardDialog(QDialog):
         if not self._lock_model:
             self.weights_edit.setText(settings.get("weights", ""))
         self.device_combo.setCurrentText(settings.get("device", "auto"))
-        self.imgsz_spin.setValue(int(settings.get("imgsz", 640)))
+        self.imgsz_spin.setValue(int(settings.get("pred_imgsz", 0)))
         self.conf_spin.setValue(float(settings.get("conf", 0.25)))
         self.pck_spin.setValue(float(settings.get("pck", 0.05)))
         self.oks_spin.setValue(float(settings.get("oks", 0.1)))
@@ -665,7 +671,7 @@ class EvaluationDashboardDialog(QDialog):
             {
                 "weights": self.weights_edit.text() if not self._lock_model else "",
                 "device": self.device_combo.currentText(),
-                "imgsz": self.imgsz_spin.value(),
+                "pred_imgsz": self.imgsz_spin.value(),
                 "conf": self.conf_spin.value(),
                 "pck": self.pck_spin.value(),
                 "oks": self.oks_spin.value(),

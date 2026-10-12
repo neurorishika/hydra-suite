@@ -122,6 +122,10 @@ def _balance_settings_from_argv(argv: Sequence[str]) -> dict[str, float] | None:
         return None
     try:
         manifest = json.loads((dataset_yaml.parent / "manifest.json").read_text())
+        if not isinstance(manifest, dict):
+            # Other builders (PoseKit's YOLO-pose export) write a list of copied
+            # files under the same name; only a sliced dataset carries settings.
+            return None
         geometry = manifest.get("slice_geometry")
         settings = (
             geometry.get("multiscale_loss_balance")

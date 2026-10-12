@@ -33,6 +33,14 @@ class PoseInferenceService:
     """PoseInferenceService API surface documentation."""
 
     CACHE_VERSION = 3
+    # YOLO only: keys were Ultralytics' image0.jpg placeholders before, and the
+    # pose nearest the crop centre is reported now (core.pose_instances).
+    YOLO_CACHE_VERSION = 4
+
+    def _cache_version(self, backend: str) -> int:
+        if (backend or "yolo").lower() == "yolo":
+            return self.YOLO_CACHE_VERSION
+        return self.CACHE_VERSION
 
     def __init__(
         self,
@@ -83,7 +91,8 @@ class PoseInferenceService:
     def _cache_key(self, model_path: Path, backend: str) -> str:
         m = self._model_sig(model_path, backend) or "missing"
         token = (
-            f"v{self.CACHE_VERSION}|k{self.kpt_sig}|n{len(self.keypoint_names)}|"
+            f"v{self._cache_version(backend)}|k{self.kpt_sig}|"
+            f"n{len(self.keypoint_names)}|"
             f"b{backend}|m{m}"
         )
         return hashlib.sha1(token.encode("utf-8")).hexdigest()[:12]
@@ -102,7 +111,7 @@ class PoseInferenceService:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             meta = data.get("meta", {})
-            if int(meta.get("version", -1)) != self.CACHE_VERSION:
+            if int(meta.get("version", -1)) != self._cache_version(backend):
                 return None
             if meta.get("backend") and str(meta.get("backend")) != backend:
                 return None
@@ -140,7 +149,7 @@ class PoseInferenceService:
     ):
         self._cache_dir().mkdir(parents=True, exist_ok=True)
         meta = {
-            "version": self.CACHE_VERSION,
+            "version": self._cache_version(backend),
             "kpt_sig": self.kpt_sig,
             "num_kpts": len(self.keypoint_names),
             "backend": backend,
@@ -357,7 +366,9 @@ class PoseInferenceService:
         if not ok:
             return None, err
 
-        if cache_predictions:
+        # The cache is keyed by model only, so it holds predictions made at the
+        # model's own size; an explicit size is a one-off and stays uncached.
+        if cache_predictions and int(imgsz or 0) <= 0:
             self.merge_cache(model_path, preds, backend=backend)
         return preds, ""
 
@@ -430,7 +441,7 @@ def _run_pose_predict_subprocess(
     image_paths: List[Path],
     out_json: Path,
     device: str = "auto",
-    imgsz: int = 640,
+    imgsz: int = 0,  # 0: the size the model was trained at
     conf: float = 0.25,
     batch: int = 16,
     progress_cb=None,
@@ -455,6 +466,7 @@ def _run_pose_predict_subprocess(
         "import json,sys,os\n"
         "from pathlib import Path\n"
         "import numpy as np\n"
+        "from hydra_suite.core.pose_instances import MAX_POSES_PER_CROP, central_instance_index, instance_centers\n"
         "os.environ.setdefault('YOLO_AUTOINSTALL','false')\n"
         "os.environ.setdefault('ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS','1')\n"
         "def _is_cuda_device(d):\n"
@@ -472,13 +484,14 @@ def _run_pose_predict_subprocess(
         "from ultralytics import YOLO\n"
         "model=YOLO(cfg['weights'])\n"
         "pred_kwargs={\n"
-        "  'imgsz': int(cfg['imgsz']),\n"
         "  'conf': float(cfg['conf']),\n"
-        "  'max_det': 1,\n"
+        "  'max_det': MAX_POSES_PER_CROP,\n"
         "  'stream': True,\n"
         "  'verbose': False,\n"
         "  'batch': int(cfg['batch']),\n"
         "}\n"
+        "if int(cfg.get('imgsz') or 0) > 0:\n"
+        "  pred_kwargs['imgsz']=int(cfg['imgsz'])\n"
         "if cfg.get('device') and cfg.get('device')!='auto':\n"
         "  pred_kwargs['device']=cfg['device']\n"
         "if _is_cuda_device(cfg.get('device')):\n"
@@ -503,11 +516,13 @@ def _run_pose_predict_subprocess(
         "      continue\n"
         "    raise\n"
         "  for ri, r in enumerate(results):\n"
+        "    # Results come back in source order; Ultralytics names list sources\n"
+        "    # image0.jpg, image1.jpg, ... so r.path is not the file.\n"
         "    path = None\n"
-        "    if r is not None and getattr(r, 'path', None):\n"
-        "      path = r.path\n"
-        "    elif ri < len(chunk):\n"
+        "    if ri < len(chunk):\n"
         "      path = chunk[ri]\n"
+        "    elif r is not None and getattr(r, 'path', None):\n"
+        "      path = r.path\n"
         "    if path is None:\n"
         "      continue\n"
         "    if r is None or r.keypoints is None:\n"
@@ -548,6 +563,19 @@ def _run_pose_predict_subprocess(
         "      if scores is None:\n"
         "        scores=np.zeros((xy.shape[0],),dtype=np.float32)\n"
         "    best=int(np.argmax(scores)) if len(scores)>0 else 0\n"
+        "    if xy.shape[0]>1:\n"
+        "      det=scores\n"
+        "      try:\n"
+        "        bx=r.boxes.xywh\n"
+        "        bx=bx.cpu().numpy() if hasattr(bx,'cpu') else np.asarray(bx)\n"
+        "        bc=r.boxes.conf\n"
+        "        bc=bc.cpu().numpy() if hasattr(bc,'cpu') else np.asarray(bc)\n"
+        "        if bc.shape[0]==xy.shape[0]:\n"
+        "          det=bc\n"
+        "      except Exception:\n"
+        "        bx=None\n"
+        "      oh,ow=r.orig_shape[:2]\n"
+        "      best=central_instance_index(instance_centers(xy,conf,bx),(ow,oh),det)\n"
         "    pred_xy=xy[best]\n"
         "    pred_conf=conf[best] if conf is not None else np.zeros((pred_xy.shape[0],),dtype=np.float32)\n"
         "    pred_conf=np.clip(np.asarray(pred_conf,dtype=np.float32),0.0,1.0)\n"

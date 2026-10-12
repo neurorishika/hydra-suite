@@ -10,6 +10,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from hydra_suite.core.pose_flip import normalize_flip_pairs, parse_flip_pairs
+
 from .constants import DEFAULT_EDGE_WIDTH, DEFAULT_KPT_RADIUS, DEFAULT_LABEL_FONT_SIZE
 from .utils import _relativize_path, _resolve_project_path
 
@@ -123,6 +125,10 @@ class Project:
     # they win on load when present.
     labeling_frame_paths: List[str] = field(default_factory=list)
 
+    # Left/right keypoint pairs (0-based) swapped when training mirrors an
+    # image; see ``hydra_suite.core.pose_flip``.
+    flip_pairs: List[Tuple[int, int]] = field(default_factory=list)
+
     def to_json(self) -> dict:
         """Serialize project state to a JSON-compatible dictionary."""
         base = self.project_path.parent
@@ -156,6 +162,7 @@ class Project:
             "class_names": self.class_names,
             "keypoint_names": self.keypoint_names,
             "skeleton_edges": [[a, b] for a, b in self.skeleton_edges],
+            "flip_pairs": [[a, b] for a, b in self.flip_pairs],
             "dims": self.dims,
             "bbox_pad_frac": self.bbox_pad_frac,
             "autosave": self.autosave,
@@ -215,6 +222,10 @@ class Project:
             skeleton_edges=[
                 (int(a), int(b)) for a, b in data.get("skeleton_edges", [])
             ],
+            flip_pairs=normalize_flip_pairs(
+                parse_flip_pairs(data),
+                len(data.get("keypoint_names", ["kp1", "kp2"])),
+            ),
             dims=int(data.get("dims", 3)),
             bbox_pad_frac=float(data.get("bbox_pad_frac", 0.03)),
             autosave=bool(data.get("autosave", True)),

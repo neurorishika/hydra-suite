@@ -30,6 +30,11 @@ from hydra_suite.core.individual.pose.utils import (
     resolve_device,
     summarize_keypoints,
 )
+from hydra_suite.core.pose_instances import (
+    MAX_POSES_PER_CROP,
+    central_instance_index,
+    instance_centers,
+)
 from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, TENSORRT_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -68,7 +73,7 @@ def auto_export_yolo_model(
     )
     sig_blob = (
         f"{path_fingerprint_token(str(model_path))}|runtime={runtime}|"
-        f"batch={int(config.yolo_batch)}|device={export_device}"
+        f"batch={int(config.yolo_batch)}|device={export_device}|imgsz=trained"
     ).encode("utf-8")
     sig = hashlib.sha1(sig_blob).hexdigest()[:16]
     if artifact_meta_matches(target_path, sig):
@@ -83,7 +88,10 @@ def auto_export_yolo_model(
         model = YOLO(str(model_path))
     export_kwargs: Dict[str, Any] = {
         "format": "onnx" if runtime == "onnx" else "engine",
-        "imgsz": 640,
+        # Export at the training size; YoloNativeBackend predicts at that size
+        # too (a dynamic artifact would otherwise run at Ultralytics' 640,
+        # outside a TensorRT profile built for a small model).
+        "imgsz": _trained_imgsz(model, str(model_path)) or 640,
         "verbose": False,
         "project": str(target_path.parent),
         "name": model_path.stem,
@@ -118,6 +126,73 @@ def auto_export_yolo_model(
     return str(target_path.resolve())
 
 
+def _imgsz_value(value) -> Optional[int]:
+    if isinstance(value, (list, tuple)):
+        value = max(value) if value else None
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
+def _export_metadata(path: Path) -> Dict[str, Any]:
+    """Ultralytics' export metadata of an ``.engine`` / ``.onnx`` ({} if none)."""
+    import ast
+    import json
+
+    try:
+        if path.suffix.lower() == ".engine":
+            with open(path, "rb") as fh:
+                size = int.from_bytes(fh.read(4), byteorder="little")
+                if not 0 < size < 1 << 20:
+                    return {}
+                meta = json.loads(fh.read(size).decode("utf-8"))
+                return meta if isinstance(meta, dict) else {}
+        if path.suffix.lower() == ".onnx":
+            try:  # onnx is optional; onnxruntime is always installed
+                import onnx
+
+                props = onnx.load(str(path), load_external_data=False)
+                raw = {p.key: p.value for p in props.metadata_props}
+            except ImportError:
+                import onnxruntime as ort
+
+                session = ort.InferenceSession(
+                    str(path), providers=["CPUExecutionProvider"]
+                )
+                raw = dict(session.get_modelmeta().custom_metadata_map)
+            meta: Dict[str, Any] = {}
+            for key, value in raw.items():
+                try:
+                    meta[key] = ast.literal_eval(value)
+                except (ValueError, SyntaxError):
+                    meta[key] = value
+            return meta
+    except Exception:
+        logger.debug("No export metadata in %s", path, exc_info=True)
+    return {}
+
+
+def _trained_imgsz(model, model_path: str) -> Optional[int]:
+    """Image size to predict at, or None to leave it to Ultralytics.
+
+    A ``.pt`` carries its training size.  A *dynamic* ``.onnx`` / ``.engine``
+    would otherwise run at Ultralytics' 640, whatever it was exported at
+    (auto-export uses the training size), so it gets its export size.  A static
+    export gets None: Ultralytics already uses its fixed input, and passing any
+    other size breaks it.
+    """
+    path = Path(model_path)
+    if path.suffix.lower() == ".pt":
+        return _imgsz_value(getattr(model, "overrides", {}).get("imgsz"))
+    meta = _export_metadata(path)
+    args = meta.get("args") if isinstance(meta.get("args"), dict) else {}
+    if args.get("dynamic"):
+        return _imgsz_value(meta.get("imgsz"))
+    return None
+
+
 class YoloNativeBackend:
     """Ultralytics-native YOLO pose runtime (.pt/.onnx/.engine)."""
 
@@ -129,7 +204,7 @@ class YoloNativeBackend:
         keypoint_names: Optional[Sequence[str]] = None,
         conf: float = 1e-4,
         iou: float = 0.7,
-        max_det: int = 1,
+        max_det: int = MAX_POSES_PER_CROP,
         batch_size: int = 4,
     ):
         os.environ.setdefault("YOLO_AUTOINSTALL", "false")
@@ -159,6 +234,7 @@ class YoloNativeBackend:
             self.model.to(self.device)
         except Exception:
             pass
+        self.imgsz = _trained_imgsz(self.model, self.model_path)
 
     @property
     def preferred_input_size(self) -> int:
@@ -199,6 +275,7 @@ class YoloNativeBackend:
             iou=self.iou,
             max_det=self.max_det,
             batch=min(self.batch_size, max(1, len(crops))),
+            **({"imgsz": self.imgsz} if self.imgsz else {}),
             verbose=False,
             device=self.device,
         )
@@ -253,8 +330,7 @@ class YoloNativeBackend:
 
         if conf is None:
             conf = np.zeros((xy.shape[0], xy.shape[1]), dtype=np.float32)
-        mean_per_instance = np.nanmean(conf, axis=1)
-        best_idx = int(np.nanargmax(mean_per_instance)) if len(mean_per_instance) else 0
+        best_idx = self._central_index(result, xy, conf)
         pred_xy = np.asarray(xy[best_idx], dtype=np.float32)
         pred_conf = np.asarray(conf[best_idx], dtype=np.float32)
 
@@ -266,6 +342,29 @@ class YoloNativeBackend:
 
         kpts = np.column_stack((pred_xy, pred_conf)).astype(np.float32)
         return summarize_keypoints(kpts, self.min_valid_conf)
+
+    @staticmethod
+    def _central_index(result, xy: np.ndarray, conf: np.ndarray) -> int:
+        """The pose of the crop's own animal: nearest the crop centre."""
+        if xy.shape[0] <= 1:
+            return 0
+        boxes = None
+        scores = np.nanmean(conf, axis=1)
+        try:
+            b = result.boxes.xywh
+            boxes = b.cpu().numpy() if hasattr(b, "cpu") else np.asarray(b)
+            c = result.boxes.conf
+            c = c.cpu().numpy() if hasattr(c, "cpu") else np.asarray(c)
+            if c.shape[0] == xy.shape[0]:
+                scores = c  # detection confidence, not keypoint mean
+        except Exception:
+            boxes = None
+        try:
+            h, w = result.orig_shape[:2]
+        except Exception:
+            return int(np.nanargmax(scores)) if len(scores) else 0
+        centers = instance_centers(xy, conf, boxes)
+        return central_instance_index(centers, (w, h), scores)
 
     def _warn_conf_out_of_range(self, pred_conf: np.ndarray) -> None:
         """Log a one-time warning if confidence values are outside [0, 1]."""

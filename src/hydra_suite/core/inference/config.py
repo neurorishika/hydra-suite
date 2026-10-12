@@ -15,6 +15,7 @@ from hydra_suite.core.individual.classification.errors import (
     CalibrationRequiredError,
     PoseModelUnresolvedError,
 )
+from hydra_suite.core.pose_instances import MAX_POSES_PER_CROP
 from hydra_suite.runtime.resolver import RuntimeTier
 from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_OVERLAP
 
@@ -478,7 +479,9 @@ class PoseYOLOConfig:
     model_path: str
     confidence_threshold: float = 1e-4
     iou_threshold: float = 0.7
-    max_detections_per_crop: int = 1
+    # >1 so the pose nearest the crop centre can be chosen over a clearer
+    # neighbour (core.pose_instances).
+    max_detections_per_crop: int = MAX_POSES_PER_CROP
     batch_size: int = 64
 
 
@@ -1377,7 +1380,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                         params.get("POSE_CONFIDENCE_THRESHOLD", 1e-4)
                     ),
                     iou_threshold=float(params.get("POSE_IOU_THRESHOLD", 0.7)),
-                    max_detections_per_crop=1,
+                    max_detections_per_crop=MAX_POSES_PER_CROP,
                     batch_size=int(params.get("POSE_BATCH_SIZE", 64)),
                 ),
                 **common_pose_kwargs,

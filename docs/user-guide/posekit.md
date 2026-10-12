@@ -27,23 +27,23 @@ For SLEAP env creation and ONNX/TensorRT integration setup, see:
 ViTPose is a third selectable pose backend alongside YOLO-pose and SLEAP, available in:
 
 - **Predict Keypoints** (current-frame inference) and **Predict Dataset** (batch
-  inference over the labeled frame set) in the Model group.
+  inference over the labeled frame set) in the Model group. ViTPose is the
+  default backend for prediction and training.
 - **Training Runner** — fine-tune a ViTPose checkpoint on the project's YOLO-pose
   dataset; supports Use-Latest resume, a loss-curve plot, and the same evaluation
   dashboard as the other backends.
 
 ### Weight acquisition
 
-- **Auto download:** the COCO-B catalog entry (`vitpose-b-coco`) downloads
-  `vitpose-b.pth` from the `nielsr/vitpose-original-checkpoints` Hugging Face repo on
-  first use, verifies it against a pinned SHA-256, and caches it locally. This is a
-  human-COCO-17-keypoint checkpoint — a reasonable general-purpose starting point, not
-  an animal-tuned model.
-- **Browse:** point at any local `.pth` checkpoint — this is how you load an
-  animal-pretrained checkpoint (for example fine-tuned on AP-10K or APT-36K) or a
-  checkpoint you trained yourself with the training CLI below. Animal (AP-10K/APT-36K)
-  checkpoints are **not** bundled or auto-downloadable; Browse is the only path to them
-  today.
+- **Auto download (default): AP-10K.** The `vitpose-b-ap10k` catalog entry is
+  ViTPose-B trained on AP-10K (animal pose, 54 species). It downloads
+  `torch/ap10k/vitpose-b-ap10k.pth` from the `JunkyByte/easy_ViTPose` Hugging Face
+  mirror on first use (the upstream release hosts it on OneDrive only), verifies it
+  against a pinned SHA-256, and caches it locally.
+- **Auto download: COCO-B.** The `vitpose-b-coco` entry downloads the human
+  COCO-17 checkpoint `vitpose-b.pth` from `nielsr/vitpose-original-checkpoints`.
+- **Browse:** point at any local `.pth` checkpoint, for example an APT-36K
+  checkpoint or one you trained yourself with the training CLI below.
 
 ### Training
 
@@ -129,6 +129,39 @@ Clustering also writes `posekit/clusters/clusters.csv` for every frame, which th
 2. Label a pilot subset and run sanity checks.
 3. Generate split files and train a baseline.
 4. Use model-assisted passes and active learning to iterate.
+
+## Training Defaults
+
+- **Input size from the crops.** *Auto from crop size* (on by default) sizes the
+  model input from the crops' pixel dimensions: YOLO trains at the smallest multiple
+  of 32 that holds the crops' long side (192 for 192x128 crops, instead of 640), and
+  ViTPose gets an input with the crops' aspect ratio at about one input pixel per crop
+  pixel (*Detail* scales it; 160x256 HxW for 192x128 crops). Prediction always uses
+  the size a model was trained at.
+- **Flips.** Training mirrors crops left-right and up-down (probability 0.5 each).
+  A mirror turns a left antenna into a right one, so the skeleton needs its
+  left/right pairs: set them in the **Skeleton Editor** (*Suggest from names* pairs
+  `left_*`/`right_*`, `l_*`/`r_*`). They are saved in the project and in skeleton
+  files (`flip_pairs`). If any keypoint whose name marks a side (`left_*`, `l_*`,
+  `antL`, `L1`, `lf_*`, ...) is not in a pair, flips stay off and the Training
+  Runner names the keypoints (tick *Flip with unpaired side-like names* in Config
+  when they are really midline keypoints); a skeleton with only midline keypoints
+  flips without swapping. Loading a skeleton file saved without pairs keeps the current pairs only
+  for keypoints it still has, matched by name.
+- **Mosaic off.** Ultralytics' mosaic tiles four crops into one image, which puts
+  the labelled animal off-centre next to unlabelled ones; it is off by default and
+  can be switched on under Augmentations.
+
+## Crops With Several Animals
+
+A crop belongs to the animal at its centre; neighbours reaching into the frame are
+not labelled. When a YOLO-pose model finds several animals in a crop (up to 10 are
+kept), PoseKit and TrackerKit report the pose nearest the crop centre among the
+confident detections (confidence at least 0.1 and at least a quarter of the best
+one), not simply the most confident, so a clearer neighbour no longer replaces the
+crop's own animal while near-zero fragments are ignored. ViTPose predicts one pose
+per crop. TrackerKit pose caches made with YOLO-pose before this change are
+recomputed.
 
 ## Training Augmentation
 

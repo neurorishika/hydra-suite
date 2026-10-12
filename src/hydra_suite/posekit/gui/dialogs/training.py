@@ -23,7 +23,6 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -56,6 +55,7 @@ from ...core.extensions import (
     build_yolo_pose_dataset,
     list_labeled_indices,
 )
+from ...core.training_options import is_vitpose_run, plan_flips
 from ...core.vitpose_checkpoints import CATALOG, check_variant_available
 from ...core.vitpose_training import (
     build_training_command,
@@ -75,6 +75,29 @@ from .utils import (
 )
 
 logger = logging.getLogger("pose_label.dialogs.training")
+
+
+def _setting_float(settings: dict, key: str, default: float) -> float:
+    try:
+        return float(settings.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _setting_bool(settings: dict, key: str, default: bool) -> bool:
+    value = settings.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value) if value is not None else default
+
+
+def _flip_spin(value: float) -> QDoubleSpinBox:
+    spin = QDoubleSpinBox()
+    spin.setRange(0.0, 1.0)
+    spin.setSingleStep(0.1)
+    spin.setDecimals(2)
+    spin.setValue(value)
+    return spin
 
 
 class TrainingWorker(QObject):
@@ -105,6 +128,9 @@ class TrainingWorker(QObject):
         scale: float,
         window_scale_jitter: float = 0.0,
         window_aspect_jitter: float = 0.0,
+        mosaic: float = 0.0,
+        fliplr: float = 0.0,
+        flipud: float = 0.0,
     ):
         super().__init__()
         self.model_weights = model_weights
@@ -125,6 +151,11 @@ class TrainingWorker(QObject):
         self.scale = float(scale)
         self.window_scale_jitter = float(window_scale_jitter)
         self.window_aspect_jitter = float(window_aspect_jitter)
+        # Passed even with augmentations off: Ultralytics' own defaults
+        # (mosaic=1.0) would otherwise apply.
+        self.mosaic = float(mosaic) if self.augment else 0.0
+        self.fliplr = float(fliplr) if self.augment else 0.0
+        self.flipud = float(flipud) if self.augment else 0.0
         self._cancel = False
         self._model = None
         self._proc = None
@@ -178,6 +209,11 @@ class TrainingWorker(QObject):
                 ]
                 if self.device and self.device != "auto":
                     cli_args.append(f"device={self.device}")
+                cli_args += [
+                    f"mosaic={self.mosaic}",
+                    f"fliplr={self.fliplr}",
+                    f"flipud={self.flipud}",
+                ]
                 if self.augment:
                     cli_args += [
                         "augment=True",
@@ -302,6 +338,9 @@ class ViTPoseTrainingWorker(QObject):
         input_size=None,
         scale_jitter=None,
         aspect_jitter=0.0,
+        flip_pairs=None,
+        fliplr=0.0,
+        flipud=0.0,
     ):
         super().__init__()
         self.image_paths = list(image_paths)
@@ -320,6 +359,9 @@ class ViTPoseTrainingWorker(QObject):
         self.input_size = list(input_size) if input_size else None
         self.scale_jitter = None if scale_jitter is None else float(scale_jitter)
         self.aspect_jitter = float(aspect_jitter)
+        self.flip_pairs = [list(p) for p in flip_pairs] if flip_pairs else None
+        self.fliplr = float(fliplr)
+        self.flipud = float(flipud)
         self._cancel = False
         self._proc = None
 
@@ -356,6 +398,12 @@ class ViTPoseTrainingWorker(QObject):
             )
             if self.scale_jitter is not None:
                 params["scale_jitter"] = self.scale_jitter
+            if self.fliplr > 0 or self.flipud > 0:
+                params.update(
+                    flip_pairs=self.flip_pairs or [],
+                    fliplr=self.fliplr,
+                    flipud=self.flipud,
+                )
             run_json = prepare_run(params, self.run_dir, self.cache_dir)
             cmd = build_training_command(run_json)
             self.log.emit(f"Launching: {' '.join(cmd)}")
@@ -667,6 +715,7 @@ class TrainingRunnerDialog(QDialog):
 
         self.backend_combo = QComboBox()
         self.backend_combo.addItems(["YOLO Pose", "ViTPose", "SLEAP"])
+        self.backend_combo.setCurrentText("ViTPose")
         backend_layout.addRow("Backend", self.backend_combo)
 
         content_layout.addWidget(self.backend_group)
@@ -708,12 +757,20 @@ class TrainingRunnerDialog(QDialog):
         self.vitpose_detail_spin.setSingleStep(0.25)
         self.vitpose_detail_spin.setValue(1.0)
         self.vitpose_detail_spin.setSuffix("x")
-        self.vitpose_auto_btn = QPushButton("Auto from dataset")
-        self.vitpose_auto_btn.clicked.connect(self._auto_size_from_dataset)
+        self.vitpose_detail_spin.setToolTip(
+            "Input pixels per crop pixel when sizing from the crops: 1x keeps the "
+            "crop's own resolution, 2x upsamples it."
+        )
+        self.vitpose_auto_cb = QCheckBox("Auto from crop size")
+        self.vitpose_auto_cb.setChecked(True)
+        self.vitpose_auto_cb.setToolTip(
+            "Size the model input from the crops: same aspect ratio as the crops, "
+            "about one input pixel per crop pixel (times Detail), on a 32-pixel grid."
+        )
         auto_row = QHBoxLayout()
+        auto_row.addWidget(self.vitpose_auto_cb)
         auto_row.addWidget(QLabel("Detail"))
         auto_row.addWidget(self.vitpose_detail_spin)
-        auto_row.addWidget(self.vitpose_auto_btn)
         auto_row.addStretch(1)
         vitpose_layout.addRow("", auto_row)
 
@@ -747,11 +804,25 @@ class TrainingRunnerDialog(QDialog):
         )
         vitpose_layout.addRow("Aspect jitter", self.vitpose_aspect_jitter_spin)
 
+        self.vitpose_fliplr_spin = _flip_spin(0.5)
+        self.vitpose_flipud_spin = _flip_spin(0.5)
+        flip_row = QHBoxLayout()
+        flip_row.addWidget(QLabel("left-right"))
+        flip_row.addWidget(self.vitpose_fliplr_spin)
+        flip_row.addWidget(QLabel("up-down"))
+        flip_row.addWidget(self.vitpose_flipud_spin)
+        flip_row.addStretch(1)
+        vitpose_layout.addRow("Flip probability", flip_row)
+        self.lbl_vitpose_flip_note = QLabel("")
+        self.lbl_vitpose_flip_note.setWordWrap(True)
+        vitpose_layout.addRow("", self.lbl_vitpose_flip_note)
+
         content_layout.addWidget(self.vitpose_group)
 
         # Config
         self.cfg_group = QGroupBox("Config")
         cfg_layout = QFormLayout(self.cfg_group)
+        self.cfg_layout = cfg_layout
 
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
@@ -762,6 +833,7 @@ class TrainingRunnerDialog(QDialog):
         model_row.addWidget(self.model_combo, 1)
         model_row.addWidget(self.btn_model_browse)
         cfg_layout.addRow("Base weights", model_row)
+        self._model_row = model_row
 
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 1024)
@@ -785,7 +857,19 @@ class TrainingRunnerDialog(QDialog):
         self.imgsz_spin = QSpinBox()
         self.imgsz_spin.setRange(64, 4096)
         self.imgsz_spin.setValue(640)
-        cfg_layout.addRow("Image size", self.imgsz_spin)
+        self.imgsz_auto_cb = QCheckBox("Auto from crop size")
+        self.imgsz_auto_cb.setChecked(True)
+        self.imgsz_auto_cb.setToolTip(
+            "Train at the smallest 32-pixel multiple that holds the crops' long "
+            "side (90th percentile), so crops are not upscaled. Prediction uses "
+            "the size a model was trained at."
+        )
+        imgsz_row = QHBoxLayout()
+        imgsz_row.addWidget(self.imgsz_spin)
+        imgsz_row.addWidget(self.imgsz_auto_cb)
+        imgsz_row.addStretch(1)
+        cfg_layout.addRow("Image size", imgsz_row)
+        self._imgsz_row = imgsz_row
 
         self.device_combo = QComboBox()
         self.device_combo.addItems(get_available_devices())
@@ -806,6 +890,14 @@ class TrainingRunnerDialog(QDialog):
         self.cb_ignore_occluded = QCheckBox("Ignore occluded keypoints in training")
         self.cb_ignore_occluded.setChecked(True)
         cfg_layout.addRow("", self.cb_ignore_occluded)
+
+        self.cb_flip_unpaired = QCheckBox("Flip with unpaired side-like names")
+        self.cb_flip_unpaired.setToolTip(
+            "Flips stay off while a keypoint whose name looks like a left/right "
+            "side (l_*, *_R, L1, ...) is not in a left/right pair. Tick this when "
+            "those keypoints are really midline ones. Applies to this session only."
+        )
+        cfg_layout.addRow("", self.cb_flip_unpaired)
 
         self.lbl_labeled = QLabel("")
         self._refresh_labeled_count()
@@ -936,6 +1028,39 @@ class TrainingRunnerDialog(QDialog):
             "animal. The crop centre never moves. 0 = off.",
         )
         self.aug_widgets.append(self.window_aspect_spin)
+
+        self.fliplr_spin = _flip_spin(0.5)
+        add_row(
+            "flip left-right:",
+            self.fliplr_spin,
+            "Probability of mirroring a crop left-right. Left/right keypoints "
+            "are swapped using the pairs set in the Skeleton Editor.",
+        )
+        self.aug_widgets.append(self.fliplr_spin)
+
+        self.flipud_spin = _flip_spin(0.5)
+        add_row(
+            "flip up-down:",
+            self.flipud_spin,
+            "Probability of mirroring a crop up-down (realistic for top-down "
+            "video). Left/right keypoints are swapped like a left-right flip.",
+        )
+        self.aug_widgets.append(self.flipud_spin)
+
+        self.cb_mosaic = QCheckBox()
+        self.cb_mosaic.setChecked(False)
+        add_row(
+            "mosaic:",
+            self.cb_mosaic,
+            "Ultralytics mosaic: tiles four crops into one training image. Off "
+            "by default: it moves the labelled animal off-centre next to "
+            "unlabelled ones, which contradicts centred single-animal crops.",
+        )
+        self.aug_widgets.append(self.cb_mosaic)
+
+        self.lbl_flip_note = QLabel("")
+        self.lbl_flip_note.setWordWrap(True)
+        aug_layout.addWidget(self.lbl_flip_note)
 
         content_layout.addWidget(self.aug_group)
 
@@ -1069,14 +1194,37 @@ class TrainingRunnerDialog(QDialog):
         self.vitpose_checkpoint_combo.activated.connect(
             self._on_vitpose_checkpoint_activated
         )
+        self.imgsz_auto_cb.toggled.connect(self._apply_auto_sizes)
+        self.vitpose_auto_cb.toggled.connect(self._apply_auto_sizes)
+        self.vitpose_detail_spin.valueChanged.connect(self._apply_auto_sizes)
+        for spin in (
+            self.fliplr_spin,
+            self.flipud_spin,
+            self.vitpose_fliplr_spin,
+            self.vitpose_flipud_spin,
+        ):
+            spin.valueChanged.connect(self._update_flip_notes)
+        self.cb_augment.toggled.connect(self._update_flip_notes)
+        self.cb_flip_unpaired.toggled.connect(self._update_flip_notes)
+        self._crop_stats = None
+        self._crop_stats_error = ""
 
+        self._trained_backend = ""
         self._toggle_aug_widgets(self.cb_augment.isChecked())
-        self._apply_settings()
+        # Restoring Detail or a size must not trigger auto-sizing with the
+        # Auto boxes still at their defaults (it would overwrite saved sizes).
+        self._restoring_settings = True
+        try:
+            self._apply_settings()
+        finally:
+            self._restoring_settings = False
         self._refresh_sleap_envs()
         self._apply_latest_weights_default()
         if not self.sleap_out_edit.text().strip():
             self.sleap_out_edit.setText(str(self._default_sleap_out_path()))
         self._update_backend_ui()
+        self._apply_auto_sizes()
+        self._update_flip_notes()
 
     def _append_log(self, msg: str):
         self.log_view.appendPlainText(msg)
@@ -1262,12 +1410,27 @@ class TrainingRunnerDialog(QDialog):
                 )
             )
         )
+        for key, widget in (
+            ("fliplr", self.fliplr_spin),
+            ("flipud", self.flipud_spin),
+            ("vitpose_fliplr", self.vitpose_fliplr_spin),
+            ("vitpose_flipud", self.vitpose_flipud_spin),
+        ):
+            widget.setValue(_setting_float(settings, key, widget.value()))
+        for key, box in (
+            ("mosaic", self.cb_mosaic),
+            ("imgsz_auto", self.imgsz_auto_cb),
+            ("vitpose_auto_size", self.vitpose_auto_cb),
+        ):
+            box.setChecked(_setting_bool(settings, key, box.isChecked()))
 
     def _apply_latest_weights_default(self):
         if (
             hasattr(self.project, "latest_pose_weights")
             and self.project.latest_pose_weights
             and Path(self.project.latest_pose_weights).exists()
+            # YOLO cannot start from a ViTPose checkpoint
+            and not is_vitpose_run(self.project.latest_pose_weights)
         ):
             self.model_combo.setCurrentText(str(self.project.latest_pose_weights))
 
@@ -1277,7 +1440,19 @@ class TrainingRunnerDialog(QDialog):
         is_vitpose = backend == "ViTPose"
         is_sleap = backend.startswith("SLEAP")
 
-        self.cfg_group.setVisible(is_yolo)
+        # ViTPose reads epochs, batch and device from Config too; the rest of
+        # the group is YOLO-only.
+        self.cfg_group.setVisible(is_yolo or is_vitpose)
+        for row in (
+            self._model_row,
+            self.cb_auto_batch,
+            self.patience_spin,
+            self._imgsz_row,
+            self.train_split_spin,
+            self.seed_spin,
+            self.cb_ignore_occluded,
+        ):
+            self.cfg_layout.setRowVisible(row, is_yolo)
         self.aug_group.setVisible(is_yolo)
         self.info_group.setVisible(is_yolo or is_vitpose)
         self.progress.setVisible(is_yolo or is_vitpose)
@@ -1290,6 +1465,8 @@ class TrainingRunnerDialog(QDialog):
 
         self.vitpose_group.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
+        if hasattr(self, "_crop_stats"):  # sizes are measured lazily per backend
+            self._apply_auto_sizes()
 
     def _on_vitpose_checkpoint_activated(self, index: int):
         if self.vitpose_checkpoint_combo.itemText(index) == "Browse…":
@@ -1505,17 +1682,70 @@ class TrainingRunnerDialog(QDialog):
                 "vitpose_detail": float(self.vitpose_detail_spin.value()),
                 "vitpose_scale_jitter": float(self.vitpose_scale_jitter_spin.value()),
                 "vitpose_aspect_jitter": float(self.vitpose_aspect_jitter_spin.value()),
+                "fliplr": float(self.fliplr_spin.value()),
+                "flipud": float(self.flipud_spin.value()),
+                "mosaic": bool(self.cb_mosaic.isChecked()),
+                "imgsz_auto": bool(self.imgsz_auto_cb.isChecked()),
+                "vitpose_auto_size": bool(self.vitpose_auto_cb.isChecked()),
+                "vitpose_fliplr": float(self.vitpose_fliplr_spin.value()),
+                "vitpose_flipud": float(self.vitpose_flipud_spin.value()),
             },
         )
 
     def closeEvent(self, event) -> None:
         """Persist dialog settings and cancel any running training or export worker before closing."""
-        self._save_settings()
-        if self._thread:
-            self._worker.cancel()
-            self._thread.quit()
-            self._thread.wait()
+        if not self._confirm_stop():
+            event.ignore()
+            return
+        self._shutdown()
         super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        """Close / Esc go through here (not closeEvent): save and stop too."""
+        if not self._confirm_stop():
+            return
+        self._shutdown()
+        super().done(result)
+
+    def _training_running(self) -> bool:
+        if not self._thread:
+            return False
+        try:
+            return bool(self._thread.isRunning())
+        except RuntimeError:  # thread object already deleted
+            return False
+
+    def _confirm_stop(self) -> bool:
+        """Closing stops a running training: ask first (once per close)."""
+        if not self._training_running() or getattr(self, "_stop_confirmed", False):
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Stop training?",
+            "Training is still running. Closing the Training Runner stops it.\n"
+            "Stop training and close?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        self._stop_confirmed = answer == QMessageBox.Yes
+        return self._stop_confirmed
+
+    def _shutdown(self) -> None:
+        self._save_settings()
+        if not self._training_running():
+            return
+        # The dialog is going away: no "Training failed: Canceled." box after.
+        for signal, slot in (
+            (self._worker.failed, self._on_failed),
+            (self._worker.finished, self._on_finished),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        self._worker.cancel()
+        self._thread.quit()
+        self._thread.wait()
 
     def _remove_aux_project(self):
         row = self.aux_list.currentRow()
@@ -1569,6 +1799,8 @@ class TrainingRunnerDialog(QDialog):
             )
             return
 
+        self._apply_auto_sizes()
+        flips = self._flip_plan(yolo=True)
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = self.project.out_root / "runs" / "yolo_pose" / timestamp
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -1591,10 +1823,12 @@ class TrainingRunnerDialog(QDialog):
                 extra_items=list(self._aux_items),
                 ignore_occluded_train=self.cb_ignore_occluded.isChecked(),
                 ignore_occluded_val=False,
+                flip_idx=flips.flip_idx,
             )
         except Exception as e:
             QMessageBox.critical(self, "Dataset error", str(e))
             return
+        mosaic = 1.0 if self.cb_mosaic.isChecked() else 0.0
 
         config = {
             "backend": "yolo_pose",
@@ -1616,6 +1850,10 @@ class TrainingRunnerDialog(QDialog):
             "scale": float(self.scale_spin.value()),
             "window_scale_jitter": float(self.window_scale_spin.value()),
             "window_aspect_jitter": float(self.window_aspect_spin.value()),
+            "mosaic": mosaic,
+            "fliplr": flips.fliplr,
+            "flipud": flips.flipud,
+            "flip_idx": flips.flip_idx,
             "dataset": {
                 "yaml": str(dataset_info["yaml_path"]),
                 "train": str(dataset_info["train_list"]),
@@ -1634,6 +1872,7 @@ class TrainingRunnerDialog(QDialog):
         self._train_start_ts = time.time()
         self._loss_source_path = None
         self.lbl_run_dir.setText(f"Run dir: {run_dir}")
+        self._begin_run("YOLO Pose")
         self.log_view.clear()
         self.progress.setValue(0)
         self.lbl_loss_plot.clear()
@@ -1661,7 +1900,11 @@ class TrainingRunnerDialog(QDialog):
             scale=self.scale_spin.value(),
             window_scale_jitter=self.window_scale_spin.value(),
             window_aspect_jitter=self.window_aspect_spin.value(),
+            mosaic=mosaic,
+            fliplr=flips.fliplr,
+            flipud=flips.flipud,
         )
+        self._append_log(f"[flips] {flips.note}")
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.log.connect(self._append_log)
@@ -1677,74 +1920,85 @@ class TrainingRunnerDialog(QDialog):
         self.btn_stop.setEnabled(True)
         self.btn_open_eval.setEnabled(False)
 
-    def _auto_size_from_dataset(self):
-        """Measure the labelled data and propose an input geometry.
-
-        Synchronous under a wait cursor: this is a few hundred image-header
-        reads (not decodes), so a worker thread would add failure modes without
-        buying responsiveness.
-        """
-        from hydra_suite.training.pose_geometry_measure import measure_pose_geometry
-
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        stats = None
-        value_error: Optional[ValueError] = None
-        unexpected_error: Optional[Exception] = None
-        unexpected_traceback: Optional[str] = None
-        try:
-            stats = measure_pose_geometry(
-                self.image_paths,
-                self.project.labels_dir,
-                len(self.project.keypoint_names),
-                detail=float(self.vitpose_detail_spin.value()),
+    def _measure_crops(self):
+        """Crop-size statistics, measured once (image headers only)."""
+        if self._crop_stats is None and not self._crop_stats_error:
+            from hydra_suite.training.pose_geometry_measure import (
+                measure_crop_geometry,
             )
-        except ValueError as exc:
-            value_error = exc
-        except Exception as exc:  # unexpected: surface it, do not guess a size
-            # Captured HERE, inside the except clause: sys.exc_info() is only
-            # populated while the clause is active, so grabbing the traceback
-            # text after `finally` would silently yield "NoneType: None".
-            unexpected_error = exc
-            unexpected_traceback = traceback.format_exc()
-        finally:
-            QApplication.restoreOverrideCursor()
 
-        # QMessageBox is shown after the cursor is restored (not inside the
-        # `try`), so the modal doesn't pop up under the wait-cursor's nested
-        # event loop.
-        if value_error is not None:
-            self.vitpose_size_summary.setText(f"Could not measure: {value_error}")
-            return
-        if unexpected_error is not None:
-            self._append_log(unexpected_traceback)
-            QMessageBox.warning(self, "Auto-size failed", str(unexpected_error))
-            return
+            try:
+                self._crop_stats = measure_crop_geometry(self.image_paths)
+            except ValueError as exc:
+                self._crop_stats_error = str(exc)
+            except Exception as exc:  # unexpected: report, keep manual sizes
+                self._crop_stats_error = str(exc)
+                self._append_log(traceback.format_exc())
+        return self._crop_stats
 
-        h, w = stats.suggested_hw
-        self.vitpose_h_spin.setValue(h)
-        self.vitpose_w_spin.setValue(w)
-        note = " (clamped: may not match the measured aspect)" if stats.clamped else ""
-        low_confidence = (
-            " Low confidence: fewer than 10 instances measured."
-            if stats.sample_count < 10
-            else ""
+    def _apply_auto_sizes(self, *_args) -> None:
+        """Fill the image sizes from the crops wherever *Auto* is ticked."""
+        from hydra_suite.training.pose_geometry_measure import suggest_vitpose_hw
+
+        if getattr(self, "_restoring_settings", False):
+            return
+        if self.backend_combo.currentText() not in ("YOLO Pose", "ViTPose"):
+            return  # nothing to size (and no need to read image headers)
+        yolo_auto = self.imgsz_auto_cb.isChecked()
+        vit_auto = self.vitpose_auto_cb.isChecked()
+        stats = self._measure_crops() if (yolo_auto or vit_auto) else None
+        self.imgsz_spin.setEnabled(not (yolo_auto and stats is not None))
+        for spin in (self.vitpose_h_spin, self.vitpose_w_spin):
+            spin.setEnabled(not (vit_auto and stats is not None))
+        self.vitpose_detail_spin.setEnabled(vit_auto)
+        if stats is None:
+            if yolo_auto or vit_auto:
+                self.vitpose_size_summary.setText(
+                    f"Could not measure the crops ({self._crop_stats_error}); "
+                    "using the sizes below."
+                )
+            else:
+                self.vitpose_size_summary.setText("")
+            return
+        crop_txt = f"crops {stats.median_w:.0f}x{stats.median_h:.0f}px (median)"
+        if yolo_auto:
+            self.imgsz_spin.setValue(stats.yolo_imgsz)
+        self.imgsz_spin.setToolTip(
+            f"{crop_txt}, long side p90 {stats.p90_long_px:.0f}px -> "
+            f"{stats.yolo_imgsz}"
         )
-        skipped_note = (
-            f"; {stats.frames_skipped} frame(s) skipped (unreadable/unusable)"
-            if stats.frames_skipped
-            else ""
+        if vit_auto:
+            (h, w), clamped = suggest_vitpose_hw(
+                stats.median_w, stats.median_h, self.vitpose_detail_spin.value()
+            )
+            self.vitpose_h_spin.setValue(h)
+            self.vitpose_w_spin.setValue(w)
+            note = " (kept within 64-384 px per side)" if clamped else ""
+            self.vitpose_size_summary.setText(
+                f"{crop_txt} -> input {h}x{w} (HxW){note}."
+            )
+        else:
+            self.vitpose_size_summary.setText("")
+
+    def _flip_plan(self, yolo: bool):
+        if yolo:
+            on = self.cb_augment.isChecked()
+            lr = self.fliplr_spin.value() if on else 0.0
+            ud = self.flipud_spin.value() if on else 0.0
+        else:
+            lr = self.vitpose_fliplr_spin.value()
+            ud = self.vitpose_flipud_spin.value()
+        return plan_flips(
+            self.project.keypoint_names,
+            getattr(self.project, "flip_pairs", []) or [],
+            lr,
+            ud,
+            allow_unpaired=self.cb_flip_unpaired.isChecked(),
         )
-        self.vitpose_size_summary.setText(
-            f"{stats.sample_count} instance(s) over {stats.frames_scanned} frame(s)"
-            f"{skipped_note}; "
-            f"median aspect {stats.median_aspect:.2f}, median long side "
-            f"{stats.median_long_px:.0f}px, p90 {stats.p90_long_px:.0f}px "
-            f"-> {h}x{w}{note}.{low_confidence}"
-        )
-        self._append_log(
-            f"[ViTPose] Auto-sized to {h}x{w} from {stats.sample_count} instance(s)"
-            f"{note}"
-        )
+
+    def _update_flip_notes(self, *_args) -> None:
+        self.lbl_flip_note.setText(self._flip_plan(yolo=True).note)
+        self.lbl_vitpose_flip_note.setText(self._flip_plan(yolo=False).note)
 
     def _start_vitpose_training(self):
         labeled_count = len(
@@ -1776,11 +2030,14 @@ class TrainingRunnerDialog(QDialog):
                 QMessageBox.warning(self, "Variant unavailable", str(exc))
                 return
 
+        self._apply_auto_sizes()
+        flips = self._flip_plan(yolo=False)
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = get_training_runs_dir() / "vitpose" / timestamp
         cache_dir = get_vitpose_cache_dir()
 
         self._last_run_dir = run_dir
+        self._begin_run("ViTPose")
         self._train_start_ts = time.time()
         self._loss_source_path = None
         self.lbl_run_dir.setText(f"Run dir: {run_dir}")
@@ -1808,7 +2065,11 @@ class TrainingRunnerDialog(QDialog):
             ],
             scale_jitter=self.vitpose_scale_jitter_spin.value(),
             aspect_jitter=self.vitpose_aspect_jitter_spin.value(),
+            flip_pairs=flips.pairs,
+            fliplr=flips.fliplr,
+            flipud=flips.flipud,
         )
+        self._append_log(f"[flips] {flips.note}")
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.log.connect(self._append_log)
@@ -1837,7 +2098,15 @@ class TrainingRunnerDialog(QDialog):
             pct = int((epoch / epochs) * 100)
             self.progress.setValue(min(100, max(0, pct)))
 
+    def _begin_run(self, backend: str) -> None:
+        """A run starts: forget the previous run's weights until this one ends."""
+        self._run_backend = backend
+        self._last_weights = None
+        self._trained_backend = ""
+
     def _on_finished(self, info: dict):
+        # The weights below belong to the run that just finished.
+        self._trained_backend = getattr(self, "_run_backend", "")
         self._append_log("Training complete.")
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -1933,9 +2202,10 @@ class TrainingRunnerDialog(QDialog):
                 self, "Missing weights", "No valid weights found to evaluate."
             )
             return
-        trained_backend = (
-            "vitpose" if self.backend_combo.currentText() == "ViTPose" else "yolo"
+        backend = self._trained_backend or (
+            "ViTPose" if is_vitpose_run(weights) else self.backend_combo.currentText()
         )
+        trained_backend = "vitpose" if backend == "ViTPose" else "yolo"
         dlg = EvaluationDashboardDialog(
             self,
             self.project,
