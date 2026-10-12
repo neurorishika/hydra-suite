@@ -688,7 +688,15 @@ class TrackAssigner:
             else 1e6
         )
 
-        has_pose_data = self._has_pose_association_data(association_data)
+        # The stage-1 area/aspect/motion candidate gate is part of pose-based
+        # association: it runs only when pose rejection is on. Pose
+        # *extraction* alone must not change matching -- it used to switch
+        # this gate on silently, vetoing close matches whenever a box changed
+        # size >2x since the track's last match and handing the detection to
+        # a lost slot (X1_d1: 2446 raw tracks vs 303 without pose).
+        has_pose_data = self._has_pose_association_data(association_data) and bool(
+            p.get("ENABLE_POSE_REJECTION", True)
+        )
         pose_candidates = {}
         local_gates = None
         track_uncertainty = None
