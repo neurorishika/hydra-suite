@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -50,7 +51,7 @@ from hydra_suite.training.validation import format_validation_report
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.utils.gpu_utils import get_device_info
 from hydra_suite.widgets.dialogs import BaseDialog
-from hydra_suite.widgets.workers import BaseWorker
+from hydra_suite.widgets.workers import AbandonableWorker, BaseWorker
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,221 @@ class RoleTrainingWorker(BaseWorker):
         self.done_signal.emit(results)
 
 
+@dataclass(frozen=True)
+class _SizeAnalysisRequest:
+    source_paths: tuple[str, ...]
+    pad: float
+    min_px: int
+    square: bool
+    crop_imgsz: int
+    direct_imgsz: int
+
+
+@dataclass(frozen=True)
+class _SizeAnalysisResult:
+    request: _SizeAnalysisRequest
+    # None when no source had valid items.
+    report: str | None
+    # (contiguous RGB uint8 array, original crop size in px)
+    previews: list
+    skipped: list[str]
+
+
+def _format_size_analysis_report(stats, crop_imgsz: int, direct_imgsz: int) -> str:
+    from hydra_suite.training.dataset_inspector import format_size_analysis
+
+    crop_report, crop_warnings = format_size_analysis(
+        stats,
+        training_imgsz=crop_imgsz,
+        pipeline_mode="crop",
+    )
+    _, direct_warnings = format_size_analysis(
+        stats,
+        training_imgsz=direct_imgsz,
+        pipeline_mode="full_image",
+    )
+
+    sections = []
+    sections.append("=" * 50)
+    sections.append("DATASET SIZE ANALYSIS")
+    sections.append("=" * 50)
+    sections.append("")
+    sections.append(crop_report)
+
+    if crop_warnings:
+        sections.append("")
+        sections.append("-" * 40)
+        sections.append(f"seq_crop_obb (imgsz={crop_imgsz}):")
+        for w in crop_warnings:
+            sections.append(f"  {w}")
+
+    if direct_warnings:
+        sections.append("")
+        sections.append("-" * 40)
+        sections.append(f"obb_direct (imgsz={direct_imgsz}):")
+        for w in direct_warnings:
+            sections.append(f"  {w}")
+
+    if not crop_warnings and not direct_warnings:
+        sections.append("")
+        sections.append("No compatibility issues detected.")
+    return "\n".join(sections)
+
+
+def _extract_crop_previews(
+    inspection, pad, min_px, square, imgsz, n_samples=6, should_cancel=lambda: False
+):
+    """Cut sample crops (OBB drawn, resized to imgsz) as RGB arrays."""
+    import random
+
+    import cv2
+    import numpy as np
+
+    all_items = []
+    for split_items in inspection.splits.values():
+        all_items.extend(split_items)
+    if not all_items:
+        return []
+
+    rng = random.Random(42)
+    rng.shuffle(all_items)
+
+    previews = []
+    for item in all_items:
+        if len(previews) >= n_samples or should_cancel():
+            break
+        lbl_path = Path(item.label_path)
+        img_path = Path(item.image_path)
+        if not lbl_path.exists() or not img_path.exists():
+            continue
+        img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+        if img is None or img.size == 0:
+            continue
+        h, w = img.shape[:2]
+
+        try:
+            lines = lbl_path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+
+        for ln in lines:
+            if len(previews) >= n_samples:
+                break
+            ln = ln.strip()
+            if not ln:
+                continue
+            parts = ln.split()
+            if len(parts) != 9:
+                continue
+            try:
+                coords = np.asarray(
+                    [float(v) for v in parts[1:]], dtype=np.float32
+                ).reshape(4, 2)
+            except Exception:
+                continue
+
+            px = coords[:, 0] * float(w)
+            py = coords[:, 1] * float(h)
+            x1, x2 = float(np.min(px)), float(np.max(px))
+            y1, y2 = float(np.min(py)), float(np.max(py))
+            bw = max(1.0, x2 - x1)
+            bh = max(1.0, y2 - y1)
+            cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+
+            crop_w = max(float(min_px), bw * (1.0 + 2.0 * max(0.0, pad)))
+            crop_h = max(float(min_px), bh * (1.0 + 2.0 * max(0.0, pad)))
+            if square:
+                side = max(crop_w, crop_h)
+                crop_w = side
+                crop_h = side
+
+            xi1 = max(0, int(cx - crop_w * 0.5))
+            yi1 = max(0, int(cy - crop_h * 0.5))
+            xi2 = min(w, int(cx + crop_w * 0.5))
+            yi2 = min(h, int(cy + crop_h * 0.5))
+            if xi2 <= xi1 or yi2 <= yi1:
+                continue
+
+            crop = img[yi1:yi2, xi1:xi2].copy()
+
+            # Draw the OBB polygon on the crop.
+            poly_crop = np.zeros((4, 2), dtype=np.int32)
+            poly_crop[:, 0] = (px - xi1).astype(np.int32)
+            poly_crop[:, 1] = (py - yi1).astype(np.int32)
+            cv2.polylines(crop, [poly_crop], True, (0, 255, 0), 1)
+
+            original_size = max(crop.shape[:2])
+
+            # Resize to training imgsz.
+            if imgsz > 0:
+                crop = cv2.resize(crop, (imgsz, imgsz), interpolation=cv2.INTER_LINEAR)
+
+            previews.append((crop, original_size))
+
+    return [
+        (np.ascontiguousarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)), size)
+        for crop, size in previews
+    ]
+
+
+class _SizeAnalysisWorker(AbandonableWorker):
+    """Inspect sources, sample object sizes and cut preview crops off-thread."""
+
+    result_ready = Signal(object)
+
+    def __init__(self, request: _SizeAnalysisRequest) -> None:
+        super().__init__()
+        self._request = request
+
+    def execute(self) -> None:
+        from hydra_suite.training.dataset_inspector import (
+            DatasetInspection,
+            analyze_obb_sizes,
+            inspect_obb_or_detect_dataset,
+        )
+
+        request = self._request
+        skipped: list[str] = []
+        merged = DatasetInspection(root_dir="(merged)")
+        for path in request.source_paths:
+            if self.is_cancelled():
+                return
+            try:
+                insp = inspect_obb_or_detect_dataset(path)
+            except Exception as exc:
+                skipped.append(f"Skip {path}: {exc}")
+                continue
+            for split, items in insp.splits.items():
+                merged.splits.setdefault(split, []).extend(items)
+
+        if not any(merged.splits.values()):
+            self.result_ready.emit(_SizeAnalysisResult(request, None, [], skipped))
+            return
+
+        stats = analyze_obb_sizes(
+            merged,
+            pad_ratio=request.pad,
+            min_crop_size_px=request.min_px,
+            enforce_square=request.square,
+            should_cancel=self.is_cancelled,
+        )
+        report = _format_size_analysis_report(
+            stats, request.crop_imgsz, request.direct_imgsz
+        )
+        previews = _extract_crop_previews(
+            merged,
+            request.pad,
+            request.min_px,
+            request.square,
+            request.crop_imgsz,
+            should_cancel=self.is_cancelled,
+        )
+        if not self.is_cancelled():
+            self.result_ready.emit(
+                _SizeAnalysisResult(request, report, previews, skipped)
+            )
+
+
 class TrainYoloDialog(BaseDialog):
     """MAT role-aware training center replacing legacy OBB-only trainer."""
 
@@ -143,6 +359,7 @@ class TrainYoloDialog(BaseDialog):
         self.class_name = str(class_name or "object")
         self.conda_envs = conda_envs or []
         self.worker = None
+        self._analysis_worker: _SizeAnalysisWorker | None = None
         self._last_training_results: list[dict] = []
 
         from hydra_suite.paths import get_training_workspace_dir
@@ -926,193 +1143,73 @@ class TrainYoloDialog(BaseDialog):
                 self, "No Sources", "Add at least one OBB source dataset."
             )
             return
+        if self._analysis_worker is not None:
+            return
 
-        from hydra_suite.training.dataset_inspector import (
-            analyze_obb_sizes,
-            format_size_analysis,
-            inspect_obb_or_detect_dataset,
+        request = _SizeAnalysisRequest(
+            source_paths=tuple(src.path for src in obb_sources),
+            pad=self.spin_crop_pad.value(),
+            min_px=self.spin_crop_min_px.value(),
+            square=self.chk_crop_square.isChecked(),
+            crop_imgsz=self.spin_imgsz_seq_crop_obb.value(),
+            direct_imgsz=self.spin_imgsz_obb_direct.value(),
         )
+        worker = _SizeAnalysisWorker(request)
+        worker.result_ready.connect(self._on_size_analysis_ready)
+        worker.error.connect(self._on_size_analysis_error)
+        worker.finished.connect(self._on_size_analysis_finished)
+        self._analysis_worker = worker
+        self.btn_analyze.setEnabled(False)
+        self.validation_view.setPlainText(
+            f"Analyzing {len(obb_sources)} source(s) in the background…"
+        )
+        worker.start()
 
-        pad = self.spin_crop_pad.value()
-        min_px = self.spin_crop_min_px.value()
-        square = self.chk_crop_square.isChecked()
-        crop_imgsz = self.spin_imgsz_seq_crop_obb.value()
-        direct_imgsz = self.spin_imgsz_obb_direct.value()
-
-        # Merge inspections from all sources.
-        from hydra_suite.training.dataset_inspector import DatasetInspection
-
-        merged = DatasetInspection(root_dir="(merged)")
-        for src in obb_sources:
-            try:
-                insp = inspect_obb_or_detect_dataset(src.path)
-            except Exception as exc:
-                self._append_log(f"Skip {src.path}: {exc}")
-                continue
-            for split, items in insp.splits.items():
-                merged.splits.setdefault(split, []).extend(items)
-
-        if not any(merged.splits.values()):
+    def _on_size_analysis_ready(self, result: _SizeAnalysisResult) -> None:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
+            return
+        for message in result.skipped:
+            self._append_log(message)
+        if result.report is None:
+            self.validation_view.clear()
             QMessageBox.warning(self, "No Data", "No valid images found in sources.")
             return
+        self.validation_view.setPlainText(result.report)
+        self._show_crop_previews(result.previews, result.request.crop_imgsz)
 
-        try:
-            stats = analyze_obb_sizes(
-                merged,
-                pad_ratio=pad,
-                min_crop_size_px=min_px,
-                enforce_square=square,
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Analysis Failed", str(exc))
+    def _on_size_analysis_error(self, message: str) -> None:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
             return
+        self.validation_view.clear()
+        QMessageBox.critical(self, "Analysis Failed", message)
 
-        # Format reports for both crop OBB and direct roles.
-        crop_report, crop_warnings = format_size_analysis(
-            stats,
-            training_imgsz=crop_imgsz,
-            pipeline_mode="crop",
-        )
-        _, direct_warnings = format_size_analysis(
-            stats,
-            training_imgsz=direct_imgsz,
-            pipeline_mode="full_image",
-        )
+    def _on_size_analysis_finished(self) -> None:
+        if self._analysis_worker is None or self.sender() is not self._analysis_worker:
+            return
+        self._analysis_worker = None
+        self.btn_analyze.setEnabled(True)
 
-        sections = []
-        sections.append("=" * 50)
-        sections.append("DATASET SIZE ANALYSIS")
-        sections.append("=" * 50)
-        sections.append("")
-        sections.append(crop_report)
+    def done(self, result: int) -> None:
+        worker = self._analysis_worker
+        if worker is not None:
+            self._analysis_worker = None
+            worker.cancel()
+        super().done(result)
 
-        if crop_warnings:
-            sections.append("")
-            sections.append("-" * 40)
-            sections.append(f"seq_crop_obb (imgsz={crop_imgsz}):")
-            for w in crop_warnings:
-                sections.append(f"  {w}")
-
-        if direct_warnings:
-            sections.append("")
-            sections.append("-" * 40)
-            sections.append(f"obb_direct (imgsz={direct_imgsz}):")
-            for w in direct_warnings:
-                sections.append(f"  {w}")
-
-        if not crop_warnings and not direct_warnings:
-            sections.append("")
-            sections.append("No compatibility issues detected.")
-
-        self.validation_view.setPlainText("\n".join(sections))
-
-        # Generate crop preview samples.
-        self._show_crop_previews(merged, pad, min_px, square, crop_imgsz)
-
-    def _show_crop_previews(self, inspection, pad, min_px, square, imgsz, n_samples=6):
-        """Render sample crops in the preview grid."""
-        import random
-
-        import cv2
-        import numpy as np
-
+    def _show_crop_previews(self, previews, imgsz):
+        """Render sample crops (RGB arrays) in the preview grid."""
         # Clear previous previews.
         while self.preview_grid.count():
             item = self.preview_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        all_items = []
-        for split_items in inspection.splits.values():
-            all_items.extend(split_items)
-        if not all_items:
-            self.preview_container.setVisible(False)
-            return
-
-        rng = random.Random(42)
-        rng.shuffle(all_items)
-
-        previews = []
-        for item in all_items:
-            if len(previews) >= n_samples:
-                break
-            lbl_path = Path(item.label_path)
-            img_path = Path(item.image_path)
-            if not lbl_path.exists() or not img_path.exists():
-                continue
-            img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-            if img is None or img.size == 0:
-                continue
-            h, w = img.shape[:2]
-
-            try:
-                lines = lbl_path.read_text(encoding="utf-8").splitlines()
-            except Exception:
-                continue
-
-            for ln in lines:
-                if len(previews) >= n_samples:
-                    break
-                ln = ln.strip()
-                if not ln:
-                    continue
-                parts = ln.split()
-                if len(parts) != 9:
-                    continue
-                try:
-                    coords = np.asarray(
-                        [float(v) for v in parts[1:]], dtype=np.float32
-                    ).reshape(4, 2)
-                except Exception:
-                    continue
-
-                px = coords[:, 0] * float(w)
-                py = coords[:, 1] * float(h)
-                x1, x2 = float(np.min(px)), float(np.max(px))
-                y1, y2 = float(np.min(py)), float(np.max(py))
-                bw = max(1.0, x2 - x1)
-                bh = max(1.0, y2 - y1)
-                cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
-
-                crop_w = max(float(min_px), bw * (1.0 + 2.0 * max(0.0, pad)))
-                crop_h = max(float(min_px), bh * (1.0 + 2.0 * max(0.0, pad)))
-                if square:
-                    side = max(crop_w, crop_h)
-                    crop_w = side
-                    crop_h = side
-
-                xi1 = max(0, int(cx - crop_w * 0.5))
-                yi1 = max(0, int(cy - crop_h * 0.5))
-                xi2 = min(w, int(cx + crop_w * 0.5))
-                yi2 = min(h, int(cy + crop_h * 0.5))
-                if xi2 <= xi1 or yi2 <= yi1:
-                    continue
-
-                crop = img[yi1:yi2, xi1:xi2].copy()
-
-                # Draw the OBB polygon on the crop.
-                poly_crop = np.zeros((4, 2), dtype=np.int32)
-                poly_crop[:, 0] = (px - xi1).astype(np.int32)
-                poly_crop[:, 1] = (py - yi1).astype(np.int32)
-                cv2.polylines(crop, [poly_crop], True, (0, 255, 0), 1)
-
-                original_size = max(crop.shape[:2])
-
-                # Resize to training imgsz.
-                if imgsz > 0:
-                    crop = cv2.resize(
-                        crop, (imgsz, imgsz), interpolation=cv2.INTER_LINEAR
-                    )
-
-                previews.append((crop, original_size))
-
         if not previews:
             self.preview_container.setVisible(False)
             return
 
         display_size = 140
-        for crop_img, orig_sz in previews:
-            rgb = cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB)
+        for rgb, orig_sz in previews:
             h_c, w_c = rgb.shape[:2]
             qimg = QImage(rgb.data, w_c, h_c, w_c * 3, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qimg).scaled(

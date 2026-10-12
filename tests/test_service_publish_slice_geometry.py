@@ -6,6 +6,7 @@ other roles or malformed/missing manifests.
 """
 
 import json
+import os
 
 import pytest
 
@@ -183,3 +184,66 @@ def test_realised_stamp_survives_the_slice_meta_sidecar_round_trip(tmp_path):
         training_geometry(merged)["multiscale_loss_balance"]
         == geometry["multiscale_loss_balance"]
     )
+
+
+def test_direct_model_combo_skips_unregistered_non_detector_weights(
+    tmp_path, monkeypatch
+):
+    from PySide6.QtWidgets import QApplication, QComboBox
+
+    from hydra_suite.trackerkit.gui.orchestrators import config as config_mod
+    from hydra_suite.trackerkit.gui.panels.detection_panel import (
+        DIRECT_UNREGISTERED_MODEL_DIRS,
+    )
+
+    for rel in (
+        "root.pt",
+        "obb/direct.pt",
+        "YOLO-segment/seg.pt",
+        "obb/cropped/crop.pt",
+        "sam3/sam3.pt",
+        "sam2/sam2.1-hiera-tiny.pt",
+        "pose/YOLO/pose.pt",
+        "custom/registered.pt",
+    ):
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+
+    registry = {
+        "custom/registered.pt": {"task_family": "obb", "usage_role": "obb_direct"}
+    }
+    monkeypatch.setattr(
+        config_mod,
+        "make_model_path_relative",
+        lambda p: os.path.relpath(p, tmp_path),
+    )
+    monkeypatch.setattr(
+        config_mod, "get_yolo_model_metadata", lambda rel: dict(registry.get(rel, {}))
+    )
+
+    orch = ConfigOrchestrator.__new__(ConfigOrchestrator)
+    orch._format_yolo_model_label = lambda rel: rel
+    orch._set_model_selection_for_selector = lambda *a, **k: None
+
+    QApplication.instance() or QApplication([])
+    combo = QComboBox()
+    orch._populate_yolo_model_combo(
+        combo,
+        task_family={"obb", "detect", "segment"},
+        usage_role={"obb_direct", "detect_direct", "segment_direct"},
+        repository_dir=str(tmp_path),
+        recursive=True,
+        unregistered_dirs=DIRECT_UNREGISTERED_MODEL_DIRS,
+    )
+    listed = {
+        combo.itemData(i)
+        for i in range(combo.count())
+        if combo.itemData(i) != "__add_new__"
+    }
+    assert listed == {
+        "root.pt",
+        "obb/direct.pt",
+        "YOLO-segment/seg.pt",
+        "custom/registered.pt",
+    }

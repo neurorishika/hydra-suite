@@ -329,3 +329,49 @@ def test_evaluation_dialog_quick_test_passes_role_specific_settings(
     assert captured["min_crop_size_px"] == 96
     assert captured["enforce_square"] is False
     assert captured["opened"] is True
+
+
+def test_evaluation_dataset_analysis_runs_off_the_gui_thread(
+    qapp, tmp_path, monkeypatch
+):
+    import threading
+    import time
+
+    from PySide6.QtCore import QThread
+
+    import hydra_suite.detectkit.gui.evaluation as evaluation
+    from hydra_suite.detectkit.gui.dialogs.evaluation_dialog import EvaluationDialog
+
+    release = threading.Event()
+    seen: dict[str, object] = {}
+
+    def blocking_report(project, *, should_cancel=None):
+        seen["thread"] = QThread.currentThread()
+        seen["should_cancel"] = should_cancel
+        assert release.wait(10.0)
+        return "REPORT", []
+
+    monkeypatch.setattr(evaluation, "build_dataset_analysis_report", blocking_report)
+
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    proj = _make_proj(tmp_path)
+    proj.sources = [OBBSource(path=str(tmp_path / "ds1"), name="ds1")]
+    dlg = EvaluationDialog(proj)
+    dlg._run_dataset_analysis()
+    try:
+        assert "Analyzing" in dlg._analysis_view.toPlainText()
+        assert not dlg.btn_analyze.isEnabled()
+        release.set()
+        deadline = time.monotonic() + 10
+        while dlg._analysis_worker is not None:
+            assert time.monotonic() < deadline
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert seen["thread"] is not qapp.thread()
+        assert callable(seen["should_cancel"])
+        assert dlg._analysis_view.toPlainText() == "REPORT"
+        assert dlg.btn_analyze.isEnabled()
+    finally:
+        release.set()
+        dlg.reject()

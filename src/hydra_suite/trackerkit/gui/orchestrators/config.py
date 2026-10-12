@@ -3564,6 +3564,23 @@ class ConfigOrchestrator:
         return filename
 
     @staticmethod
+    def _is_registered_yolo_model(metadata):
+        if not isinstance(metadata, dict):
+            return False
+        return bool(
+            str(metadata.get("task_family", "")).strip()
+            or _normalize_usage_role(metadata.get("usage_role", ""))
+        )
+
+    @staticmethod
+    def _is_in_model_dirs(model_abs, models_dir, model_dirs):
+        """True when ``model_abs`` sits directly in one of ``model_dirs``."""
+        parent = os.path.normcase(
+            os.path.normpath(os.path.relpath(os.path.dirname(model_abs), models_dir))
+        )
+        return any(parent == os.path.normcase(os.path.normpath(d)) for d in model_dirs)
+
+    @staticmethod
     def _yolo_model_matches_filter(metadata, task_family=None, usage_role=None):
         if not isinstance(metadata, dict):
             return True
@@ -3605,8 +3622,15 @@ class ConfigOrchestrator:
         usage_role=None,
         repository_dir=None,
         recursive=False,
+        unregistered_dirs=None,
     ):
-        """Populate a YOLO-model combo with optional metadata role filtering."""
+        """Populate a YOLO-model combo with optional metadata role filtering.
+
+        ``unregistered_dirs`` (paths relative to the scanned directory) limits
+        where a checkpoint with no registry role may come from. A recursive
+        scan of the models root otherwise lists SAM, pose and classifier
+        weights, which carry no role and so pass the role filter.
+        """
         selected_path = preferred_model_path
         if selected_path is None:
             selected_data = combo.currentData(Qt.UserRole)
@@ -3647,6 +3671,11 @@ class ConfigOrchestrator:
                 metadata, task_family=task_family, usage_role=usage_role
             ):
                 continue
+            if unregistered_dirs is not None and not self._is_registered_yolo_model(
+                metadata
+            ):
+                if not self._is_in_model_dirs(model_abs, models_dir, unregistered_dirs):
+                    continue
             entries[rel_path] = self._format_yolo_model_label(rel_path)
 
         combo.blockSignals(True)
