@@ -2863,8 +2863,8 @@
 <tbody>
 <tr>
 <td>Skeleton editor</td>
-<td>Update keypoint topology.</td>
-<td>Prefer infrequent, versioned schema changes.</td>
+<td>Update keypoint topology and the left/right keypoint pairs that training swaps when it flips an image (<em>Suggest from names</em> pairs <code>left_*</code>/<code>right_*</code>).</td>
+<td>Prefer infrequent, versioned schema changes; set pairs before training with flips.</td>
 </tr>
 <tr>
 <td>Project settings</td>
@@ -2880,7 +2880,9 @@
 </table>
 <h2 id="smart-select-dialog">Smart Select Dialog<a class="headerlink" href="#smart-select-dialog" title="Permanent link">&para;</a></h2>
 <h3 id="purpose_6">Purpose<a class="headerlink" href="#purpose_6" title="Permanent link">&para;</a></h3>
-<p>Select diverse, high-value unlabeled frames with embedding and clustering support.</p>
+<p>Build an ordered batch of frames to label next, with ClassKit's methodology:
+K-means clusters over every frame plus a mix of model-error, uncertainty,
+rare-cluster, coverage and representative picks (see the PoseKit user guide).</p>
 <table>
 <thead>
 <tr>
@@ -2891,19 +2893,29 @@
 </thead>
 <tbody>
 <tr>
-<td>Scope/filtering</td>
-<td>Scope, exclusion toggles</td>
-<td>Keep scope explicit to avoid hidden frame subsets.</td>
+<td>Batch</td>
+<td>Pick from (scope), skip labeling-set frames, frames, clusters (Auto ≈ √N), clustering method</td>
+<td>Keep scope explicit; Auto clusters suits most datasets. HDBSCAN treats the count as a minimum cluster size and is slow above ~10,000 frames.</td>
 </tr>
 <tr>
-<td>Embedding config</td>
-<td>Model, device, batch, max side, enhancement</td>
-<td>Tune for stable embeddings first, speed second.</td>
+<td>Mix</td>
+<td>Near model errors, Model unsure, Rare clusters, Fill gaps, Typical (%), Rarity α, Error above, Skip near-duplicates</td>
+<td>The remainder of the mix becomes random checks. Model slots need cached predictions (Predict Dataset…).</td>
 </tr>
 <tr>
-<td>Selection config</td>
-<td>N frames, clusters, min/cluster, strategy, threshold</td>
-<td>Use cluster coverage to avoid redundancy.</td>
+<td>Embeddings</td>
+<td>Model, device, batch size, max side, enhancement</td>
+<td>Device and batch size do not affect the cache; model, max side and enhancement do.</td>
+</tr>
+<tr>
+<td>Candidates</td>
+<td>Ordered table (frame, cluster, why, detail), preview, Remove, Embedding Explorer, Save clusters CSV</td>
+<td>Remove rows with Delete; the Explorer highlights the batch on a UMAP map.</td>
+</tr>
+<tr>
+<td>Finish</td>
+<td>Add to Labeling Set, Start Labeling</td>
+<td>Start Labeling sorts the list by batch and opens the first unlabeled frame.</td>
 </tr>
 </tbody>
 </table>
@@ -2954,13 +2966,23 @@
 <tbody>
 <tr>
 <td>Backend/model</td>
-<td>Backend (YOLO/SLEAP/ViTPose), base weights/model dir</td>
-<td>Keep backend/model family aligned. For ViTPose: pick the auto-download COCO-B catalog entry, or Browse to a local/animal checkpoint.</td>
+<td>Backend (ViTPose by default, YOLO, SLEAP), base weights/model dir</td>
+<td>Keep backend/model family aligned. ViTPose starts from the auto-download AP-10K animal checkpoint (<code>vitpose-b-ap10k</code>); COCO-B (human) or Browse to a local checkpoint are alternatives.</td>
 </tr>
 <tr>
 <td>Training hyperparameters</td>
-<td>Batch size, auto-batch, epochs, patience, image size, device</td>
-<td>Increase complexity only after baseline convergence is stable.</td>
+<td>Batch size, auto-batch, epochs, patience, image size (<em>Auto from crop size</em>), device</td>
+<td>Epochs, batch and device apply to ViTPose too; the other rows are YOLO-only. Leave the sizes on <em>Auto</em> unless you have a reason.</td>
+</tr>
+<tr>
+<td>Augmentations (YOLO)</td>
+<td>HSV, rotation, translate/scale, scale/aspect jitter, flip left-right / up-down, mosaic</td>
+<td>Flips swap the left/right pairs from the Skeleton Editor; mosaic is off by default for centred single-animal crops.</td>
+</tr>
+<tr>
+<td>ViTPose config</td>
+<td>Variant, init checkpoint, input size (<em>Auto from crop size</em> + Detail), scale/aspect jitter, flip probabilities</td>
+<td>The input follows the crops' aspect ratio at about one input pixel per crop pixel.</td>
 </tr>
 <tr>
 <td>Data controls</td>
@@ -3027,7 +3049,7 @@
 </tr>
 <tr>
 <td>Backend/inference config</td>
-<td>Device, image size, confidence, batch, cache</td>
+<td>Device, image size (default: the model's training size), confidence, batch, cache</td>
 <td>Keep inference settings aligned with evaluation settings.</td>
 </tr>
 <tr>
@@ -3046,7 +3068,7 @@
 <ol>
 <li>Setup project schema and paths.</li>
 <li>Label pilot subset and validate consistency.</li>
-<li>Run smart selection to expand diverse coverage.</li>
+<li>Run Smart Select and Start Labeling to work through the batch in order.</li>
 <li>Train baseline and evaluate worst frames.</li>
 <li>Iterate with active learning and periodic schema-safe exports.</li>
 </ol>

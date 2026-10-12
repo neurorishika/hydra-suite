@@ -2279,29 +2279,28 @@ HYDRA talks to it through a service subprocess (<code>conda run -n sleap ...</co
 </span></code></pre></div>
 <p>This creates <code>sleap</code> (Python 3.13) and installs:</p>
 <ul>
-<li><code>sleap[nn,nn-export-gpu]==1.6.2</code> on CUDA hosts, <code>sleap[nn,nn-export]==1.6.2</code>
-  elsewhere;</li>
+<li><code>sleap[nn,nn-export-gpu]==1.6.5</code> on CUDA hosts, <code>sleap[nn,nn-export]==1.6.5</code>
+  elsewhere, with <code>sleap-nn==0.3.3</code>;</li>
 <li>then <strong>force-reinstalls the sidecar's torch/torchvision to the same build the
   main env uses</strong> (<code>cu128</code> on drivers older than 580, <code>cu130</code> on 580+, CPU or
   macOS wheels otherwise). Left alone, the <code>sleap</code> env would pick up whatever
   torch PyPI serves, which on a pre-580 driver is a CUDA 13 build that cannot
-  see the GPU.</li>
+  see the GPU. A last step installs the CUDA libraries that pinned build needs.</li>
 </ul>
 <p>If the <code>sleap</code> env already exists it is reused and its packages are
 refreshed. For a clean rebuild, run <code>conda env remove -n sleap</code> first.</p>
-<p><strong>Why <code>sleap==1.6.2</code> is pinned.</strong> An unpinned <code>pip install "sleap[nn,...]"</code>
-currently resolves <code>sleap-nn</code> to 0.3.x, which breaks the pipeline's
-shared-memory transport to the SLEAP service (it fails with an <code>AttributeError</code>
-from <code>sleap_nn.data.utils.imread_</code>). <code>sleap==1.6.2</code> pulls in the working
-<code>sleap-nn</code> 0.1.3. This was verified on a fresh Ubuntu/RTX 4090 box on
-2026-09-07. HYDRA's SLEAP preflight also checks the env and refuses any
-<code>sleap-nn</code> that is not 0.1.x with an "unsupported sleap-nn" error, instead of
-failing mid-run. Do not remove the pin without re-verifying against a fresh
-sleap-nn release.</p>
+<p><strong>Why <code>sleap==1.6.5</code> and <code>sleap-nn==0.3.3</code> are pinned.</strong> These are the
+versions verified against the pose pipeline: on an Ubuntu/RTX 4090 box on
+2026-10-12, native, ONNX and TensorRT pose output was byte-identical to the
+previous pin (<code>sleap==1.6.2</code>, <code>sleap-nn</code> 0.1.3). Envs built from that older pin
+keep working. HYDRA's SLEAP preflight checks the env and refuses any <code>sleap-nn</code>
+other than 0.3.x or 0.1.x with an "unsupported sleap-nn" error, instead of
+failing mid-run. Re-verify before moving to a newer sleap-nn: 0.4 may remove
+the <code>sleap_nn.inference.predictors</code> module the pose service uses.</p>
 <p><strong>TensorRT export (optional, manual).</strong> The installer does not install
 SLEAP's <code>nn-tensorrt</code> extra. If you want SLEAP TensorRT export, add it to the
 env by hand, keeping the pin:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.2"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"sleap[nn,nn-export-gpu,nn-tensorrt]==1.6.5"</span><span class="w"> </span>sleap-nn<span class="o">==</span><span class="m">0</span>.3.3
 </span></code></pre></div>
 <p>A <code>torch-tensorrt</code> version warning after the torch re-pin is expected. It
 does not affect the SLEAP <em>service</em> backend, only TensorRT export.</p>
@@ -2319,7 +2318,7 @@ does not affect the SLEAP <em>service</em> backend, only TensorRT export.</p>
 <h3 id="verify-sleap-integration">Verify SLEAP Integration<a class="headerlink" href="#verify-sleap-integration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import importlib.util as u; print('sleap_nn', bool(u.find_spec('sleap_nn'))); print('onnx', bool(u.find_spec('onnx'))); print('onnxruntime', bool(u.find_spec('onnxruntime')))"</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import torch, torchvision; print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); print('torchvision', torchvision.__version__)"</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import importlib.metadata as m; print('sleap-nn', m.version('sleap-nn'))"</span><span class="w">   </span><span class="c1"># must be 0.1.x</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import importlib.metadata as m; print('sleap-nn', m.version('sleap-nn'))"</span><span class="w">   </span><span class="c1"># must be 0.3.x (or 0.1.x)</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>sleap-nn<span class="w"> </span><span class="nb">export</span><span class="w"> </span>--help
 </span></code></pre></div>
 <h3 id="troubleshooting-installruntime-issues">Troubleshooting Install/Runtime Issues<a class="headerlink" href="#troubleshooting-installruntime-issues" title="Permanent link">&para;</a></h3>
@@ -2367,10 +2366,10 @@ Driver <strong>580 or newer</strong> uses the <code>cu130</code> wheels. <strong
 </span></code></pre></div>
 <p>In that case, remove conflicting CUDA/NCCL paths from <code>LD_LIBRARY_PATH</code> for SLEAP runs.</p>
 <h4 id="3-unsupported-sleap-nn">3) "unsupported sleap-nn"<a class="headerlink" href="#3-unsupported-sleap-nn" title="Permanent link">&para;</a></h4>
-<p>The env has a <code>sleap-nn</code> other than 0.1.x, usually from an unpinned
+<p>The env has a <code>sleap-nn</code> other than 0.3.x or 0.1.x, usually from an unpinned
 <code>pip install sleap</code>. Reinstall with the pin
 (<code>python install.py --with-sleap</code> after removing the env, or
-<code>conda run -n sleap python -m pip install "sleap[nn,nn-export]==1.6.2"</code>).</p>
+<code>conda run -n sleap python -m pip install "sleap[nn,nn-export]==1.6.5" sleap-nn==0.3.3</code>).</p>
 <p>For ONNX export smoke test:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>conda<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span>sleap<span class="w"> </span>sleap-nn<span class="w"> </span><span class="nb">export</span><span class="w"> </span><span class="s2">"/path/to/sleap_model_dir"</span><span class="w"> </span>--output<span class="w"> </span><span class="s2">"/tmp/sleap_export_test_onnx"</span><span class="w"> </span>--format<span class="w"> </span>onnx<span class="w"> </span>--device<span class="w"> </span>cpu<span class="w"> </span>--input-height<span class="w"> </span><span class="m">224</span><span class="w"> </span>--input-width<span class="w"> </span><span class="m">224</span>
 </span></code></pre></div>

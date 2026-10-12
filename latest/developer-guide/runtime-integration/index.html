@@ -2903,8 +2903,95 @@ Fields:</p>
 <td><code>None</code></td>
 <td>Optional checkpoint to resume training from.</td>
 </tr>
+<tr>
+<td><code>input_size</code></td>
+<td><code>[H, W] \| None</code></td>
+<td><code>None</code></td>
+<td>Model input; <code>None</code> = 256x192.</td>
+</tr>
+<tr>
+<td><code>scale_jitter</code> / <code>aspect_jitter</code></td>
+<td><code>float</code></td>
+<td><code>None</code> / <code>0.0</code></td>
+<td>Centred window jitter (<code>None</code> keeps the legacy random zoom).</td>
+</tr>
+<tr>
+<td><code>flip_pairs</code> / <code>fliplr</code> / <code>flipud</code></td>
+<td></td>
+<td><code>None</code> / <code>0</code> / <code>0</code></td>
+<td>Mirror augmentation and the left/right pairs it swaps.</td>
+</tr>
+<tr>
+<td><code>rotation</code> / <code>rotation_prob</code></td>
+<td><code>float</code></td>
+<td><code>40</code> / <code>0.6</code></td>
+<td>Degrees, N(0, r/2) clipped to ±r.</td>
+</tr>
+<tr>
+<td><code>brightness</code> / <code>contrast</code> / <code>saturation</code> / <code>hue</code></td>
+<td><code>float</code></td>
+<td><code>0.3</code> / <code>0.3</code> / <code>0</code> / <code>0</code></td>
+<td>Photometric jitter.</td>
+</tr>
+<tr>
+<td><code>blur_prob</code> / <code>noise_prob</code> / <code>occlusion_prob</code></td>
+<td><code>float</code></td>
+<td><code>0</code></td>
+<td>Blur, Gaussian noise, one random occluding rectangle.</td>
+</tr>
+<tr>
+<td><code>warmup_epochs</code></td>
+<td><code>float</code></td>
+<td><code>0</code></td>
+<td>Linear warmup, then cosine decay, per optimizer step.</td>
+</tr>
+<tr>
+<td><code>layer_decay</code></td>
+<td><code>float \| None</code></td>
+<td><code>None</code></td>
+<td><code>None</code> = the variant's value. <code>drop_path: None</code> likewise.</td>
+</tr>
+<tr>
+<td><code>amp</code> / <code>ema</code> / <code>ema_decay</code></td>
+<td></td>
+<td><code>false</code> / <code>false</code> / <code>0.9998</code></td>
+<td>bf16 autocast (CUDA); weight EMA (validated and saved).</td>
+</tr>
+<tr>
+<td><code>num_workers</code></td>
+<td><code>int</code></td>
+<td><code>0</code></td>
+<td>Spawned data-loader workers.</td>
+</tr>
+<tr>
+<td><code>patience</code></td>
+<td><code>int</code></td>
+<td><code>0</code></td>
+<td>Early stopping (0 = off).</td>
+</tr>
+<tr>
+<td><code>split_by</code></td>
+<td><code>str</code></td>
+<td><code>"image"</code></td>
+<td><code>image</code>, <code>frame</code> or <code>video</code> (crop names <code>&lt;video&gt;__&lt;frame&gt;__&lt;n&gt;</code>).</td>
+</tr>
+<tr>
+<td><code>ignore_occluded</code> / <code>flip_test</code></td>
+<td><code>bool</code></td>
+<td><code>false</code></td>
+<td>No loss on v=1 keypoints; flip-averaged validation.</td>
+</tr>
 </tbody>
 </table>
+<p>Defaults keep older <code>run.json</code> files on the original recipe; the Training Runner
+writes the recommended values. Each epoch prints an <code>EPOCH ...</code> line (loss, PCK)
+and a <code>METRICS epoch=&lt;n&gt; nme=&lt;x&gt; lr=&lt;y&gt;</code> line; <code>metrics.csv</code> has the same columns.
+<code>model_state</code> holds the inference weights (the averaged ones with EMA on).
+<code>best.pt</code> carries only those plus metadata (<code>variant</code>, <code>input_size</code>,
+<code>num_keypoints</code>, <code>epoch</code>, <code>pck</code>, <code>nme</code>); <code>last.pt</code> adds the resume state
+(<code>train_state</code>, <code>optim_state</code>, <code>ema_state</code>, <code>sched_state</code>, <code>stale</code>). A copy of a
+ViTPose <code>best.pt</code> outside the training-runs folder is recognised as ViTPose by
+the <code>run.json</code> beside it.</p>
 <p>The CLI prints <code>DONE best_pck=&lt;value&gt; best_epoch=&lt;n&gt;</code> on completion and exits non-zero
 on validation/training failure.</p>
 <h2 id="sam2-escalation">SAM2 Escalation<a class="headerlink" href="#sam2-escalation" title="Permanent link">&para;</a></h2>

@@ -2219,7 +2219,7 @@ constraints to re-check when you do.</p>
 </tr>
 <tr>
 <td>Sidecar pins</td>
-<td><code>SLEAP_PIN</code> (<code>1.6.2</code>) and the <code>sam3_train_steps</code> pin list in <code>install.py</code></td>
+<td><code>SLEAP_PIN</code> (<code>1.6.5</code>) and <code>SLEAP_NN_PIN</code> (<code>0.3.3</code>) and the <code>sam3_train_steps</code> pin list in <code>install.py</code></td>
 <td>SLEAP and SAM3-training sidecar envs.</td>
 </tr>
 </tbody>
@@ -2309,9 +2309,16 @@ now has stable wheels, so it is pinned normally in <code>constraints/cuda13.txt<
 (run by <code>hydra doctor --tier cuda</code>) detect a mixed env and tell the user to
 run <code>python install.py --recreate</code>.</p>
 <h3 id="sleap-sidecar">SLEAP sidecar<a class="headerlink" href="#sleap-sidecar" title="Permanent link">&para;</a></h3>
-<p><code>sleap==1.6.2</code> pins <code>sleap-nn</code> 0.1.x. Newer <code>sleap-nn</code> breaks the
-shared-memory transport, and the runtime preflight refuses anything but 0.1.x.
-Re-verify on a fresh env before relaxing <code>SLEAP_PIN</code>.</p>
+<p><code>install.py</code> pins <code>sleap==1.6.5</code> and <code>sleap-nn==0.3.3</code>. The runtime preflight
+and <code>hydra doctor</code> accept <code>sleap-nn</code> 0.3.x or 0.1.x (the previous pin), from
+<code>SUPPORTED_SLEAP_NN_PREFIXES</code> in <code>runtime/sidecar_versions.py</code>, which also
+holds a copy of <code>SLEAP_PIN</code>; a test keeps the two in step. To move the pin,
+build a fresh env with <code>install.py --with-sleap</code>, then compare the pose clips
+(<code>ant_pose_headtail</code>, <code>ant_obb_sleap</code>) against the old env with <code>pose_sleap_env</code>
+pointed at each, plus <code>tools/equivalence/verify_sleap_exported_vs_service.py</code>
+for ONNX and TensorRT. sleap-nn 0.3 needs <code>preprocess_config</code> as an OmegaConf
+object, and failures in the service's fast path are logged, then fall back to
+the slow <code>sleap-nn track</code> CLI path.</p>
 <h3 id="sam3-training-sidecar">SAM3 training sidecar<a class="headerlink" href="#sam3-training-sidecar" title="Permanent link">&para;</a></h3>
 <p>Meta's <code>sam3</code> pins <code>numpy&lt;2</code>, and the sidecar pin list (<code>setuptools&lt;81</code>,
 <code>scipy&lt;1.14</code>, <code>opencv-python-headless&lt;4.12</code>, …) exists to hold that pin. Keep

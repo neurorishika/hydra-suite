@@ -988,6 +988,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#reviewing-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reviewing Labels
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#training-augmentation-defaults" class="md-nav__link">
     <span class="md-ellipsis">
       Training Augmentation Defaults
@@ -1010,6 +1019,15 @@
   <a href="#combination-balancing-multi-factor-schemes" class="md-nav__link">
     <span class="md-ellipsis">
       Combination balancing (multi-factor schemes)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grid-balance-captcha-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      Grid Balance (CAPTCHA-style)
     </span>
   </a>
   
@@ -2088,6 +2106,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#reviewing-labels" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reviewing Labels
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#training-augmentation-defaults" class="md-nav__link">
     <span class="md-ellipsis">
       Training Augmentation Defaults
@@ -2110,6 +2137,15 @@
   <a href="#combination-balancing-multi-factor-schemes" class="md-nav__link">
     <span class="md-ellipsis">
       Combination balancing (multi-factor schemes)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grid-balance-captcha-style" class="md-nav__link">
+    <span class="md-ellipsis">
+      Grid Balance (CAPTCHA-style)
     </span>
   </a>
   
@@ -2175,6 +2211,16 @@
 <li><strong>Reject</strong> asks for the correct label, stores that, and moves on.</li>
 <li>Images that already have a verified label, and <code>unknown</code> predictions, have nothing to approve.</li>
 </ul>
+<h2 id="reviewing-labels">Reviewing Labels<a class="headerlink" href="#reviewing-labels" title="Permanent link">&para;</a></h2>
+<p><strong>Review Labels…</strong> (under the label buttons in labeling mode) opens a grid of every image that carries a label, one label at a time, to find and remove mislabels.</p>
+<ul>
+<li>Pick a label in the list on the left (or step with ↑ / ↓). Each entry shows its image count and, with a model loaded, how many of its images the model disagrees with (⚠).</li>
+<li>With predictions loaded, images are sorted by the model's probability for the assigned label, <strong>lowest first</strong>, so likely mislabels are on the first pages. Each tile shows that probability, plus the model's own guess in orange when it disagrees. Without a model, images are in project order.</li>
+<li>Click tiles, or press their keys (<code>1</code>–<code>9</code> for 3 × 3, <code>1234 / QWER / ASDF / ZXCV</code> for 4 × 4), to select them. <strong>Select page</strong> (Ctrl+A) toggles the whole page. Then <strong>Remove label</strong> (Del, or Backspace / the Mac delete key). Selections apply to the current page only and are dropped when you change page, grid size or label, so nothing off screen is removed.</li>
+<li>Removing only clears the label: the image goes back to unlabeled, and the change is saved right away. <strong>Undo</strong> (Ctrl+Z / Cmd+Z) restores the last removal exactly, jumping to the page that shows it, including whether it was an unverified machine label.</li>
+<li><strong>All labels / Human-verified / Machine (unverified)</strong> filters by provenance; machine labels carry an <strong>M</strong> badge. <strong>Model disagrees only</strong> hides images where the model agrees.</li>
+<li>Pages: PgUp / PgDn or ← / →.</li>
+</ul>
 <h2 id="training-augmentation-defaults">Training Augmentation Defaults<a class="headerlink" href="#training-augmentation-defaults" title="Permanent link">&para;</a></h2>
 <p>The training dialog's <em>Space and Augmentations</em> tab starts with conservative
 defaults tuned for canonical animal crops:</p>
@@ -2212,11 +2258,23 @@ defaults tuned for canonical animal crops:</p>
 <td>0.20</td>
 <td>The crop window's width:height ratio varies 0.83x-1.2x at constant area. The crop centre never moves and the animal is never stretched.</td>
 </tr>
+<tr>
+<td>Rotation jitter</td>
+<td>0 (off)</td>
+<td>Rotates each crop about its centre by up to ±d degrees (maximum 30), so the model tolerates heading-estimation error in canonical crops. 10-15 is a good starting point. Corners are filled by reflection; above about 20 degrees they can show mirrored copies of neighbouring animals.</td>
+</tr>
+<tr>
+<td>Blur / compression robustness</td>
+<td>off</td>
+<td>Light image-quality robustness: every crop gets a small resampling round-trip and a sub-pixel shift/tilt; 30% also get a slight Gaussian blur (sigma 0.3-0.8) or JPEG re-compression (quality 85-100). It does not simulate strong motion blur or heavy compression.</td>
+</tr>
 </tbody>
 </table>
-<p>Scale and aspect jitter apply to train samples only. For YOLO-classify they are
-written as extra pre-fitted copies per training image
-(<code>canonical_aug_copies</code>, default 3); validation and test images stay clean.</p>
+<p>Scale, aspect and rotation jitter and blur/compression apply to train samples
+only; validation and test images stay clean. For YOLO-classify they are written
+as extra pre-fitted copies per training image (<code>canonical_aug_copies</code>, default
+3), so enabling any of them makes each epoch about 4x longer. The copies are
+shared: with scale or aspect jitter already on, the others add no time.</p>
 <h2 id="active-learning-batches">Active Learning Batches<a class="headerlink" href="#active-learning-batches" title="Permanent link">&para;</a></h2>
 <p><em>Build Batch</em> (Active Learning panel) fills a labeling batch from six slots.
 Slots draw from a shrinking pool, so no image is picked twice and the batch
@@ -2290,6 +2348,18 @@ clusters</em> shares push the recipe above 100%, every slot is scaled down evenl
 <li>Each candidate is tagged <code>likely &lt;combo&gt;</code> in the candidate table.</li>
 </ul>
 <p>Default recipe: 25% uncertainty, 20% diversity, 20% errors, 15% combinations, 10% rare clusters, 5% representative, 5% audit.</p>
+<h3 id="grid-balance-captcha-style">Grid Balance (CAPTCHA-style)<a class="headerlink" href="#grid-balance-captcha-style" title="Permanent link">&para;</a></h3>
+<p><strong>Grid Balance…</strong> in the Active Learning group is a fast way to balance labels once a model has produced predictions. Instead of choosing among every label for one image, you answer one yes/no question across a whole grid: <em>click every image that is <code>blue · pink</code></em>.</p>
+<ul>
+<li>Combinations are visited <strong>rarest first</strong>. Each one is filled up to the label count of the most common combination, or up to <strong>Cap</strong> if one is set. When a combination reaches its target, the dialog moves on by itself.</li>
+<li>The grid mixes three kinds of candidates: the most likely members of the combination (about half the tiles), borderline images from the next band down, and a few random images to catch what the model misses and keep you attentive.</li>
+<li><strong>Clicking a tile labels it</strong> with the shown combination (a verified human label, saved right away), and a new candidate takes its place. <strong>Unclicked tiles get no label.</strong> They are only skipped for this combination and are never shown for it again.</li>
+<li><strong>None match</strong> (Enter) draws a fresh grid. <strong>Next label</strong> (N) skips to the next combination. <strong>Undo</strong> (Backspace / Ctrl+Z) reverts clicks one at a time, even across combinations, and puts the image back in its tile.</li>
+<li>Keys: <code>1</code>–<code>9</code> for the 3 × 3 grid; <code>1234 / QWER / ASDF / ZXCV</code> for the 4 × 4 grid.</li>
+<li>The <strong>Examples</strong> strip shows labeled images of the current combination for reference.</li>
+<li>Only unlabeled images are shown. Images awaiting machine-label review are left for the review flow. Combinations containing <code>unknown</code> are included only when <strong>incl. unknown</strong> is checked.</li>
+<li>Predictions are not refreshed during a session; retrain afterwards and run it again if needed.</li>
+</ul>
 
 
 

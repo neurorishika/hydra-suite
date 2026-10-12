@@ -991,6 +991,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#smart-select" class="md-nav__link">
+    <span class="md-ellipsis">
+      Smart Select
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#core-hotkeys" class="md-nav__link">
     <span class="md-ellipsis">
       Core Hotkeys
@@ -1012,6 +1021,24 @@
   <a href="#recommended-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       Recommended Workflow
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#training-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Defaults
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#crops-with-several-animals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Crops With Several Animals
     </span>
   </a>
   
@@ -2139,6 +2166,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#smart-select" class="md-nav__link">
+    <span class="md-ellipsis">
+      Smart Select
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#core-hotkeys" class="md-nav__link">
     <span class="md-ellipsis">
       Core Hotkeys
@@ -2160,6 +2196,24 @@
   <a href="#recommended-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       Recommended Workflow
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#training-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      Training Defaults
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#crops-with-several-animals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Crops With Several Animals
     </span>
   </a>
   
@@ -2221,25 +2275,138 @@
 <p>ViTPose is a third selectable pose backend alongside YOLO-pose and SLEAP, available in:</p>
 <ul>
 <li><strong>Predict Keypoints</strong> (current-frame inference) and <strong>Predict Dataset</strong> (batch
-  inference over the labeled frame set) in the Model group.</li>
+  inference over the labeled frame set) in the Model group. ViTPose is the
+  default backend for prediction and training.</li>
 <li><strong>Training Runner</strong> — fine-tune a ViTPose checkpoint on the project's YOLO-pose
   dataset; supports Use-Latest resume, a loss-curve plot, and the same evaluation
   dashboard as the other backends.</li>
 </ul>
 <h3 id="weight-acquisition">Weight acquisition<a class="headerlink" href="#weight-acquisition" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Auto download:</strong> the COCO-B catalog entry (<code>vitpose-b-coco</code>) downloads
-  <code>vitpose-b.pth</code> from the <code>nielsr/vitpose-original-checkpoints</code> Hugging Face repo on
-  first use, verifies it against a pinned SHA-256, and caches it locally. This is a
-  human-COCO-17-keypoint checkpoint — a reasonable general-purpose starting point, not
-  an animal-tuned model.</li>
-<li><strong>Browse:</strong> point at any local <code>.pth</code> checkpoint — this is how you load an
-  animal-pretrained checkpoint (for example fine-tuned on AP-10K or APT-36K) or a
-  checkpoint you trained yourself with the training CLI below. Animal (AP-10K/APT-36K)
-  checkpoints are <strong>not</strong> bundled or auto-downloadable; Browse is the only path to them
-  today.</li>
+<li><strong>Auto download (default): AP-10K.</strong> The <code>vitpose-b-ap10k</code> catalog entry is
+  ViTPose-B trained on AP-10K (animal pose, 54 species). It downloads
+  <code>torch/ap10k/vitpose-b-ap10k.pth</code> from the <code>JunkyByte/easy_ViTPose</code> Hugging Face
+  mirror on first use (the upstream release hosts it on OneDrive only), verifies it
+  against a pinned SHA-256, and caches it locally.</li>
+<li><strong>Auto download: AP-10K L and H.</strong> <code>vitpose-l-ap10k</code> (1.2 GB) and
+  <code>vitpose-h-ap10k</code> (2.4 GB) come from the same mirror, also hash-pinned. Choosing a
+  catalog checkpoint sets the model size (B/L/H) to match.</li>
+<li><strong>Auto download: COCO-B.</strong> The <code>vitpose-b-coco</code> entry downloads the human
+  COCO-17 checkpoint <code>vitpose-b.pth</code> from <code>nielsr/vitpose-original-checkpoints</code>.</li>
+<li><strong>Browse:</strong> point at any local <code>.pth</code> checkpoint, for example an APT-36K
+  checkpoint or one you trained yourself with the training CLI below.</li>
 </ul>
 <h3 id="training">Training<a class="headerlink" href="#training" title="Permanent link">&para;</a></h3>
+<p>With ViTPose selected, the Training Runner shows the full recipe. <em>Recommended
+settings</em> restores these defaults (an mmpose ViTPose / RTMPose-style fine-tune):</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Setting</th>
+<th>Default</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Augmentation</td>
+<td>rotation / rotation prob</td>
+<td>40° / 0.6</td>
+<td>Random rotation, N(0, r/2) clipped to ±r</td>
+</tr>
+<tr>
+<td></td>
+<td>brightness, contrast, saturation</td>
+<td>0.3 each</td>
+<td>Colour jitter (± fraction)</td>
+</tr>
+<tr>
+<td></td>
+<td>hue</td>
+<td>0.02</td>
+<td>Hue shift (fraction of the colour circle)</td>
+</tr>
+<tr>
+<td></td>
+<td>blur prob, noise prob</td>
+<td>0.1, 0.1</td>
+<td>Gaussian/median blur; sensor noise</td>
+</tr>
+<tr>
+<td></td>
+<td>occlusion prob</td>
+<td>0.3</td>
+<td>One random rectangle over the crop, so hidden keypoints are learnt from the rest of the animal</td>
+</tr>
+<tr>
+<td></td>
+<td>scale / aspect jitter, flips</td>
+<td>0.2 / 0.2, 0.5 / 0.5</td>
+<td>As for YOLO (flips need the Skeleton Editor's left/right pairs)</td>
+</tr>
+<tr>
+<td>Optimisation</td>
+<td>learning rate, weight decay</td>
+<td>5e-4, 0.1</td>
+<td>AdamW</td>
+</tr>
+<tr>
+<td></td>
+<td>layer decay, drop path</td>
+<td>Auto</td>
+<td>The variant's ViTPose values</td>
+</tr>
+<tr>
+<td></td>
+<td>warmup epochs</td>
+<td>3</td>
+<td>Linear warmup, then cosine decay (per batch)</td>
+</tr>
+<tr>
+<td></td>
+<td>early stopping patience</td>
+<td>40</td>
+<td>Stop after 40 epochs without a better validation score</td>
+</tr>
+<tr>
+<td></td>
+<td>loader workers</td>
+<td>min(8, CPUs)</td>
+<td>Parallel data loading</td>
+</tr>
+<tr>
+<td></td>
+<td>EMA, mixed precision</td>
+<td>on</td>
+<td>Averaged weights are validated and saved; bf16 on NVIDIA GPUs</td>
+</tr>
+<tr>
+<td>Validation</td>
+<td>fraction, split by, seed</td>
+<td>0.2, source frame, 0</td>
+<td>Whole source frames are held out, so validation crops are not near-copies of training crops</td>
+</tr>
+<tr>
+<td></td>
+<td>ignore occluded</td>
+<td>off</td>
+<td>Occluded keypoints get no loss</td>
+</tr>
+<tr>
+<td></td>
+<td>flip test</td>
+<td>on</td>
+<td>Also score the crop + mirror average (an extra number; <code>best.pt</code> and early stopping use the plain prediction, which is what PoseKit runs). Needs left-right flips with all left/right keypoints paired.</td>
+</tr>
+</tbody>
+</table>
+<p>Epochs, batch size and device are in the Config group (shared with YOLO), as are
+auxiliary datasets, which ViTPose now uses too. The loss plot follows the run,
+and the log reports PCK@0.05, PCK@0.1 and the mean normalised error (NME: pixel
+error / √animal box area) every epoch. <code>best.pt</code> is the epoch with the highest
+PCK@0.05 (lower NME breaks ties). <em>Split by source frame</em> falls back to single
+images when the project has only one frame (or video). The settings are kept between sessions.</p>
 <p>ViTPose can also be trained/fine-tuned outside the GUI via its standalone CLI:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.core.individual.pose.vitpose.training<span class="w"> </span>--config<span class="w"> </span>run.json
 </span></code></pre></div>
@@ -2252,6 +2419,82 @@ paths, device, epochs, batch size, and other hyperparameters).</p>
 <li>Visibility flags encode present/occluded/missing states.</li>
 <li>Project settings changes can require label migration.</li>
 </ul>
+<h2 id="smart-select">Smart Select<a class="headerlink" href="#smart-select" title="Permanent link">&para;</a></h2>
+<p><strong>Smart Select…</strong> (left panel) picks the next frames to label with the same
+methodology as ClassKit's candidate batches:</p>
+<ol>
+<li>Every frame is embedded (DINOv2 by default; cached per model, so later runs
+   are instant) and clustered with K-means (about √N clusters by default).</li>
+<li>
+<p>A batch is built from a mix of signals, in this order:</p>
+<table>
+<thead>
+<tr>
+<th>Slot</th>
+<th>Default</th>
+<th>Picks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Near model errors</td>
+<td>20%</td>
+<td>Unlabeled frames that look like labeled frames the model gets wrong (mean keypoint error / object size above <em>Error above</em>, 0.05 by default)</td>
+</tr>
+<tr>
+<td>Model unsure</td>
+<td>25%</td>
+<td>Frames with the lowest mean keypoint confidence</td>
+</tr>
+<tr>
+<td>Rare clusters</td>
+<td>10%</td>
+<td>Frames from small or barely-labeled clusters (weight <code>size^-α</code>)</td>
+</tr>
+<tr>
+<td>Fill gaps</td>
+<td>30%</td>
+<td>Frames that most reduce the distance from unlabeled frames to their nearest labeled one</td>
+</tr>
+<tr>
+<td>Typical</td>
+<td>10%</td>
+<td>Frames from dense clusters with few labels</td>
+</tr>
+<tr>
+<td>Random checks</td>
+<td>the rest</td>
+<td>Random frames</td>
+</tr>
+</tbody>
+</table>
+<p>The model slots use the cached predictions of the model selected in the
+Model panel (run <strong>Predict Dataset…</strong> first). Without predictions their
+share goes to <em>Fill gaps</em>.
+3. The candidate table lists the batch in order with the reason for each pick.
+   Remove rows with Delete, or open the <strong>Embedding Explorer</strong> to see every
+   frame on a UMAP map with the batch highlighted and click points in or out.
+4. <strong>Start Labeling</strong> adds the batch to the labeling set, switches the list to the
+   <em>Smart Select batch</em> sort and opens the first unlabeled frame; Next / Next
+   unlabeled follow the batch order (Next unlabeled wraps around to open frames
+   earlier in the batch). <strong>Add to Labeling Set</strong> adds it without changing the
+   sort. The batch order is saved with the project, and reopening a project with
+   an unfinished batch switches back to the batch sort.</p>
+</li>
+</ol>
+<p>In Frame Mode, Smart Select picks whole source frames and adds every individual on
+each picked frame; a frame that is partly labeled says so in the Detail column.
+Frame Mode groups images by the <code>did&lt;detection id&gt;</code> crop names that FilterKit
+exports; with other file names every image counts as its own frame, and the
+dialog says so.</p>
+<p>The labeling set is saved by image path, so it (and the batch) survives images
+being added or removed between sessions.</p>
+<p>Images that can't be read are skipped (the status line counts them) and are never
+picked; they are remembered, so later runs don't retry them until the file
+changes. Choosing HDBSCAN as the clustering method makes the cluster count a
+minimum cluster size; it is slow above ~10,000 frames.</p>
+<p>Clustering also writes <code>posekit/clusters/clusters.csv</code> for every frame, which the
+<em>Cluster id</em> sort and the cluster-stratified export split use.</p>
 <h2 id="core-hotkeys">Core Hotkeys<a class="headerlink" href="#core-hotkeys" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>A/D</code>: previous/next frame</li>
@@ -2271,6 +2514,37 @@ paths, device, epochs, batch size, and other hyperparameters).</p>
 <li>Generate split files and train a baseline.</li>
 <li>Use model-assisted passes and active learning to iterate.</li>
 </ol>
+<h2 id="training-defaults">Training Defaults<a class="headerlink" href="#training-defaults" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Input size from the crops.</strong> <em>Auto from crop size</em> (on by default) sizes the
+  model input from the crops' pixel dimensions: YOLO trains at the smallest multiple
+  of 32 that holds the crops' long side (192 for 192x128 crops, instead of 640), and
+  ViTPose gets an input with the crops' aspect ratio at about one input pixel per crop
+  pixel (<em>Detail</em> scales it; 160x256 HxW for 192x128 crops). Prediction always uses
+  the size a model was trained at.</li>
+<li><strong>Flips.</strong> Training mirrors crops left-right and up-down (probability 0.5 each).
+  A mirror turns a left antenna into a right one, so the skeleton needs its
+  left/right pairs: set them in the <strong>Skeleton Editor</strong> (<em>Suggest from names</em> pairs
+  <code>left_*</code>/<code>right_*</code>, <code>l_*</code>/<code>r_*</code>). They are saved in the project and in skeleton
+  files (<code>flip_pairs</code>). If any keypoint whose name marks a side (<code>left_*</code>, <code>l_*</code>,
+  <code>antL</code>, <code>L1</code>, <code>lf_*</code>, ...) is not in a pair, flips stay off and the Training
+  Runner names the keypoints (tick <em>Flip with unpaired side-like names</em> in Config
+  when they are really midline keypoints); a skeleton with only midline keypoints
+  flips without swapping. Loading a skeleton file saved without pairs keeps the current pairs only
+  for keypoints it still has, matched by name.</li>
+<li><strong>Mosaic off.</strong> Ultralytics' mosaic tiles four crops into one image, which puts
+  the labelled animal off-centre next to unlabelled ones; it is off by default and
+  can be switched on under Augmentations.</li>
+</ul>
+<h2 id="crops-with-several-animals">Crops With Several Animals<a class="headerlink" href="#crops-with-several-animals" title="Permanent link">&para;</a></h2>
+<p>A crop belongs to the animal at its centre; neighbours reaching into the frame are
+not labelled. When a YOLO-pose model finds several animals in a crop (up to 10 are
+kept), PoseKit and TrackerKit report the pose nearest the crop centre among the
+confident detections (confidence at least 0.1 and at least a quarter of the best
+one), not simply the most confident, so a clearer neighbour no longer replaces the
+crop's own animal while near-zero fragments are ignored. ViTPose predicts one pose
+per crop. TrackerKit pose caches made with YOLO-pose before this change are
+recomputed.</p>
 <h2 id="training-augmentation">Training Augmentation<a class="headerlink" href="#training-augmentation" title="Permanent link">&para;</a></h2>
 <p>The YOLO-pose and ViTPose training dialogs keep the crop centre fixed. Besides the
 Ultralytics controls (HSV, rotation) it has two window augmentations:</p>
