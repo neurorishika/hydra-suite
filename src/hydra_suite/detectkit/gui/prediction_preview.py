@@ -71,14 +71,19 @@ _PREVIEW_RUNTIME = RuntimeContext(
 )
 
 
-def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
+def _preview_slice_merge_config(
+    merge_threshold: float,
+    merge_policy: str = "greedy_nmm",
+    merge_metric: str = "ios",
+) -> OBBConfig:
     """Minimal ``OBBConfig`` carrying only what ``merge_per_frame`` reads for the
     preview's cross-tile OBB merge: the slice merge policy/metric/threshold/
     backend and ``raw_detection_cap``.
 
-    Matches the preview's prior hand-rolled merge byte-for-byte -- ``greedy_nmm``
-    / ``ios`` / cv2, with the same finite preview candidate ceiling used by
-    the executor.
+    The defaults match the preview's prior hand-rolled merge byte-for-byte --
+    ``greedy_nmm`` / ``ios`` / cv2, with the same finite preview candidate
+    ceiling used by the executor. A model sidecar's profile may supply its own
+    policy/metric (F2); ``nmm`` passes through raw.
     """
     return OBBConfig(
         mode="direct",
@@ -86,8 +91,8 @@ def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
             model_path="",
             slice=SliceConfig(
                 enabled=True,
-                merge_policy="greedy_nmm",
-                merge_metric="ios",
+                merge_policy=merge_policy,
+                merge_metric=merge_metric,
                 merge_threshold=float(merge_threshold),
                 merge_backend="cv2",
             ),
@@ -148,6 +153,19 @@ def preview_object_tile_fraction(target_sizes, object_tile_fraction, imgsz) -> f
 
     frac = float(np.median(np.asarray(sizes, dtype=np.float64))) / float(imgsz)
     return max(0.01, min(0.9, frac))
+
+
+def sliced_preview_fraction(slice_settings) -> float:
+    """The auto_object fraction a sliced preview runs at.
+
+    The median of the settings' fraction set, taken directly -- no
+    ``fraction * imgsz / imgsz`` pixel round trip, which is 1 ulp off for
+    values such as 0.055 at 640 and would make the preview tile at a number
+    TrackerKit does not use for the same profile (F2).
+    """
+    return preview_object_tile_fraction(
+        slice_settings.target_fractions(), slice_settings.object_tile_fraction, 1
+    )
 
 
 def _resolve_torch_device(device_preference: str) -> str:
@@ -312,6 +330,8 @@ def predict_sliced_obb_result(
     iou: float = _PREVIEW_IOU,
     task: str = "obb",
     should_stop: Callable[[], bool] | None = None,
+    merge_policy: str = "greedy_nmm",
+    merge_metric: str = "ios",
 ):
     """Executor-level sliced OBB inference on one BGR frame (preview/AL).
 
@@ -412,7 +432,7 @@ def predict_sliced_obb_result(
         parts,
         "overlap_band_nms",
         plan,
-        _preview_slice_merge_config(merge_threshold),
+        _preview_slice_merge_config(merge_threshold, merge_policy, merge_metric),
         _PREVIEW_RUNTIME,
     )
 

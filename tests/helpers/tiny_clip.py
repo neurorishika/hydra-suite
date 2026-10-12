@@ -196,14 +196,16 @@ def _make_stub_cnn(frame_idx: int, detection_ids: np.ndarray, label: str) -> CNN
     """Deterministic CNNResult seeded by frame_idx."""
     rng = np.random.default_rng(int(frame_idx) * 100 + 13)
     preds: list[CNNDetectionPrediction] = []
-    for i, det_id in enumerate(detection_ids):
+    # det_index is POSITIONAL within the frame's OBB, matching the real
+    # run_cnn_batch contract (the pipeline maps positions to raw cache indices).
+    for i, _det_id in enumerate(detection_ids):
         raw_probs = rng.dirichlet([1.0] * len(_CNN_CLASSES)).astype(np.float32)
         factor = CNNFactorPrediction(
             factor_name=_CNN_FACTOR,
             class_names=list(_CNN_CLASSES),
             raw_probabilities=raw_probs,
         )
-        preds.append(CNNDetectionPrediction(det_index=int(det_id), factors=[factor]))
+        preds.append(CNNDetectionPrediction(det_index=i, factors=[factor]))
     return CNNResult(label=label, predictions=preds)
 
 

@@ -46,7 +46,8 @@ def test_all_direct_detector_roles_publish_slice_geometry(
     )
 
     sidecar = Path(stored).with_suffix(Path(stored).suffix + ".slice_meta.json")
-    assert json.loads(sidecar.read_text())["training_geometry"] == geometry
+    training_geometry = json.loads(sidecar.read_text())["training_geometry"]
+    assert {k: training_geometry[k] for k in geometry} == geometry
     assert mp.load_model_registry()["entries"][key]["slice_geometry"] == geometry
 
 
@@ -258,7 +259,9 @@ def test_publishing_preserves_profiles_saved_before_registration(tmp_path):
         primary=True,
     )
     merged = merge_training_geometry(
-        existing, {"geometry_mode": "auto_object", "imgsz": 1024, "overlap": 0.3}
+        existing,
+        {"geometry_mode": "auto_object", "imgsz": 1024, "overlap": 0.3},
+        model_family="yolo",
     )
     assert merged["training_geometry"]["imgsz"] == 1024
     assert [p["name"] for p in available_slice_profiles(merged)] == ["Balanced"]

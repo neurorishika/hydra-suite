@@ -6,7 +6,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -46,7 +46,6 @@ from hydra_suite.core.inference.semantic.tiling import (
     DEFAULT_OVERLAP,
     DEFAULT_SEAM_MARGIN_PX,
     SEMANTIC_TILE_FRACTION_SEED,
-    resolve_tile_px,
 )
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
@@ -55,7 +54,12 @@ from hydra_suite.detectkit.gui.widgets.calibration_source_selector import (
     scale_warning_text,
 )
 from hydra_suite.utils.hidden_files import is_hidden_file
+from hydra_suite.utils.tiling_spec import FRACTION_MAX, OVERLAP_MAX, TilingSpec
 from hydra_suite.widgets.device_combo import DeviceCombo
+from hydra_suite.widgets.slice_settings import (
+    SliceSettingsWidget,
+    SliceWidgetCapabilities,
+)
 
 
 def _saved_value(saved: dict, key: str, default, cast):
@@ -64,6 +68,40 @@ def _saved_value(saved: dict, key: str, default, cast):
         return cast(saved.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _body_source(explicit: str, origin: str) -> str:
+    """The body-size badge: the caller's source, else read from its note."""
+    if explicit:
+        return explicit
+    text = (origin or "").lower()
+    if "sliced-training" in text:
+        return "project"
+    if "median" in text:
+        return "dataset"
+    return "user"
+
+
+def _format_tile_label(
+    tile_px: int | None, body_px: float, fraction: float | None
+) -> tuple[str, str]:
+    """This dialog's resolved-tile wording (the shared widget renders it)."""
+    if tile_px:
+        return (
+            f"{tile_px} px\n{body_px:.0f} px / {fraction:.2f}",
+            f"Tile size {tile_px} px = {body_px:.0f} px reference body "
+            f"size / {fraction:.2f} tile fraction.",
+        )
+    if fraction is None:
+        return "full frame — tiling off by choice.", ""
+    # Short visible line (no wrapping, so the row never squeezes its
+    # neighbours); the guidance lives in the tooltip.
+    return (
+        "full frame — tiling is off; enter a body size",
+        "Full frame: no reference body size is known, so tiling is off. Enter "
+        "one above (or set one in project settings) for much better "
+        "small-object recall.",
+    )
 
 
 class SemanticEscalationDialog(DetectKitDialog):
@@ -83,6 +121,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         body_px_origin: str = "",
         project=None,
         persist_callback=None,
+        body_px_source: str = "",
     ) -> None:
         super().__init__(
             "Semantic escalation (SAM3)",
@@ -171,7 +210,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         self._no_finetuned_hint.setWordWrap(True)
         finetuned_present = len(available_models()) > len(available_variants())
         self._no_finetuned_hint.setVisible(not finetuned_present)
-        form.addWidget(self._no_finetuned_hint, 7, 0, 1, 4)
+        form.addWidget(self._no_finetuned_hint, 5, 0, 1, 4)
 
         self._prompt = QLineEdit(str(saved.get("prompt", "ant") or "ant"))
         self._prompt.setToolTip(
@@ -206,10 +245,10 @@ class SemanticEscalationDialog(DetectKitDialog):
             "The project class the staged instances will be labelled as. "
             "This is what accept writes into the source -- not the prompt."
         )
-        add_field(5, 0, "Assign to class", self._class_name)
+        add_field(3, 0, "Assign to class", self._class_name)
 
         self._device = DeviceCombo(str(saved.get("device", "auto") or "auto"))
-        add_field(5, 1, "Run on", self._device)
+        add_field(3, 1, "Run on", self._device)
 
         self._confidence = QDoubleSpinBox()
         self._confidence.setRange(0.01, 0.99)
@@ -223,96 +262,121 @@ class SemanticEscalationDialog(DetectKitDialog):
         self._max_instances.setValue(_saved_value(saved, "max_instances", 0, int))
         add_field(1, 1, "Max instances/tile", self._max_instances)
 
-        self._overlap = QDoubleSpinBox()
-        self._overlap.setRange(0.0, 0.9)
-        self._overlap.setSingleStep(0.1)
-        self._overlap.setValue(_saved_value(saved, "overlap", DEFAULT_OVERLAP, float))
-        add_field(2, 0, "Tile overlap", self._overlap)
-
-        self._seam_margin = QSpinBox()
-        self._seam_margin.setRange(0, 64)
-        self._seam_margin.setValue(
-            _saved_value(saved, "seam_margin_px", int(DEFAULT_SEAM_MARGIN_PX), int)
+        # Tiling rows come from the shared SAHI widget (S4). The old attribute
+        # names alias its controls, so parameters(), persistence, calibration
+        # and prefill keep working unchanged.
+        self._tiling = SliceSettingsWidget(
+            role="escalate_sam3",
+            title="Tiling (SAHI)",
+            capabilities=SliceWidgetCapabilities(
+                advanced_merge=False, tile_label_formatter=_format_tile_label
+            ),
         )
-        add_field(2, 1, "Seam margin (px)", self._seam_margin)
-
-        self._merge_iou = QDoubleSpinBox()
-        self._merge_iou.setRange(0.05, 0.95)
-        self._merge_iou.setSingleStep(0.05)
-        self._merge_iou.setValue(
-            _saved_value(saved, "merge_iou", DEFAULT_MERGE_IOU, float)
-        )
-        add_field(3, 0, "Merge IoU", self._merge_iou)
-
+        tiling = self._tiling
+        self._overlap = tiling.spin_slice_overlap
+        self._seam_margin = tiling.spin_slice_seam_margin
+        self._merge_iou = tiling.spin_slice_merge
         # I6: link 3 of the reference_body_px resolution chain (project
         # setting -> median of the source's existing labels -> THE USER).
-        # Without an editable control the chain dead-ends and an unresolved
-        # value silently switches tiling off -- the measured-worst
-        # configuration (F1 0.719 -> 0.075).
-        self._reference_body = QDoubleSpinBox()
-        self._reference_body.setRange(0.0, 4096.0)
-        self._reference_body.setDecimals(1)
-        self._reference_body.setSingleStep(5.0)
-        self._reference_body.setSpecialValueText("unknown (tiling off)")
-        self._reference_body.setValue(
-            _saved_value(
-                saved,
-                "reference_body_px",
-                float(reference_body_px or 0.0),
-                float,
-            )
+        # An unknown (0) body stays typeable without Override; a derived one
+        # is read-only until Override, with its source badged.
+        self._reference_body = tiling.spin_slice_body
+        # The fraction is a CALIBRATED parameter. The seed is presented as a
+        # guess, never as a tuned or recommended value -- it was back-derived
+        # from one measured configuration on one dataset. 3 decimals: a
+        # published model's sidecar can record e.g. 0.055.
+        self._tile_fraction = tiling.spin_slice_object_fraction
+        self._tile_label = tiling.lbl_slice_tile_size
+
+        body = _saved_value(
+            saved, "reference_body_px", float(reference_body_px or 0.0), float
         )
-        self._reference_body.setToolTip(
-            "The typical longest side of one animal, in pixels. Tile size = "
-            "this / tile fraction. With no value, tiling is off — which is "
-            "the worst measured configuration for small animals."
+        fraction = _saved_value(
+            saved, "tile_fraction", SEMANTIC_TILE_FRACTION_SEED, float
         )
-        self._reference_body.valueChanged.connect(self._refresh_tile_label)
-        add_field(3, 1, "Body size (px)", self._reference_body)
-        origin_text = (
-            "saved from the previous SAM3 dialog"
-            if "reference_body_px" in saved
-            else body_px_origin or "entered by you"
-        )
+        if "reference_body_px" in saved:
+            origin_text, body_source = "saved from the previous SAM3 dialog", "user"
+        else:
+            origin_text = body_px_origin or "entered by you"
+            body_source = _body_source(body_px_source, body_px_origin)
         self._body_origin_label = QLabel(origin_text)
         self._body_origin_label.setWordWrap(True)
         self._body_origin_label.setToolTip(self._body_origin_label.text())
 
-        # The fraction is a CALIBRATED parameter. The seed is presented as a
-        # guess, never as a tuned or recommended value -- it was back-derived
-        # from one measured configuration on one dataset.
-        self._tile_fraction = QDoubleSpinBox()
-        self._tile_fraction.setRange(0.0, 0.90)
-        self._tile_fraction.setSingleStep(0.01)
-        # 3 decimals (not 2): a published model's sidecar can record a
-        # measured object_tile_fraction like 0.055 that a finetuning run
-        # actually used, and 2 decimals would silently round that prefill
-        # (0.055 -> 0.06) before the user ever sees it.
-        self._tile_fraction.setDecimals(3)
-        self._tile_fraction.setSpecialValueText("full frame (no tiling)")
-        self._tile_fraction.setValue(
-            _saved_value(saved, "tile_fraction", SEMANTIC_TILE_FRACTION_SEED, float)
-        )
-        self._tile_fraction.setToolTip(
-            "Tile size = reference body size / this fraction. The default is a "
-            "starting guess from one dataset, not a tuned value — calibrate "
-            "against your own labelled frames to fit it."
-        )
-        self._tile_fraction.valueChanged.connect(self._refresh_tile_label)
-        add_field(4, 0, "Tile fraction", self._tile_fraction)
+        # F3: when nothing saved applies to the opening variant, open where a
+        # headless `detectkit escalate sam3` would run -- the SAME resolver.
+        # With no saved dict at all, rung 4 (seed + this body chain) is
+        # exactly the historical opening state, so only a calibration or a
+        # model stamp changes anything. A saved dict that EXISTS but does not
+        # apply (another variant, or no tile_fraction) is stale: its body /
+        # fraction must not leak into this variant, so every origin applies
+        # (M1: otherwise the dialog and the CLI open differently).
+        opening_variant = self._variant.currentText()
+        if not (
+            "tile_fraction" in saved
+            and str(saved.get("variant") or "") in ("", opening_variant)
+        ):
+            from hydra_suite.detectkit.jobs.semantic_escalation import (
+                default_semantic_tiling,
+            )
 
-        self._tile_label = QLabel("")
-        self._tile_label.setWordWrap(True)
-        self._tile_label.setMinimumWidth(180)
-        add_field(4, 1, "Resolved tile", self._tile_label)
-        self._refresh_tile_label()
+            chain_px = float(reference_body_px or 0.0)
+            opening = default_semantic_tiling(
+                project, opening_variant, body_chain_px=chain_px
+            )
+            stale_saved = bool(saved)
+            if stale_saved or opening["origin"] in ("calibration", "stamped"):
+                # r1: an unknown body (full_frame) zeroes only the body; the
+                # fraction field keeps the seed, as with no saved dict, so
+                # typing a body tiles exactly like `--reference-body-px N`.
+                fraction = (
+                    float(SEMANTIC_TILE_FRACTION_SEED)
+                    if opening["origin"] == "full_frame"
+                    else float(opening["tile_fraction"] or 0.0)
+                )
+                body = float(opening["reference_body_px"])
+                if opening["origin"] == "calibration":
+                    origin_label, body_source = "the model's calibration", "profile"
+                elif opening["origin"] == "stamped" and chain_px <= 0:
+                    origin_label, body_source = "stamped on the model", "stamped"
+                else:
+                    origin_label = body_px_origin or "entered by you"
+                    body_source = _body_source(body_px_source, body_px_origin)
+                self._body_origin_label.setText(origin_label)
+                self._body_origin_label.setToolTip(origin_label)
+
+        fraction = min(max(fraction, 0.0), FRACTION_MAX)
+        tiling.set_spec(
+            TilingSpec(
+                enabled=fraction > 0.0,
+                geometry_mode="auto_object",
+                object_tile_fractions=(fraction,) if fraction > 0.0 else (),
+                reference_body_px=max(body, 0.0),
+                overlap=min(
+                    max(_saved_value(saved, "overlap", DEFAULT_OVERLAP, float), 0.0),
+                    OVERLAP_MAX,
+                ),
+                fragment_policy="crowd",
+                merge_policy="nms",
+                merge_metric="polygon_iou",
+            ),
+            extras={
+                "seam_margin_px": _saved_value(
+                    saved, "seam_margin_px", int(DEFAULT_SEAM_MARGIN_PX), int
+                ),
+                "merge_iou": _saved_value(saved, "merge_iou", DEFAULT_MERGE_IOU, float),
+            },
+        )
+        tiling.set_reference_body(max(body, 0.0), body_source)
+        form.addWidget(tiling, 2, 0, 1, 4)
 
         origin = QLabel(f"Body-size source: {self._body_origin_label.text()}")
         origin.setWordWrap(True)
         origin.setToolTip(self._body_origin_label.toolTip())
-        # Keep this full-width provenance message below the class selector.
-        # Sharing row 5 made the two widgets paint on top of one another.
-        form.addWidget(origin, 6, 0, 1, 4)
+        # Keep this full-width provenance message on its own row below the
+        # tiling group. Sharing a row made two widgets paint on top of one
+        # another.
+        form.addWidget(origin, 4, 0, 1, 4)
         self._body_origin_display = origin
         top.addWidget(settings_group, 5)
         outer.addLayout(top, 1)
@@ -380,6 +444,10 @@ class SemanticEscalationDialog(DetectKitDialog):
         self.add_content(container)
         self.setMinimumSize(720, 500)
         self.resize(820, 560)
+        self.fit_to_content(QSize(720, 500))
+        self._tiling.btn_slice_advanced.toggled.connect(
+            lambda _expanded: self.schedule_fit()
+        )
 
     # -- accessors used by the handler -------------------------------------
 
@@ -449,7 +517,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         if not isinstance(verdict.stamped_value, float):
             pass
         elif verdict.should_prefill:
-            self._reference_body.setValue(verdict.stamped_value)
+            self._tiling.set_reference_body(verdict.stamped_value, "stamped")
         elif verdict.is_mismatch:
             QMessageBox.warning(
                 self,
@@ -698,26 +766,7 @@ class SemanticEscalationDialog(DetectKitDialog):
         )
 
     def _refresh_tile_label(self) -> None:
-        body_px = self.reference_body_px()
-        tile_px = resolve_tile_px(body_px, self.tile_fraction())
-        if tile_px:
-            self._tile_label.setText(
-                f"{tile_px} px\n{body_px:.0f} px / {self.tile_fraction():.2f}"
-            )
-            self._tile_label.setToolTip(
-                f"Tile size {tile_px} px = {body_px:.0f} px reference body "
-                f"size / {self.tile_fraction():.2f} tile fraction."
-            )
-        elif self.tile_fraction() is None:
-            self._tile_label.setText("full frame — tiling off by choice.")
-            self._tile_label.setToolTip("")
-        else:
-            self._tile_label.setText(
-                "full frame — no reference body size is known, so tiling is off. "
-                "Enter one above (or set one in project settings) for much "
-                "better small-object recall."
-            )
-            self._tile_label.setToolTip(self._tile_label.text())
+        self._tiling.refresh()
 
     def _project_frame_count(self) -> int:
         """Images across the selected sources — the run-time projection base."""

@@ -91,8 +91,16 @@ def compute_detection_hash(
     start_frame: int,
     end_frame: int,
     detection_cache_version: str = "2.0",
+    max_targets: int | None = None,
 ) -> str:
-    """Hash identity for raw detections over a specific video frame range."""
+    """Hash identity of the tracked detections over a video frame range.
+
+    The individual/detected-properties caches built on it are written in the
+    tracking loop over the FINAL-N detections, so they are tracking-level
+    artifacts: ``max_targets`` (N) is part of their identity (unlike the
+    N-independent inference caches). A file written at one N never covers
+    another N's detections.
+    """
     payload = {
         "schema_version": SCHEMA_VERSION,
         "inference_model_id": str(inference_model_id or ""),
@@ -100,6 +108,7 @@ def compute_detection_hash(
         "start_frame": int(start_frame),
         "end_frame": int(end_frame),
         "detection_cache_version": str(detection_cache_version),
+        "max_targets": None if max_targets is None else int(max_targets),
     }
     return _hash_payload(payload)
 
@@ -364,9 +373,20 @@ class IndividualPropertiesCache:
                     continue
         return frames
 
-    def is_compatible(self) -> bool:
-        """Return True if the loaded cache matches the expected schema version."""
-        return self._compatible
+    def is_compatible(self, max_targets: int | None = None) -> bool:
+        """Return True if the loaded cache matches the expected schema version.
+
+        With ``max_targets``, also require the file to have been written at
+        that N: these caches hold the final-N tracked detections only, so a
+        file from another N would silently miss (or misattribute) rows. A
+        file without a recorded N is never reused under an N check.
+        """
+        if not self._compatible:
+            return False
+        if max_targets is None:
+            return True
+        stored = self.metadata.get("max_targets")
+        return stored is not None and int(stored) == int(max_targets)
 
     def get_cached_frames(self) -> Iterable[int]:
         """Return a sorted iterable of frame indices present in the cache."""

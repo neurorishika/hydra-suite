@@ -28,6 +28,10 @@ from hydra_suite.core.inference.autotune.models import (
     MAXIMUM_CALIBRATION_BUDGET_SECONDS,
     MINIMUM_CALIBRATION_BUDGET_SECONDS,
 )
+from hydra_suite.core.inference.config import (
+    DEFAULT_SLICE_OBJECT_TILE_FRACTION,
+    DEFAULT_SLICE_OVERLAP,
+)
 from hydra_suite.core.inference.model_paths import (
     resolve_model_path,
     resolve_pose_model_path,
@@ -685,6 +689,9 @@ def build_engine_params(
     )
     animals_per_arena = int(_cfg_get(cfg, "animals_per_arena", default=max_targets))
     max_targets = n_arenas * animals_per_arena
+    from hydra_suite.core.inference.limits import require_target_count_within_limit
+
+    require_target_count_within_limit(max_targets)
     reference_body_size = float(_cfg_get(cfg, "reference_body_size", default=20.0))
     resize_factor = float(_cfg_get(cfg, "resize_factor", default=1.0))
     # RESIZE_FACTOR is a background-subtraction knob. The worker's frame
@@ -1164,10 +1171,12 @@ def build_engine_params(
         "SLICE_GEOMETRY_MODE": str(
             _cfg_get(cfg, "slice_geometry_mode", default="auto_model")
         ),
-        "SLICE_OVERLAP": advanced.get("slice_overlap", 0.2),
+        "SLICE_OVERLAP": advanced.get("slice_overlap", DEFAULT_SLICE_OVERLAP),
         "SLICE_HEIGHT": advanced.get("slice_height", 0),
         "SLICE_WIDTH": advanced.get("slice_width", 0),
-        "SLICE_OBJECT_TILE_FRACTION": advanced.get("slice_object_tile_fraction", 0.15),
+        "SLICE_OBJECT_TILE_FRACTION": advanced.get(
+            "slice_object_tile_fraction", DEFAULT_SLICE_OBJECT_TILE_FRACTION
+        ),
         "SLICE_TRAINED_BODY_PX": advanced.get("slice_trained_body_px", 0.0),
         # Execution controls are intentionally independent of calibrated
         # geometry profiles.  The inference config clamps these values before

@@ -51,22 +51,25 @@ def test_slice_settings_show_only_controls_for_selected_geometry(_app):
     w = SliceSettingsGroup()
     w.show()
     _app.processEvents()
+    # S4: constrained fields are DISABLED, never hidden (spec §5.3); tiling
+    # must be on, or every row is disabled by the master toggle instead.
+    w.chk_enabled.setChecked(True)
 
     w.cmb_mode.setCurrentIndex(w.cmb_mode.findData("auto_object"))
-    assert w.txt_targets.isVisible()
-    assert not w.spin_w.isVisible()
-    assert not w.spin_h.isVisible()
+    assert w.txt_targets.isVisible() and w.txt_targets.isEnabled()
+    assert w.spin_w.isVisible() and not w.spin_w.isEnabled()
+    assert w.spin_h.isVisible() and not w.spin_h.isEnabled()
     assert w.auto_reference_note.isVisible()
 
     w.cmb_mode.setCurrentIndex(w.cmb_mode.findData("auto_model"))
-    assert not w.txt_targets.isVisible()
-    assert not w.spin_w.isVisible()
+    assert w.txt_targets.isVisible() and not w.txt_targets.isEnabled()
+    assert w.spin_w.isVisible() and not w.spin_w.isEnabled()
     assert not w.auto_reference_note.isVisible()
 
     w.cmb_mode.setCurrentIndex(w.cmb_mode.findData("custom"))
-    assert not w.txt_targets.isVisible()
-    assert w.spin_w.isVisible()
-    assert w.spin_h.isVisible()
+    assert w.txt_targets.isVisible() and not w.txt_targets.isEnabled()
+    assert w.spin_w.isVisible() and w.spin_w.isEnabled()
+    assert w.spin_h.isVisible() and w.spin_h.isEnabled()
 
 
 def test_slice_fraction_controls_explain_their_numeric_meaning(_app):

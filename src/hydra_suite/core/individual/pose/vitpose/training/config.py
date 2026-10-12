@@ -25,6 +25,8 @@ _FIELDS = {
     "seed",
     "resume_from",
     "input_size",
+    "scale_jitter",
+    "aspect_jitter",
 }
 
 
@@ -47,6 +49,12 @@ class RunConfig:
     seed: int = 0
     resume_from: str | None = None
     input_size: list[int] | None = None
+    # Centred window augmentation (see training/window_jitter.py). ``None``
+    # keeps the legacy hard-coded random zoom; a number (incl. 0) enables the
+    # window jitter: window size ~ U(1-j, 1+j), aspect ratio log-uniform in
+    # [1/(1+a), 1+a] at constant area. The crop centre never moves.
+    scale_jitter: float | None = None
+    aspect_jitter: float = 0.0
 
     def to_json(self, path: Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
@@ -71,6 +79,11 @@ def validate_run_config(d: dict) -> RunConfig:
     vf = float(d.get("val_fraction", 0.2))
     if not (0.0 < vf < 1.0):
         raise ValueError("val_fraction must be in (0, 1)")
+    sj = d.get("scale_jitter")
+    if sj is not None and not (0.0 <= float(sj) <= 0.9):
+        raise ValueError("scale_jitter must be in [0, 0.9] or null")
+    if not (0.0 <= float(d.get("aspect_jitter", 0.0)) <= 1.0):
+        raise ValueError("aspect_jitter must be in [0, 1]")
     size = d.get("input_size")
     if size is not None:
         if not isinstance(size, (list, tuple)) or len(size) != 2:

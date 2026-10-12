@@ -85,7 +85,7 @@ def test_selecting_model_with_sidecar_prefills(tmp_path, monkeypatch):
     panel.apply_slice_meta_for_model(str(model_path))
 
     assert panel.chk_slice_enabled.isChecked() is True
-    assert panel.combo_slice_geometry.currentText() == "auto_object"
+    assert panel.combo_slice_geometry.currentData() == "auto_object"
     assert mw.advanced_config["slice_overlap"] == 0.25
     assert abs(mw.advanced_config["slice_object_tile_fraction"] - 300.0 / 640.0) < 1e-6
     assert mw.advanced_config["slice_trained_body_px"] == 560.0
@@ -150,13 +150,13 @@ def test_selecting_profile_applies_complete_calibrated_settings(tmp_path, monkey
     assert panel.spin_yolo_confidence.value() == 0.3
     fast = panel.combo_slice_profile.findData("fast")
     panel.combo_slice_profile.setCurrentIndex(fast)
-    assert panel.combo_slice_geometry.currentText() == "custom"
+    assert panel.combo_slice_geometry.currentData() == "custom"
     assert panel.spin_slice_tile_w.value() == 1024
     assert panel.spin_slice_tile_h.value() == 800
     assert mw.advanced_config["slice_profile_id"] == "fast"
     training = panel.combo_slice_profile.findData("__training__")
     panel.combo_slice_profile.setCurrentIndex(training)
-    assert panel.combo_slice_geometry.currentText() == "auto_model"
+    assert panel.combo_slice_geometry.currentData() == "auto_model"
     assert mw.advanced_config["slice_profile_id"] == "__training__"
     mw.close()
 

@@ -1,38 +1,14 @@
 import numpy as np
 import pytest
-import torch
 
 from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
 from hydra_suite.core.inference.result import OBBResult
-from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.filtering import (
-    MAX_DOWNSTREAM_CROPS_PER_FRAME,
-    filter_detections,
     filter_for_source,
-    filter_from_tensors,
-    filter_raw,
     filter_with_indices,
 )
-from hydra_suite.core.inference.stages.obb import _empty_obb_result, _RawOBBTensors
-
-
-def _cpu_rt() -> RuntimeContext:
-    return RuntimeContext(
-        cuda_mode=False,
-        device="cpu",
-        use_nvdec=False,
-        tensor_on_cuda=False,
-    )
-
-
-def _cuda_rt() -> RuntimeContext:
-    return RuntimeContext(
-        cuda_mode=True,
-        device="cuda:0",
-        use_nvdec=False,
-        tensor_on_cuda=True,
-        requested_gpu=True,
-    )
+from hydra_suite.core.inference.stages.obb import _empty_obb_result
 
 
 def _make_obb(
@@ -72,27 +48,22 @@ def _make_obb(
     )
 
 
-def _make_raw_tensors(
-    centroids, confidences, sizes=None, frame_idx=0
-) -> _RawOBBTensors:
-    """Build _RawOBBTensors using CPU tensors (no CUDA required for unit tests)."""
-    n = len(confidences)
-    ws = [s**0.5 for s in (sizes or [500.0] * n)]
-    xywhr = torch.tensor(
-        [[centroids[i][0], centroids[i][1], ws[i], ws[i], 0.0] for i in range(n)],
-        dtype=torch.float32,
-    )
-    corners = torch.zeros(n, 4, 2, dtype=torch.float32)
-    conf = torch.tensor(confidences, dtype=torch.float32)
-    return _RawOBBTensors(frame_idx=frame_idx, xywhr=xywhr, corners=corners, conf=conf)
-
-
 def _cpu_config(**kwargs) -> OBBConfig:
     return OBBConfig(
         mode="direct",
         direct=OBBDirectConfig(model_path="/m.pt"),
         **kwargs,
     )
+
+
+def filter_detections(raw, config, roi_mask=None):
+    """The production gate set (``filter_with_indices``), filtered result only.
+
+    The unwindowed ``filter_detections`` / ``filter_from_tensors`` /
+    ``filter_raw`` were dead (no production caller) and diverged from replay
+    on crowded frames; their gate tests now pin the replay path.
+    """
+    return filter_with_indices(raw, config, roi_mask)[0]
 
 
 def test_filter_confidence_gate():
@@ -164,7 +135,7 @@ def test_filter_max_detections():
 
 
 def test_unlimited_config_still_has_finite_downstream_crop_cap():
-    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 7
+    n = MAX_DETECTIONS_PER_FRAME + 7
     raw = _make_obb(
         [[i * 100.0, 0.0] for i in range(n)],
         [0.9] * n,
@@ -176,12 +147,12 @@ def test_unlimited_config_still_has_finite_downstream_crop_cap():
         _cpu_config(max_detections=0, iou_threshold=1.0),
     )
 
-    assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
-    assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
+    assert result.num_detections == MAX_DETECTIONS_PER_FRAME
+    assert len(indices) == MAX_DETECTIONS_PER_FRAME
 
 
 def test_bgsub_source_is_capped_before_downstream_crop_materialization():
-    n = MAX_DOWNSTREAM_CROPS_PER_FRAME + 9
+    n = MAX_DETECTIONS_PER_FRAME + 9
     raw = _make_obb(
         [[i * 100.0, 0.0] for i in range(n)],
         [float("nan")] * n,
@@ -191,9 +162,9 @@ def test_bgsub_source_is_capped_before_downstream_crop_materialization():
 
     result, indices = filter_for_source(config, raw)
 
-    assert result.num_detections == MAX_DOWNSTREAM_CROPS_PER_FRAME
-    assert len(indices) == MAX_DOWNSTREAM_CROPS_PER_FRAME
-    assert result.sizes.min() == n - MAX_DOWNSTREAM_CROPS_PER_FRAME + 1
+    assert result.num_detections == MAX_DETECTIONS_PER_FRAME
+    assert len(indices) == MAX_DETECTIONS_PER_FRAME
+    assert result.sizes.min() == n - MAX_DETECTIONS_PER_FRAME + 1
 
 
 def test_filter_empty_input():
@@ -239,98 +210,6 @@ def test_filter_suppresses_overlapping_detection_keeping_highest_conf():
     assert result.confidences[0] == pytest.approx(0.95)
 
 
-def test_filter_from_tensors_confidence_gate():
-    raw = _make_raw_tensors([[100, 100], [200, 200]], [0.3, 0.8])
-    result = filter_from_tensors(
-        raw, _cpu_config(confidence_threshold=0.5), None, _cuda_rt()
-    )
-    assert result.num_detections == 1
-    assert result.confidences[0] == pytest.approx(0.8)
-
-
-def test_filter_from_tensors_min_size_gate():
-    raw = _make_raw_tensors([[100, 100], [200, 200]], [0.9, 0.9], sizes=[50.0, 500.0])
-    result = filter_from_tensors(
-        raw, _cpu_config(min_object_size=100.0), None, _cuda_rt()
-    )
-    assert result.num_detections == 1
-    assert result.sizes[0] == pytest.approx(500.0)
-
-
-def test_filter_from_tensors_max_size_gate():
-    raw = _make_raw_tensors([[100, 100], [200, 200]], [0.9, 0.9], sizes=[50.0, 5000.0])
-    result = filter_from_tensors(
-        raw, _cpu_config(max_object_size=1000.0), None, _cuda_rt()
-    )
-    assert result.num_detections == 1
-    assert result.sizes[0] == pytest.approx(50.0)
-
-
-def test_filter_from_tensors_size_gate_uses_ellipse_area():
-    """GPU path mirrors the CPU path: size gates compare ellipse area, not rect."""
-    raw = _make_raw_tensors([[100, 100]], [0.9], sizes=[1100.0])  # ellipse ~864
-    out = filter_from_tensors(
-        raw, _cpu_config(max_object_size=1000.0), None, _cuda_rt()
-    )
-    assert out.num_detections == 1
-    raw_big = _make_raw_tensors([[100, 100]], [0.9], sizes=[2000.0])  # ellipse ~1571
-    out_big = filter_from_tensors(
-        raw_big, _cpu_config(max_object_size=1000.0), None, _cuda_rt()
-    )
-    assert out_big.num_detections == 0
-
-
-def test_filter_from_tensors_roi_mask():
-    raw = _make_raw_tensors([[50, 50], [300, 300]], [0.9, 0.9])
-    mask = torch.zeros(400, 400, dtype=torch.uint8)
-    mask[0:100, 0:100] = 1
-    result = filter_from_tensors(raw, _cpu_config(), mask, _cuda_rt())
-    assert result.num_detections == 1
-    assert result.centroids[0, 0] == pytest.approx(50.0)
-
-
-def test_filter_from_tensors_empty_input():
-    raw = _RawOBBTensors(
-        frame_idx=0,
-        xywhr=torch.zeros((0, 5)),
-        corners=torch.zeros((0, 4, 2)),
-        conf=torch.zeros(0),
-    )
-    result = filter_from_tensors(raw, _cpu_config(), None, _cuda_rt())
-    assert result.num_detections == 0
-
-
-def test_filter_from_tensors_assigns_detection_ids():
-    """CUDA path constructs detection_ids on the post-filter subset."""
-    raw = _make_raw_tensors([[100, 100], [200, 200]], [0.9, 0.8], frame_idx=3)
-    result = filter_from_tensors(
-        raw, _cpu_config(confidence_threshold=0.5), None, _cuda_rt()
-    )
-    assert result.num_detections == 2
-    assert result.detection_ids.shape == (2,)
-    assert result.detection_ids.dtype == np.int64
-    # IDs follow the standard frame_idx * STRIDE + slot convention
-    assert result.detection_ids[0] == 3 * 10000
-
-
-def test_filter_raw_dispatches_to_cpu_path():
-    raw = _make_obb([[100, 100], [200, 200]], [0.3, 0.8])
-    result = filter_raw(
-        raw, _cpu_config(confidence_threshold=0.5), None, None, _cpu_rt()
-    )
-    assert isinstance(result, OBBResult)
-    assert result.num_detections == 1
-
-
-def test_filter_raw_dispatches_to_gpu_path():
-    raw = _make_raw_tensors([[100, 100], [200, 200]], [0.3, 0.8])
-    result = filter_raw(
-        raw, _cpu_config(confidence_threshold=0.5), None, None, _cuda_rt()
-    )
-    assert isinstance(result, OBBResult)
-    assert result.num_detections == 1
-
-
 def test_final_cap_keeps_most_confident_not_largest():
     """When detections exceed max_detections, keep the most CONFIDENT.
 
@@ -362,18 +241,3 @@ def test_final_cap_keeps_most_confident_not_largest():
     out2, idx = filter_with_indices(raw, cfg)
     assert sorted(out2.confidences.tolist()) == pytest.approx([0.80, 0.99])
     assert len(idx) == 2
-
-
-def test_final_cap_confidence_based_on_cuda_tensor_path():
-    """The tensor path applies the same confidence-ordered cap."""
-    centroids = [(50.0, 50.0), (200.0, 200.0), (350.0, 350.0)]
-    confidences = [0.99, 0.80, 0.70]
-    sizes = [100.0, 900.0, 1600.0]
-    raw = _make_raw_tensors(centroids, confidences, sizes=sizes)
-    cfg = _cpu_config(confidence_threshold=0.0, iou_threshold=1.0, max_detections=2)
-
-    out = filter_from_tensors(raw, cfg, None, _cuda_rt())
-    assert out.num_detections == 2
-    assert sorted(out.confidences.tolist()) == pytest.approx([0.80, 0.99])
-    # sizes on the tensor path are w*h = (sqrt(size))^2 ≈ size.
-    assert sorted(round(s) for s in out.sizes.tolist()) == [100, 900]

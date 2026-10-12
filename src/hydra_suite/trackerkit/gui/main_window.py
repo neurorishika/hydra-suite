@@ -2504,6 +2504,7 @@ class MainWindow(QMainWindow):
         usage_role=None,
         repository_dir=None,
         recursive=False,
+        unregistered_dirs=None,
     ):
         """Populate a YOLO-model combo with optional metadata role filtering."""
         self._config_orch._populate_yolo_model_combo(
@@ -2515,6 +2516,7 @@ class MainWindow(QMainWindow):
             usage_role=usage_role,
             repository_dir=repository_dir,
             recursive=recursive,
+            unregistered_dirs=unregistered_dirs,
         )
 
     def _set_model_selection_for_selector(self, combo, model_path, default_path=""):
@@ -3298,7 +3300,28 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_parameter_changed(self):
-        params = self.get_parameters_dict()
+        from hydra_suite.core.inference.limits import (
+            MAX_DETECTIONS_PER_FRAME,
+            DetectionLimitError,
+        )
+
+        try:
+            params = self.get_parameters_dict()
+        except DetectionLimitError as exc:
+            # Fires on every edit: non-modal, live message only.
+            self.statusBar().showMessage(f"Detection limit exceeded: {exc}")
+            self._setup_panel.lbl_animals_per_arena_total.setText(
+                f"exceeds the {MAX_DETECTIONS_PER_FRAME}-animal limit"
+            )
+            return
+        # Back under the limit: drop the stale limit message (only ours) and
+        # restore the total label it replaced.
+        bar = self.statusBar()
+        if str(bar.currentMessage()).startswith("Detection limit exceeded"):
+            bar.clearMessage()
+        label = self._setup_panel.lbl_animals_per_arena_total
+        if str(label.text()).startswith("exceeds the"):
+            self._update_animals_per_arena_total_label()
         self.parameters_changed.emit(params)
 
     def _create_help_label(self, text, attach_to_title=True):

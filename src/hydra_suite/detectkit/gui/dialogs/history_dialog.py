@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.slice_meta import read_slice_meta, training_geometry
+from hydra_suite.detectkit.evaluation import USABLE_RUN_STATUSES
 from hydra_suite.detectkit.gui.dialogs._base import DetectKitDialog
 from hydra_suite.detectkit.jobs.direct_calibration import (
     load_direct_calibration,
@@ -234,8 +235,8 @@ class HistoryDialog(DetectKitDialog):
     def _status_label(entry: dict) -> str:
         status = str(entry.get("status", "") or "unknown").strip()
         if entry.get("project_model_path") or entry.get("project_model_paths"):
-            if status == "completed":
-                return "completed/exported"
+            if status in USABLE_RUN_STATUSES:
+                return f"{status}/exported"
         return status or "unknown"
 
     @staticmethod
@@ -339,7 +340,7 @@ class HistoryDialog(DetectKitDialog):
         status = str(entry.get("status", "") or "")
         return (
             role in _DIRECT_DETECTOR_ROLES
-            and status == "completed"
+            and status in USABLE_RUN_STATUSES
             and bool(_calibration_model_path(entry)[0])
         )
 

@@ -49,11 +49,11 @@ from hydra_suite.core.inference.config import InferenceConfig, build_obb_only_co
 # Detection ceiling for AL scoring passes.
 #
 # `build_obb_only_config`'s own default is `max_targets=8`, which
-# `build_inference_config_from_params` turns into `raw_detection_cap=16`
-# (applied at RAW extraction, before any filtering, sorted by confidence) and
-# `max_detections=8` (applied after filtering, keeping the LARGEST, not the
-# most confident). Those caps exist for tracking, where MAX_TARGETS is the
-# user's declared animal count. They are actively wrong for AL:
+# `build_inference_config_from_params` turns into `max_detections=8` (applied
+# after filtering, keeping the LARGEST, not the most confident). RAW
+# extraction is N-free (bounded only by MAX_DETECTIONS_PER_FRAME). That cap
+# exists for tracking, where MAX_TARGETS is the user's declared animal count.
+# It is actively wrong for AL:
 #
 #   * every AL signal (`n_detections`, `count_deviation`, `crowd_score`,
 #     `fragmentation_score`, `uncertainty_score`, NMS instability) is supposed
@@ -67,7 +67,7 @@ from hydra_suite.core.inference.config import InferenceConfig, build_obb_only_co
 # per-frame AL detector closure (`predict_obb_for_frame*`, calling
 # `executor.predict()` with no cap) effectively ran under. Restoring that value
 # restores the pre-Task-5 AL behaviour rather than inventing a new ceiling,
-# while still keeping the pass bounded (raw cap 600) instead of unbounded.
+# while extraction stays bounded by MAX_DETECTIONS_PER_FRAME.
 AL_DEFAULT_MAX_TARGETS = 300
 
 

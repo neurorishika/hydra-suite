@@ -88,3 +88,55 @@ def test_masking_shared_batch_is_bit_identical_and_keeps_input_unmodified():
     assert np.array_equal(actual.detection_ids, reference.detection_ids)
     assert np.array_equal(actual.frame_index, reference.frame_index)
     assert np.array_equal(actual.native_sizes, reference.native_sizes)
+
+
+def _three_overlapping_obbs():
+    xs = np.array([20.0, 30.0, 40.0], np.float32)
+    c = np.stack([xs, np.full(3, 20.0, np.float32)], 1)
+    corners = np.stack([c + d for d in ([-8, -8], [8, -8], [8, 8], [-8, 8])], 1)
+    return OBBResult(
+        frame_idx=0,
+        centroids=c,
+        angles=np.zeros(3, np.float32),
+        sizes=np.full(3, 256, np.float32),
+        shapes=np.ones((3, 2), np.float32),
+        confidences=np.ones(3, np.float32),
+        corners=corners.astype(np.float32),
+        detection_ids=np.array([0, 1, 2], np.int64),
+    )
+
+
+def test_foreign_set_masks_a_subset_crop_like_the_full_frame():
+    """Cropping a subset with the full set as foreign == the full crop's rows."""
+    from hydra_suite.core.inference.stages.crops import ForeignSet
+    from hydra_suite.core.inference.stages.filtering import _select
+
+    rng = np.random.default_rng(3)
+    frame = rng.integers(1, 255, (64, 64, 3), dtype=np.uint8)
+    rt = RuntimeContext(
+        cuda_mode=False, device="cpu", use_nvdec=False, tensor_on_cuda=False
+    )
+    full = _three_overlapping_obbs()
+    reference = extract_canonical_crops_batch(
+        [frame], [full], _GEOM, rt, suppress_foreign=True
+    )
+    rows = np.array([1])  # a single-row subset still needs masking
+    sub = _select(full, rows)
+    foreign = {0: ForeignSet(corners=full.corners, self_rows=rows)}
+
+    direct = extract_canonical_crops_batch(
+        [frame], [sub], _GEOM, rt, suppress_foreign=True, foreign_by_frame=foreign
+    )
+    assert torch.equal(direct.crops, reference.crops[1:2])
+
+    shared = extract_canonical_crops_batch([frame], [sub], _GEOM, rt)
+    masked = apply_foreign_mask_to_crop_batch(
+        shared, _GEOM, (0, 0, 0), foreign_by_frame=foreign
+    )
+    assert torch.equal(masked.crops, reference.crops[1:2])
+
+    # Without the foreign set the subset crop is NOT masked like the full frame.
+    alone = extract_canonical_crops_batch(
+        [frame], [sub], _GEOM, rt, suppress_foreign=True
+    )
+    assert not torch.equal(alone.crops, reference.crops[1:2])

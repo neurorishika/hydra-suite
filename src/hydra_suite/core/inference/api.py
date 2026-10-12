@@ -3,7 +3,6 @@
 Keep this surface minimal: each helper exists to support a specific kept consumer
 that cannot directly depend on the internal stages module.
 
-Correction 21: apply_detection_filter shim for optimizer.py and optimizer_workers.py
 Correction 22: predict_pose_for_image helper and create_pose_backend_from_config
   shim for posekit/gui/workers.py.
   create_pose_backend_from_config re-exports from core/individual/pose/api.py
@@ -14,10 +13,6 @@ Correction 22: predict_pose_for_image helper and create_pose_backend_from_config
 
 from __future__ import annotations
 
-from .config import OBBConfig
-from .result import OBBResult
-from .stages.filtering import filter_detections
-
 # Correction 22: stable re-export so posekit/gui/workers.py does not need to
 # import from the soon-to-be-deleted core/individual/pose/api module.
 try:
@@ -26,16 +21,6 @@ try:
     )
 except ImportError:
     create_pose_backend_from_config = None  # type: ignore[assignment]
-
-
-def apply_detection_filter(raw: OBBResult, config: OBBConfig) -> OBBResult:
-    """Filter raw OBB detections using the same logic the runner uses internally.
-
-    Used by core/tracking/optimization/optimizer.py and optimizer_workers.py to score
-    parameter configurations against cached detections. Pure function — no I/O,
-    no model loading.
-    """
-    return filter_detections(raw, config, roi_mask=None)
 
 
 def load_pose_backend(

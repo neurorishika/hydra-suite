@@ -1345,6 +1345,12 @@ class ALBatchWorker(QRunnable):
         balance_mode: bool = False,
         image_labels=None,
         class_names=None,
+        predicted_labels=None,
+        prediction_confidence=None,
+        trusted_label_mask=None,
+        error_fraction: float | None = None,
+        rare_cluster_fraction: float | None = None,
+        rare_alpha: float | None = None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -1356,6 +1362,12 @@ class ALBatchWorker(QRunnable):
         self.balance_mode = balance_mode
         self.image_labels = image_labels
         self.class_names = class_names
+        self.predicted_labels = predicted_labels
+        self.prediction_confidence = prediction_confidence
+        self.trusted_label_mask = trusted_label_mask
+        self.error_fraction = error_fraction
+        self.rare_cluster_fraction = rare_cluster_fraction
+        self.rare_alpha = rare_alpha
         self.signals = TaskSignals()
 
     @Slot()
@@ -1400,9 +1412,17 @@ class ALBatchWorker(QRunnable):
                     pass
 
             self.signals.progress.emit(50, "Running batch acquisition selection...")
+            cfg_kwargs = {}
+            if self.error_fraction is not None:
+                cfg_kwargs["error_fraction"] = float(self.error_fraction)
+            if self.rare_cluster_fraction is not None:
+                cfg_kwargs["rare_cluster_fraction"] = float(self.rare_cluster_fraction)
+            if self.rare_alpha is not None:
+                cfg_kwargs["rare_alpha"] = float(self.rare_alpha)
             cfg = BatchConfig(
                 batch_size=min(self.batch_size, int(unlabeled_mask.sum())),
                 balance_mode=self.balance_mode,
+                **cfg_kwargs,
             )
             acq = BatchAcquisition(cfg)
             selected, breakdown = acq.select_batch(
@@ -1414,11 +1434,18 @@ class ALBatchWorker(QRunnable):
                 cluster_densities=cluster_densities,
                 image_labels=self.image_labels,
                 class_names=self.class_names,
+                predicted_labels=self.predicted_labels,
+                prediction_confidence=self.prediction_confidence,
+                trusted_label_mask=self.trusted_label_mask,
             )
 
             self.signals.progress.emit(100, f"Selected {len(selected)} candidates!")
             self.signals.success.emit(
-                {"selected_indices": selected, "breakdown": breakdown}
+                {
+                    "selected_indices": selected,
+                    "breakdown": breakdown,
+                    "info": dict(acq.last_info),
+                }
             )
 
         except Exception as e:

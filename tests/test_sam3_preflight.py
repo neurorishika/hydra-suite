@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -357,7 +358,7 @@ def test_compact_high_cardinality_metadata_is_rejected_before_json_load(
 ):
     path = tmp_path / "many-values.json"
     path.write_text('{"images":[0,1,2,3,4,5]}', encoding="utf-8")
-    monkeypatch.setattr(pf, "_MAX_JSON_VALUES", 6)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 6 * 64)
     monkeypatch.setattr(
         pf.json,
         "loads",
@@ -371,7 +372,7 @@ def test_compact_high_cardinality_metadata_is_rejected_before_json_load(
 def test_raw_metadata_read_is_hard_capped_with_compact_fixture(tmp_path, monkeypatch):
     path = tmp_path / "raw-cap.json"
     path.write_text('{"images":[]}', encoding="utf-8")
-    monkeypatch.setattr(pf, "_MAX_COCO_METADATA_BYTES", 8)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 16)
     monkeypatch.setattr(
         pf.json,
         "loads",
@@ -399,7 +400,7 @@ def test_compact_deep_metadata_is_rejected_before_json_load(tmp_path, monkeypatc
 def test_estimated_parsed_metadata_is_capped_before_json_load(tmp_path, monkeypatch):
     path = tmp_path / "expanded.json"
     path.write_text('{"images":[{"file_name":"abcdefghij"}]}', encoding="utf-8")
-    monkeypatch.setattr(pf, "_MAX_ESTIMATED_PARSED_BYTES", 64)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 640)
     monkeypatch.setattr(
         pf.json,
         "loads",
@@ -408,6 +409,47 @@ def test_estimated_parsed_metadata_is_capped_before_json_load(tmp_path, monkeypa
 
     with pytest.raises(ValueError, match="parsed-memory"):
         pf._load_coco(path)
+
+
+def test_metadata_parse_budget_scales_with_usable_host_memory(monkeypatch):
+    import psutil
+
+    gib = 1024**3
+    host = SimpleNamespace(total=16 * gib, available=12 * gib)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: host)
+    # reserve = max(8 GiB, 15% of 16 GiB); a quarter of the remaining 4 GiB.
+    assert pf._metadata_parse_budget_bytes() == 1 * gib
+
+    host = SimpleNamespace(total=2048 * gib, available=1900 * gib)
+    big = pf._metadata_parse_budget_bytes()
+    assert big == pf._MAX_METADATA_PARSE_BUDGET_BYTES
+    # The 25.6 MB / ~1.5M-value COCO file that the old fixed 16 MiB / 2M /
+    # 96 MiB caps refused fits easily on such a host.
+    assert big // 2 > 25_607_715 and big // 64 > 1_536_730
+
+
+def test_metadata_parse_budget_never_drops_below_former_fixed_bound(monkeypatch):
+    import psutil
+
+    host = SimpleNamespace(total=16 * 1024**3, available=1024**3)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: host)
+
+    assert pf._metadata_parse_budget_bytes() == 96 * 1024**2
+
+
+def test_metadata_larger_than_a_small_budget_loads_under_a_larger_one(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "scales.json"
+    path.write_text('{"images":[{"file_name":"abcdefghij"}]}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="parsed-memory"):
+        pf._load_coco(path, budget_bytes=640)
+    monkeypatch.setattr(pf, "_metadata_parse_budget_bytes", lambda: 4096)
+    coco, size = pf._load_coco(path)
+
+    assert coco["images"][0]["file_name"] == "abcdefghij"
+    assert size == path.stat().st_size
 
 
 def test_invalid_or_crowd_polygons_do_not_satisfy_example_floor(tmp_path):
@@ -1815,3 +1857,31 @@ def test_the_stamped_analytic_estimate_is_the_one_the_budget_used(
             decision.budget.accelerator_peak_bytes
             == decision.device_peak_analytic_bytes
         )
+
+
+def test_valid_epoch_checkpoint_resume_is_admitted(tmp_path):
+    _write_coco(tmp_path)
+    spec = _spec(tmp_path)
+    run_dir = tmp_path / "old_run"
+    (run_dir / "checkpoints").mkdir(parents=True)
+    (run_dir / "spec.json").write_text("{}")
+    checkpoint = run_dir / "checkpoints" / "epoch_002.pt"
+    checkpoint.write_bytes(b"x")
+    checkpoint.with_name("epoch_002.pt.complete.json").write_text("{}")
+    spec.resume_from = str(checkpoint)
+
+    decision = _decision(spec)
+
+    assert not any("resum" in r.lower() for r in decision.refusals), decision.refusals
+
+
+def test_metadata_parse_budget_has_an_absolute_ceiling(monkeypatch):
+    import psutil
+
+    gib = 1024**3
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=4096 * gib, available=4000 * gib),
+    )
+    assert pf._metadata_parse_budget_bytes() == pf._MAX_METADATA_PARSE_BUDGET_BYTES

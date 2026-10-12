@@ -218,12 +218,14 @@ class SetupPanel(QWidget):
         # never entered directly) -- lbl_animals_per_arena_total shows that
         # derived total live so it's never silently wrong.
         self.spin_max_targets = QSpinBox()
-        self.spin_max_targets.setRange(1, 200)
+        from hydra_suite.core.inference.limits import MAX_DETECTIONS_PER_FRAME
+
+        self.spin_max_targets.setRange(1, MAX_DETECTIONS_PER_FRAME)
         self.spin_max_targets.setValue(4)
         self.spin_max_targets.setFixedHeight(30)
         self.spin_max_targets.setMinimumWidth(84)
         self.spin_max_targets.setToolTip(
-            "Number of animals PER ARENA (1-200) -- with a single arena this\n"
+            f"Number of animals PER ARENA (1-{MAX_DETECTIONS_PER_FRAME}) -- with a single arena this\n"
             "is the total. The overall slot count (MAX_TARGETS) is derived as\n"
             "n_arenas * this value once more than one arena is drawn.\n"
             "Higher values use more memory and may slow down processing."

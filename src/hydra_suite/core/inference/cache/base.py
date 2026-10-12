@@ -21,7 +21,10 @@ from dataclasses import dataclass
 #      (absolute path, mtime)-based, so a cache produced on a compute box is
 #      reusable on the staging machine. ``model_path``+``model_mtime`` collapse
 #      into a single ``model_id``. See the portable-jobs design, section 7b.
-CACHE_SCHEMA_VERSION = 5
+# v6 = N-independent extraction: detection caches store every candidate
+#      >= EXTRACTION_CONFIDENCE_FLOOR (0.01) up to MAX_DETECTIONS_PER_FRAME,
+#      confidence-ranked; N left the detection key (applied at replay).
+CACHE_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)

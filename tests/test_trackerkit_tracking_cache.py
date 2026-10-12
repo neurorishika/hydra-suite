@@ -153,3 +153,16 @@ def test_normalize_tracking_cache_value_handles_native_nonfinite_floats():
         "pos_inf": "Infinity",
     }
     assert json.dumps(normalized, sort_keys=True, allow_nan=False)
+
+
+def test_tracking_cache_ids_ignore_max_targets():
+    base = {
+        "DETECTION_METHOD": "background_subtraction",
+        "RESIZE_FACTOR": 1.0,
+        "COMPUTE_RUNTIME": "cpu",
+        "MAX_TARGETS": 4,
+    }
+    other = dict(base, MAX_TARGETS=400)
+    assert get_tracking_cache_model_ids(
+        base, "background_subtraction"
+    ) == get_tracking_cache_model_ids(other, "background_subtraction")

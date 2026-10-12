@@ -100,6 +100,7 @@ nav:
   - TrackerKit Command Line: user-guide/trackerkit-cli.md
   - Portable Tracking Jobs: user-guide/trackerkit-jobs.md
   - Detection Modes: user-guide/detection-modes.md
+  - Detection Limits: user-guide/detection-limits.md
   - Tracking and Merging: user-guide/tracking-and-merging.md
   - Post-processing: user-guide/post-processing.md
   - Configuration Reference: user-guide/configuration-reference.md
@@ -114,6 +115,7 @@ nav:
   - "SAM2 and SAM3: Install and Run": user-guide/sam-install-and-run.md
   - "DetectKit: Semantic Escalation (SAM3)": user-guide/detectkit-semantic-escalation.md
   - "DetectKit: SAHI Calibration Profiles": user-guide/detectkit-sahi-calibration.md
+  - "SAHI Settings (TrackerKit + DetectKit)": user-guide/sahi-settings.md
   - FilterKit: user-guide/filterkit.md
   - RefineKit: user-guide/refinekit.md
   - Troubleshooting: user-guide/troubleshooting.md

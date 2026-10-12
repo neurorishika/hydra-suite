@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # dataset, and has no independent grounding. It exists to prefill the dialog
 # when the user skips calibration. Calibration sweeps TILE_FRACTION_GRID
 # against the user's own labelled frames and the user picks the point.
+# Deliberately DISTINCT from BACKEND_DEFAULTS["sam3"] in utils/tiling_spec
+# (0.055): that is the SAM3 TRAINING default; this is the ESCALATION seed. It
+# stays 0.05 because it sits on TILE_FRACTION_GRID and the dialog label,
+# persistence tests and staged-cache fingerprints depend on it.
 SEMANTIC_TILE_FRACTION_SEED = 0.05
 # None means "no tiling, one full-frame pass" -- the right answer on a rig
 # where animals are already large at native resolution, where tiling HURTS.

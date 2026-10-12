@@ -10,7 +10,7 @@ import sys
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator, TextIO
@@ -80,7 +80,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--resume",
         metavar="LAST_PT",
-        help="Resume a single-role Ultralytics plan from a last.pt checkpoint.",
+        help=(
+            "Resume a single-role plan: an Ultralytics last.pt, or a SAM3 "
+            "run's checkpoints/epoch_NNN.pt (reuses that run's prepared dataset)."
+        ),
     )
     return parser
 
@@ -193,7 +196,7 @@ def _apply_resume(entries, checkpoint: str | None, config_dir: Path):
         raise TrainingPlanError("--resume requires a plan containing exactly one role")
     entry = entries[0]
     if entry.role.value == "semantic_sam3":
-        raise TrainingPlanError("--resume is not supported for SAM3 training")
+        return [_apply_sam3_resume(entry, checkpoint)]
     checkpoint_path = Path(checkpoint).expanduser()
     if not checkpoint_path.is_absolute():
         checkpoint_path = config_dir / checkpoint_path
@@ -217,15 +220,73 @@ def _validate_resume_request(
         return None
     if len(plan.roles) != 1:
         raise TrainingPlanError("--resume requires a plan containing exactly one role")
-    if plan.roles[0].role.value == "semantic_sam3":
-        raise TrainingPlanError("--resume is not supported for SAM3 training")
     checkpoint_path = Path(checkpoint).expanduser()
     if not checkpoint_path.is_absolute():
         checkpoint_path = config_dir / checkpoint_path
     checkpoint_path = checkpoint_path.resolve()
     if not checkpoint_path.is_file():
         raise TrainingPlanError(f"Resume checkpoint not found: {checkpoint_path}")
+    if plan.roles[0].role.value == "semantic_sam3":
+        _sam3_resume_dataset_dir(str(checkpoint_path))
     return str(checkpoint_path)
+
+
+def _sam3_resume_dataset_dir(checkpoint: str) -> str:
+    """The interrupted SAM3 run's prepared dataset, which a resume reuses.
+
+    Re-preparing is not an option: preparation is not byte-reproducible, and
+    a different tile set changes the step count, the LR schedule and the
+    validation split the replayed losses were measured on.
+    """
+
+    from hydra_suite.training.sam3_lora.resume import (
+        ResumeError,
+        load_run_spec_payload,
+        parse_resume_checkpoint,
+    )
+
+    try:
+        payload = load_run_spec_payload(parse_resume_checkpoint(checkpoint).run_dir)
+    except ResumeError as exc:
+        raise TrainingPlanError(str(exc)) from exc
+    dataset_dir = str(payload.get("derived_dataset_dir") or "")
+    if not dataset_dir or not Path(dataset_dir).is_dir():
+        raise TrainingPlanError(
+            "The interrupted SAM3 run's prepared dataset is gone "
+            f"({dataset_dir or 'not recorded'}); it cannot be resumed faithfully."
+        )
+    return dataset_dir
+
+
+def _apply_sam3_resume(entry, checkpoint: str):
+    """Point a SAM3 entry at the interrupted run, refusing any drift."""
+
+    from hydra_suite.training.sam3_lora.resume import (
+        load_run_spec_payload,
+        parse_resume_checkpoint,
+        resume_spec_mismatches,
+    )
+
+    saved = load_run_spec_payload(parse_resume_checkpoint(checkpoint).run_dir)
+    spec = entry.spec
+    # Train at the batch the interrupted run resolved, never re-probe: a
+    # different batch changes steps_per_epoch and so the whole schedule.
+    sam3_params = replace(
+        spec.sam3_params, batch=int(saved["sam3_params"].get("batch", 0))
+    )
+    problems = resume_spec_mismatches(saved, asdict(sam3_params), spec.seed)
+    if saved.get("derived_dataset_dir") != spec.derived_dataset_dir:
+        problems.append(
+            f"derived_dataset_dir: {saved.get('derived_dataset_dir')!r} -> "
+            f"{spec.derived_dataset_dir!r}"
+        )
+    if problems:
+        raise TrainingPlanError(
+            "This plan no longer matches the interrupted SAM3 run, so resuming "
+            "would continue a different run: " + "; ".join(problems)
+        )
+    resumed_spec = replace(spec, sam3_params=sam3_params, resume_from=checkpoint)
+    return replace(entry, spec=resumed_spec)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -265,22 +326,37 @@ def run(args: argparse.Namespace) -> int:
         previous_handlers = _install_cancel_handlers(cancel_event)
         try:
             orchestrator = TrainingOrchestrator(workspace)
-            prepared = prepare_role_datasets(
-                orchestrator,
-                plan.preparation_request(),
-                log=lambda message: print(message, flush=True),
-                status=lambda message: print(message, flush=True),
-                should_cancel=cancel_event.is_set,
-            )
-            if prepared.preflight is not None:
-                _write_session_file(
-                    session_dir, "preflight.json", prepared.preflight.to_dict()
+            if resume_checkpoint and plan.roles[0].role.value == "semantic_sam3":
+                # Reuse the interrupted run's dataset; see
+                # `_sam3_resume_dataset_dir` for why nothing is re-prepared.
+                dataset_dir = _sam3_resume_dataset_dir(resume_checkpoint)
+                print(
+                    f"SAM3 resume: reusing prepared dataset {dataset_dir}",
+                    flush=True,
                 )
-            preparation_summary = {
-                "role_dataset_dirs": prepared.role_dataset_dirs,
-                "roles": [role.value for role in prepared.roles],
-                "measured_reference_body_px": prepared.measured_reference_body_px,
-            }
+                preparation_summary = {
+                    "role_dataset_dirs": {"semantic_sam3": dataset_dir},
+                    "roles": ["semantic_sam3"],
+                    "measured_reference_body_px": None,
+                    "resumed_from": resume_checkpoint,
+                }
+            else:
+                prepared = prepare_role_datasets(
+                    orchestrator,
+                    plan.preparation_request(),
+                    log=lambda message: print(message, flush=True),
+                    status=lambda message: print(message, flush=True),
+                    should_cancel=cancel_event.is_set,
+                )
+                if prepared.preflight is not None:
+                    _write_session_file(
+                        session_dir, "preflight.json", prepared.preflight.to_dict()
+                    )
+                preparation_summary = {
+                    "role_dataset_dirs": prepared.role_dataset_dirs,
+                    "roles": [role.value for role in prepared.roles],
+                    "measured_reference_body_px": prepared.measured_reference_body_px,
+                }
             _write_session_file(
                 session_dir, "prepared_datasets.json", preparation_summary
             )
@@ -288,7 +364,7 @@ def run(args: argparse.Namespace) -> int:
                 print(json.dumps(preparation_summary, indent=2))
                 return 0
 
-            entries = plan.role_entries(prepared.role_dataset_dirs)
+            entries = plan.role_entries(preparation_summary["role_dataset_dirs"])
             entries = _apply_resume(entries, resume_checkpoint, config_path.parent)
             results = run_role_entries(
                 orchestrator,

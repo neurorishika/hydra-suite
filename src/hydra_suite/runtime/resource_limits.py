@@ -201,7 +201,10 @@ def build_limited_launch(
             "--quiet",
             "--unit",
             unit,
-            f"--property=MemoryHigh={limits.soft_host_bytes}",
+            # No MemoryHigh: crossing it makes the kernel throttle the whole
+            # scope, which systemd-oomd reads as >50% PSI pressure and kills
+            # the job. The soft limit is enforced gracefully by the PSS
+            # watchdog; MemoryMax stays as the hard backstop.
             f"--property=MemoryMax={limits.hard_host_bytes}",
             "--property=MemorySwapMax=0",
             f"--property=TasksMax={limits.max_processes}",
@@ -335,7 +338,7 @@ def signal_systemd_scope(
                 "--user",
                 "kill",
                 f"--signal={int(signum)}",
-                "--kill-whom=all",
+                "--kill-who=all",
                 unit,
             ],
             check=False,

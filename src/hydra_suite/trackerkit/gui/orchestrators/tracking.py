@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import gc
-import hashlib
-import json
 import logging
 import os
 import shutil
@@ -12,7 +10,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -23,10 +20,7 @@ from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_pa
 from hydra_suite.trackerkit.gui.workers.session_worker import SessionWorker
 from hydra_suite.trackerkit.headless_tracking import build_tracking_csv_header
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
-from hydra_suite.trackerkit.tracking_cache import (
-    plan_tracking_cache,
-    resolve_detection_cache_runtime,
-)
+from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
 from hydra_suite.utils.video_artifacts import (
     build_inference_cache_dir,
     candidate_artifact_base_dirs,
@@ -113,6 +107,12 @@ class TrackingOrchestrator:
             self._calibration_dialog = None
             return False
 
+    def _params_or_report_limit(self, context: str):
+        """``get_parameters_dict()`` or ``None`` after telling the user why not."""
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        return params_or_report_limit(self._mw, context)
+
     def open_calibration_dialog(self) -> None:
         """Open the one-click Calibrate dialog.
 
@@ -161,7 +161,9 @@ class TrackingOrchestrator:
         from hydra_suite.trackerkit.calibrate_cli import derive_context_inputs
         from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
 
-        params = self._mw.get_parameters_dict()
+        params = self._params_or_report_limit("Calibration")
+        if params is None:
+            return
         inference_config = build_inference_config_from_params(params)
 
         class _FrameCountProbe:
@@ -1026,10 +1028,13 @@ class TrackingOrchestrator:
                 self._mw, "current_detected_properties_cache_path", None
             ),
         }
+        session_params = self._params_or_report_limit("Post-processing session")
+        if session_params is None:
+            return
         worker = SessionWorker(
             video_path=video_path,
             config=self._build_session_config(),
-            params=self._mw.get_parameters_dict(),
+            params=session_params,
             paths=paths,
         )
         self._mw.session_worker = worker
@@ -1504,7 +1509,9 @@ class TrackingOrchestrator:
         self._mw._tracking_first_frame = True
         self._mw.csv_writer_thread = None
 
-        params = self._mw.get_parameters_dict()
+        params = self._params_or_report_limit("Tracking preview")
+        if params is None:
+            return
         if not self._validate_yolo_model_requirements(
             params, mode_label="tracking preview"
         ):
@@ -1588,248 +1595,17 @@ class TrackingOrchestrator:
         self._mw._apply_ui_state("preview")
         self._mw.tracking_worker.start()
 
-    @staticmethod
-    def _normalize_for_hash(value: object):
-        """Convert values to deterministic, JSON-safe forms for hashing."""
-        if isinstance(value, np.ndarray):
-            arr = np.ascontiguousarray(value)
-            return {
-                "type": "ndarray",
-                "dtype": str(arr.dtype),
-                "shape": list(arr.shape),
-                "digest": hashlib.md5(arr.tobytes()).hexdigest(),
-            }
-        if isinstance(value, np.integer):
-            return int(value)
-        if isinstance(value, np.floating):
-            if np.isnan(value):
-                return "NaN"
-            if np.isinf(value):
-                return "Infinity" if value > 0 else "-Infinity"
-            return float(value)
-        if isinstance(value, np.bool_):
-            return bool(value)
-        if isinstance(value, Path):
-            return str(value)
-        if isinstance(value, dict):
-            return {
-                str(k): TrackingOrchestrator._normalize_for_hash(v)
-                for k, v in sorted(value.items(), key=lambda item: str(item[0]))
-            }
-        if isinstance(value, (list, tuple)):
-            return [TrackingOrchestrator._normalize_for_hash(v) for v in value]
-        return value
-
-    @staticmethod
-    def _get_model_fingerprint(model_path: object):
-        """Return size/mtime fingerprint dict for a model file."""
-        from hydra_suite.trackerkit.gui.main_window import (
-            resolve_model_path as _resolve_model_path,
-        )
-
-        configured = str(model_path or "")
-        resolved = str(_resolve_model_path(configured))
-        fingerprint = {"configured_path": configured, "resolved_path": resolved}
-        if resolved and os.path.exists(resolved):
-            try:
-                stat = os.stat(resolved)
-                fingerprint["size_bytes"] = stat.st_size
-                fingerprint["mtime_ns"] = stat.st_mtime_ns
-            except OSError:
-                fingerprint["size_bytes"] = None
-                fingerprint["mtime_ns"] = None
-        else:
-            fingerprint["size_bytes"] = None
-            fingerprint["mtime_ns"] = None
-        return fingerprint
-
-    def _get_cache_model_ids(self, params, detection_method):
-        """Generate raw-detection and TensorRT-engine cache identity keys."""
-        resize_factor = params.get("RESIZE_FACTOR", 1.0)
-        resize_str = f"r{int(resize_factor * 100)}"
-        _compute_runtime = resolve_detection_cache_runtime(params)
-
-        def _extract(keys):
-            return {
-                k: self._normalize_for_hash(
-                    _compute_runtime if k == "COMPUTE_RUNTIME" else params.get(k)
-                )
-                for k in keys
-            }
-
-        def _build_id(prefix, cache_params, model_stem=""):
-            digest = hashlib.md5(
-                json.dumps(cache_params, sort_keys=True).encode("utf-8")
-            ).hexdigest()[:12]
-            if model_stem:
-                return f"{prefix}_{model_stem}_{resize_str}_{digest}"
-            return f"{prefix}_{resize_str}_{digest}"
-
-        common_detection_keys = (
-            "DETECTION_METHOD",
-            "RESIZE_FACTOR",
-            "MAX_TARGETS",
-            "COMPUTE_RUNTIME",
-        )
-
-        if detection_method == "yolo_obb":
-            return self._get_yolo_obb_cache_ids(
-                params, common_detection_keys, _extract, _build_id
-            )
-
-        bg_detection_keys = (
-            "MAX_CONTOUR_MULTIPLIER",
-            "ENABLE_SIZE_FILTERING",
-            "MIN_OBJECT_SIZE",
-            "MAX_OBJECT_SIZE",
-            "ROI_MASK",
-            "BACKGROUND_PRIME_FRAMES",
-            "ENABLE_ADAPTIVE_BACKGROUND",
-            "BACKGROUND_LEARNING_RATE",
-            "ENABLE_GPU_BACKGROUND",
-            "GPU_DEVICE_ID",
-            "THRESHOLD_VALUE",
-            "MORPH_KERNEL_SIZE",
-            "ENABLE_ADDITIONAL_DILATION",
-            "DILATION_ITERATIONS",
-            "DILATION_KERNEL_SIZE",
-            "BRIGHTNESS",
-            "CONTRAST",
-            "GAMMA",
-            "DARK_ON_LIGHT_BACKGROUND",
-            "ENABLE_LIGHTING_STABILIZATION",
-            "LIGHTING_SMOOTH_FACTOR",
-            "LIGHTING_MEDIAN_WINDOW",
-            "ENABLE_CONSERVATIVE_SPLIT",
-            "CONSERVATIVE_KERNEL_SIZE",
-            "CONSERVATIVE_ERODE_ITER",
-            "MIN_CONTOUR_AREA",
-            "MIN_DETECTIONS_TO_START",
-            "MIN_DETECTION_COUNTS",
-        )
-        cache_params = {
-            "common": _extract(common_detection_keys),
-            "background_subtraction": _extract(bg_detection_keys),
-        }
-        return {
-            "inference": _build_id("bgsub", cache_params),
-            "engine": None,
-        }
-
-    def _get_yolo_obb_cache_ids(
-        self, params, common_detection_keys, _extract, _build_id
-    ):
-        """Build YOLO-OBB inference and engine cache IDs."""
-        yolo_mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
-        direct_model = params.get(
-            "YOLO_OBB_DIRECT_MODEL_PATH",
-            params.get("YOLO_MODEL_PATH", "best.pt"),
-        )
-        crop_obb_model = params.get(
-            "YOLO_CROP_OBB_MODEL_PATH", params.get("YOLO_MODEL_PATH", "best.pt")
-        )
-        active_obb_model = direct_model if yolo_mode == "direct" else crop_obb_model
-        model_fingerprint = self._get_model_fingerprint(active_obb_model)
-        model_name = os.path.basename(
-            model_fingerprint["resolved_path"] or model_fingerprint["configured_path"]
-        )
-        model_stem = os.path.splitext(model_name)[0] or "model"
-        safe_model_stem = "".join(
-            c if c.isalnum() or c in ("_", "-") else "_" for c in model_stem
-        )
-
-        yolo_inference_keys = (
-            "YOLO_TARGET_CLASSES",
-            "YOLO_DEVICE",
-            "ENABLE_TENSORRT",
-            "TENSORRT_MAX_BATCH_SIZE",
-            "YOLO_OBB_MODE",
-            "YOLO_SEQ_CROP_PAD_RATIO",
-            "YOLO_SEQ_MIN_CROP_SIZE_PX",
-            "YOLO_SEQ_ENFORCE_SQUARE_CROP",
-            "YOLO_SEQ_STAGE2_IMGSZ",
-            "YOLO_SEQ_INDIVIDUAL_BATCH_SIZE",
-            "YOLO_SEQ_STAGE2_POW2_PAD",
-            "YOLO_HEADTAIL_CONF_THRESHOLD",
-            "POSE_OVERRIDES_HEADTAIL",
-        )
-        cache_params = {
-            "common": _extract(common_detection_keys),
-            "yolo": _extract(yolo_inference_keys),
-            "models": self._normalize_for_hash(
-                {
-                    "active_obb": model_fingerprint,
-                    "direct_obb": self._get_model_fingerprint(direct_model),
-                    "detect": self._get_model_fingerprint(
-                        params.get("YOLO_DETECT_MODEL_PATH", "")
-                    ),
-                    "crop_obb": self._get_model_fingerprint(crop_obb_model),
-                    "headtail": self._get_model_fingerprint(
-                        params.get("YOLO_HEADTAIL_MODEL_PATH", "")
-                    ),
-                }
-            ),
-            "raw_detection_cache_version": 4,
-        }
-        classes = cache_params["yolo"].get("YOLO_TARGET_CLASSES")
-        if classes is not None:
-            if isinstance(classes, str):
-                raw_classes = [c.strip() for c in classes.split(",") if c.strip()]
-            elif isinstance(classes, (list, tuple)):
-                raw_classes = list(classes)
-            else:
-                raw_classes = [classes]
-            try:
-                cache_params["yolo"]["YOLO_TARGET_CLASSES"] = sorted(
-                    int(c) for c in raw_classes
-                )
-            except (TypeError, ValueError):
-                cache_params["yolo"]["YOLO_TARGET_CLASSES"] = sorted(
-                    str(c) for c in raw_classes
-                )
-
-        build_batch_size = params.get(
-            "TENSORRT_BUILD_BATCH_SIZE",
-            params.get("TENSORRT_MAX_BATCH_SIZE", 1),
-        )
-        try:
-            build_batch_size = max(1, int(build_batch_size or 1))
-        except (TypeError, ValueError):
-            build_batch_size = max(
-                1, int(params.get("TENSORRT_MAX_BATCH_SIZE", 1) or 1)
-            )
-        try:
-            build_workspace_gb = float(params.get("TENSORRT_BUILD_WORKSPACE_GB", 4.0))
-        except (TypeError, ValueError):
-            build_workspace_gb = 4.0
-
-        engine_cache_params = {
-            "engine": {
-                "runtime": "tensorrt",
-                "device": self._normalize_for_hash(params.get("YOLO_DEVICE")),
-                "build_batch_size": build_batch_size,
-                "workspace_gb": round(max(0.5, build_workspace_gb), 3),
-                "active_obb": model_fingerprint,
-                "export_profile": "trt_fp16_static_v1",
-            },
-            "engine_cache_version": 1,
-        }
-
-        return {
-            "inference": _build_id("yolo", cache_params, model_stem=safe_model_stem),
-            "engine": _build_id(
-                "yolo_engine", engine_cache_params, model_stem=safe_model_stem
-            ),
-        }
-
     def _setup_tracking_csv_writer(self, backward_mode):
         """Create and start the CSV writer thread for tracking output."""
         self._mw.csv_writer_thread = None
         if not self._panels.setup.csv_line.text():
             return
+        _hdr_params = self._params_or_report_limit("Tracking")
+        if _hdr_params is None:
+            return
         hdr = build_tracking_csv_header(
             identity_method=self._mw._selected_identity_method(),
-            n_arenas=int(self._mw.get_parameters_dict().get("N_ARENAS", 1)),
+            n_arenas=int(_hdr_params.get("N_ARENAS", 1)),
         )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)
@@ -1858,6 +1634,8 @@ class TrackingOrchestrator:
                 "A default path is set automatically when you load a video.",
             )
             return
+        if self._params_or_report_limit("Tracking") is None:
+            return
         if not backward_mode:
             self._mw._stop_all_requested = False
             self._mw._session_result_dataset = None
@@ -1883,7 +1661,9 @@ class TrackingOrchestrator:
         # Generate detection cache path based on video and detection method
         # Cache is always created for forward tracking to allow reuse on reruns
         detection_cache_path = None
-        params = self._mw.get_parameters_dict()
+        params = self._params_or_report_limit("Tracking")
+        if params is None:
+            return
         logger.info(
             f"Launching {'backward' if backward_mode else 'forward'} tracking for frame range "
             f"{params.get('START_FRAME')}..{params.get('END_FRAME')}"

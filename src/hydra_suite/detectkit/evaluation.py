@@ -15,6 +15,11 @@ if TYPE_CHECKING:
     from hydra_suite.detectkit.gui.models import DetectKitProject
 
 
+# A run the user stopped (or that was interrupted) still leaves a usable best
+# checkpoint, so it may be evaluated, calibrated and exported like a finished
+# one. "failed" is excluded: its weights may be incomplete.
+USABLE_RUN_STATUSES = frozenset({"completed", "canceled", "interrupted"})
+
 _ROLE_TASKS = {
     "obb_direct": "obb",
     "detect_direct": "detect",
@@ -159,8 +164,11 @@ def collect_evaluation_candidates(
         reason = ""
 
         status = str(entry.get("status", "") or "").strip().lower()
-        if status and status != "completed":
-            reason = f"Run status is {status}; only completed runs can be evaluated."
+        if status and status not in USABLE_RUN_STATUSES:
+            reason = (
+                f"Run status is {status}; only completed or stopped runs "
+                "can be evaluated."
+            )
         elif not task:
             reason = f"Validation is not supported for role '{role or 'unknown'}'."
         elif not model_path or not Path(model_path).expanduser().is_file():

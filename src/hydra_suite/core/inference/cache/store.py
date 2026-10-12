@@ -103,9 +103,8 @@ def _sorted_by_det_index(
     """Sort ``det_indices`` ascending, carrying its parallel payload arrays along.
 
     Producers hand us indices in SELECTION order, not ascending order:
-    ``filter_with_indices`` walks NMS confidence-descending (stages/filtering.py)
-    and the MAX_TARGETS cap re-sorts survivors largest-first, so a crowded frame
-    arrives as e.g. ``[5, 1, 3]``. The stored layout wants ascending keys, but
+    ``filter_with_indices`` walks NMS confidence-descending (stages/filtering.py),
+    so a crowded frame can arrive as e.g. ``[5, 1, 3]``. The stored layout wants ascending keys, but
     that ordering was never the caller's contract -- the requirement that
     actually matters is UNIQUENESS, because ``load_frame`` keys by index value
     and a duplicate would silently shadow its twin.

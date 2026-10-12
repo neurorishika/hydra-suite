@@ -24,6 +24,13 @@ from typing import Any
 
 import torch
 
+from hydra_suite.core.inference import slice_meta as _slice_meta
+from hydra_suite.core.inference.slice_meta import (
+    merge_training_geometry,
+    read_slice_meta,
+    write_slice_meta,
+)
+from hydra_suite.core.inference.tiling_meta import training_geometry_from_sam3_manifest
 from hydra_suite.runtime.sam3_checkpoint_guard import (
     assert_sam3_checkpoint_loaded,
     tensor_sha256,
@@ -187,6 +194,38 @@ def _write_sidecar(metadata: dict[str, Any], staged_path: Path) -> None:
         json.dump(metadata, stream, indent=2)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _write_tiling_sidecar(
+    artifact_path: Path, build_manifest: dict[str, Any]
+) -> Path | None:
+    """Dual-write the canonical v3 ``.slice_meta.json`` beside a promoted artifact.
+
+    Non-fatal by design: geometry is also in ``.sam3_meta.json`` and
+    ``read_tiling_meta`` falls back to it. Read-merges an existing document so
+    calibration profiles saved beside the artifact survive.
+    """
+    try:
+        geometry = training_geometry_from_sam3_manifest(
+            build_manifest, imgsz=PREDICTOR_IMGSZ
+        )
+        merged = merge_training_geometry(
+            read_slice_meta(artifact_path), geometry, model_family="sam3"
+        )
+        return write_slice_meta(artifact_path, merged)
+    except Exception:
+        try:
+            staged = _slice_meta.sidecar_path(artifact_path)
+            staged.with_name(staged.name + ".tmp").unlink(missing_ok=True)
+        except Exception:
+            pass
+        logger.warning(
+            "sam3 publish: could not write the tiling sidecar for %s; "
+            "readers fall back to .sam3_meta.json",
+            artifact_path,
+            exc_info=True,
+        )
+        return None
 
 
 def _validate_staged_artifact(
@@ -405,6 +444,7 @@ def publish_sam3_artifact(
             artifact_path,
             sidecar_path,
         )
+        _write_tiling_sidecar(artifact_path, build_manifest)
         return artifact_path, sidecar_path
     finally:
         staged_artifact.unlink(missing_ok=True)

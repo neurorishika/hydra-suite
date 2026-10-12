@@ -155,8 +155,6 @@ def test_lighting_median_window_is_keyed():
         ("CONSERVATIVE_ERODE_ITER", 1, 3),
         ("REFERENCE_BODY_SIZE", 50.0, 100.0),
         ("MIN_CONTOUR_AREA", 5.0, 10.0),
-        ("MAX_TARGETS", 20, 10),
-        ("MAX_CONTOUR_MULTIPLIER", 20, 10),
     ],
 )
 def test_bgsub_param_is_keyed(param, old, new):
@@ -167,6 +165,19 @@ def test_bgsub_param_is_keyed(param, old, new):
     p[param] = new
     b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
     assert a.config_hash != b.config_hash, f"{param} change did not affect config_hash"
+
+
+@pytest.mark.parametrize(
+    "param,old,new", [("MAX_TARGETS", 20, 10), ("MAX_CONTOUR_MULTIPLIER", 20, 10)]
+)
+def test_bgsub_replay_time_params_do_not_key(param, old, new):
+    """N rules are applied at replay, so they must not invalidate the cache."""
+    p = _base_params()
+    p[param] = old
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p[param] = new
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash == b.config_hash
 
 
 def test_roi_mask_middle_pixel_change_invalidates_cache_key():

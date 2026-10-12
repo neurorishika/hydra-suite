@@ -300,6 +300,21 @@ class TrackingEngineCore:
         if self._on_stats is not None:
             self._on_stats(stats)
 
+    def _report_inference_run_summaries(self, runners) -> None:
+        """Log and surface the run-scoped clipping and detection-limit summaries."""
+        for _runner in runners:
+            if _runner is None:
+                continue
+            _msg = _runner.clipping_stats.summary()
+            if _msg:
+                logger.warning("Canonicalization clipping summary: %s", _msg)
+        for _runner in runners:
+            stats = getattr(_runner, "detection_limit_stats", None) if _runner else None
+            msg = stats.summary() if stats is not None else None
+            if msg:
+                logger.warning("Detection limit summary: %s", msg)
+                self._emit_warning("Detection limit reached", msg)
+
     def _emit_warning(self, title, msg):
         if self._on_warning is not None:
             self._on_warning(title, msg)
@@ -690,6 +705,7 @@ class TrackingEngineCore:
             start_frame,
             end_frame,
             detection_cache_version="2.0",
+            max_targets=params.get("MAX_TARGETS"),
         )
         filter_hash = compute_filter_settings_hash(params)
         extractor_hash = compute_extractor_hash(params)
@@ -717,6 +733,8 @@ class TrackingEngineCore:
                     "filter_settings_hash": filter_hash,
                     "extractor_hash": extractor_hash,
                     "pose_keypoint_names": [str(k) for k in (keypoint_names or [])],
+                    # Final-N tracking artifact: readers require the same N.
+                    "max_targets": params.get("MAX_TARGETS"),
                     "start_frame": int(start_frame),
                     "end_frame": int(end_frame),
                     "video_path": str(Path(self.video_path).expanduser().resolve()),
@@ -1161,8 +1179,22 @@ class TrackingEngineCore:
                 self._emit_finished(False, [], [])
                 return
 
+            # A read-only replay of candidate parameters (optimizer production
+            # validation) reads the per-animal caches under the replay filters
+            # they were WRITTEN with -- the provenance params -- while
+            # filtering detections with the candidate's own (see
+            # InferenceRunner's cache_filter_config). Built here so a failure
+            # is the normal configuration error.
+            _written_filter_cfg = None
             try:
                 _inference_cfg = build_inference_config_from_params(p)
+                if (
+                    self.cache_read_only_replay
+                    and self.inference_cache_provenance_params is not None
+                ):
+                    _written_filter_cfg = build_inference_config_from_params(
+                        dict(self.inference_cache_provenance_params)
+                    )
             except Exception as _cfg_err:
                 logger.error(
                     "Failed to build InferenceConfig from params: %s", _cfg_err
@@ -1339,6 +1371,10 @@ class TrackingEngineCore:
                 roi_mask=p.get("ROI_MASK"),
                 identity_evidence=_identity_evidence_run_config,
                 runtime_overlay=self.inference_autotune_overlay,
+                # A candidate whose final set stays inside the written superset
+                # replays; one admitting a detection the superset lacks raises
+                # a clear DownstreamCacheError (not a key-mismatch rejection).
+                cache_filter_config=_written_filter_cfg,
             )
             if not (
                 self.backward_mode or self.cache_read_only_replay or self.preview_mode
@@ -1671,6 +1707,10 @@ class TrackingEngineCore:
                             else None
                         ),
                         should_stop=self._is_stop_requested,
+                        # With reuse allowed, a filter-only change reads the
+                        # stored detections back and recomputes just the
+                        # re-keyed per-animal caches (never the detector).
+                        reuse_detection_cache=bool(self.use_cached_detections),
                     )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")
@@ -2104,14 +2144,60 @@ class TrackingEngineCore:
         # (inference_runner.identity_evidence_cache, below) since it is not
         # flushed to disk until the pass ends.
         _batch_evidence_cache = None
+        # Cache reuse skips run_batch_pass, so the sidecar for THIS run's key
+        # (filters + N) may not exist -- e.g. a replay at a different N than
+        # the caches were written with. Rebuild it from the per-animal caches
+        # through the raw-index loaders (no stage model runs). A read-only
+        # replay must not write into the cache directory, so it builds into a
+        # temporary directory that is removed once the sidecar is loaded.
+        # Deliberately outside the try below: a DownstreamCacheError here
+        # (the candidate filters admit detections the caches lack) must
+        # surface, not degrade into "identity evidence unavailable".
+        _batch_ev_path_override = None
+        _batch_ev_tmpdir = None
+        if (
+            inference_runner is not None
+            and not effective_realtime_tracking_mode
+            and use_cached_detections
+            and _identity_evidence_run_config is not None
+        ):
+            _expected_ev_path = inference_runner.identity_evidence_sidecar_path("batch")
+            if _expected_ev_path is not None and not os.path.exists(
+                str(_expected_ev_path)
+            ):
+                if self.cache_read_only_replay:
+                    import tempfile
+
+                    _batch_ev_tmpdir = tempfile.mkdtemp(
+                        prefix="hydra_identity_evidence_"
+                    )
+                    _batch_ev_path_override = (
+                        Path(_batch_ev_tmpdir) / Path(_expected_ev_path).name
+                    )
+                logger.info(
+                    "Rebuilding identity evidence sidecar from the per-animal "
+                    "caches (no batch pass ran for this key)."
+                )
+                try:
+                    inference_runner.ensure_identity_evidence_sidecar(
+                        start_frame, end_frame, out_path=_batch_ev_path_override
+                    )
+                except BaseException:
+                    if _batch_ev_tmpdir is not None:
+                        import shutil
+
+                        shutil.rmtree(_batch_ev_tmpdir, ignore_errors=True)
+                    raise
         if inference_runner is not None and not effective_realtime_tracking_mode:
             try:
                 from hydra_suite.core.individual.identity.cache import (
                     IdentityEvidenceCache,
                 )
 
-                _batch_ev_path = inference_runner.identity_evidence_sidecar_path(
-                    "batch"
+                _batch_ev_path = (
+                    _batch_ev_path_override
+                    if _batch_ev_path_override is not None
+                    else inference_runner.identity_evidence_sidecar_path("batch")
                 )
                 if _batch_ev_path is not None and os.path.exists(str(_batch_ev_path)):
                     _batch_evidence_cache = IdentityEvidenceCache(
@@ -2146,6 +2232,11 @@ class TrackingEngineCore:
                     logger.debug(
                         "Identity evidence sidecar unavailable (batch)", exc_info=True
                     )
+        if _batch_ev_tmpdir is not None:
+            # The read-mode cache loaded the whole file eagerly.
+            import shutil
+
+            shutil.rmtree(_batch_ev_tmpdir, ignore_errors=True)
 
         # Open CNN identity caches for reading during tracking loop (multi-phase).
         _cnn_phase_states = []
@@ -2256,7 +2347,7 @@ class TrackingEngineCore:
             )
 
             pose_props_cache = IndividualPropertiesCache(pose_cache_candidate, mode="r")
-            if not pose_props_cache.is_compatible():
+            if not pose_props_cache.is_compatible(max_targets=int(p["MAX_TARGETS"])):
                 logger.warning(
                     "Pose direction override disabled: incompatible properties cache: %s",
                     pose_cache_candidate,
@@ -2308,6 +2399,7 @@ class TrackingEngineCore:
                 start_frame,
                 end_frame,
                 detection_cache_version="2.4",
+                max_targets=int(p["MAX_TARGETS"]),
             ),
             compute_filter_settings_hash(p),
             compute_extractor_hash(p),
@@ -4797,6 +4889,8 @@ class TrackingEngineCore:
                     detected_props_cache.save(
                         metadata={
                             "cache_id": detected_props_id,
+                            # Final-N artifact: export readers require this N.
+                            "max_targets": p.get("MAX_TARGETS"),
                             "start_frame": int(start_frame),
                             "end_frame": int(end_frame),
                             "video_path": str(
@@ -4837,14 +4931,7 @@ class TrackingEngineCore:
         # InferenceRunner(s) actually ran this pass (yolo_obb -> inference_runner,
         # bgsub -> bgsub_runner) carry a run-scoped ClippingStats; combine both
         # since a config could in principle exercise either path.
-        _clip_msgs = []
-        for _runner in (inference_runner, bgsub_runner):
-            if _runner is not None:
-                _msg = _runner.clipping_stats.summary()
-                if _msg:
-                    _clip_msgs.append(_msg)
-        for _msg in _clip_msgs:
-            logger.warning("Canonicalization clipping summary: %s", _msg)
+        self._report_inference_run_summaries((inference_runner, bgsub_runner))
 
         # --- Profiling: final summary and JSON export ---
         profiler.phase_end("cleanup")

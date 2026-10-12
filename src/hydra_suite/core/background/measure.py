@@ -186,8 +186,15 @@ class BackgroundMeasurer:
         frame_count: int,
         *,
         return_contours: bool = False,
+        apply_target_gates: bool = True,
     ) -> tuple:
         """Detect and measure objects from the final foreground mask.
+
+        ``apply_target_gates=False`` skips the N-dependent rules (the
+        too-many-contours frame skip and the top-N truncation) so the result
+        is independent of MAX_TARGETS; the inference cache stores that N-free
+        set and applies the rules at replay. The default keeps the legacy
+        behaviour for the parameter optimizer.
 
         Returns (meas, sizes, shapes, confidences), or that tuple plus a
         parallel list of (P, 2) float32 pixel-space contours when
@@ -206,7 +213,7 @@ class BackgroundMeasurer:
         p = self.params
         cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        N = p["MAX_TARGETS"]
+        N = p["MAX_TARGETS"] if apply_target_gates else 0
         max_allowed_contours = N * p.get("MAX_CONTOUR_MULTIPLIER", 20)
 
         # KNOWN LIMITATION (multi-arena): this skip threshold is spent globally,
@@ -218,7 +225,7 @@ class BackgroundMeasurer:
         # restructure deliberately scoped out of the multi-arena feature. Only
         # bites when total contours exceed the combined budget (noise/crowding);
         # the nominal case is unaffected.
-        if len(cnts) > max_allowed_contours:
+        if apply_target_gates and len(cnts) > max_allowed_contours:
             logger.debug(
                 f"Frame {frame_count}: Too many contours ({len(cnts)}), skipping."
             )
@@ -276,7 +283,7 @@ class BackgroundMeasurer:
         # of the multi-arena feature; see the design spec). Only bites when total
         # detections exceed total slots (noise/crowding); the nominal case, where
         # each arena's detections stay within its own share of N, is unaffected.
-        if len(meas) > N:
+        if apply_target_gates and len(meas) > N:
             idxs = np.argsort(sizes)[::-1][:N]
             meas = [meas[i] for i in idxs]
             sizes = [sizes[i] for i in idxs]

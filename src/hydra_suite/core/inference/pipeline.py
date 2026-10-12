@@ -54,11 +54,13 @@ from hydra_suite.utils.profiling import bind_target, span
 
 from .cancellation import InferenceCancelled
 from .config import MAX_PIPELINE_DEPTH
+from .limits import MAX_DETECTIONS_PER_FRAME, DetectionLimitStats
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
 from .stages.cnn import run_cnn_batch
 from .stages.crops import (
+    ForeignSet,
     apply_foreign_mask_to_crop_batch,
     extract_aabb_crops,
     extract_canonical_crops_batch,
@@ -69,6 +71,7 @@ from .stages.obb import (
     _RawOBBTensors,
     effective_raw_detection_cap,
     materialize_tensors,
+    rank_and_bound,
     run_obb,
 )
 from .stages.pose import run_pose_batch
@@ -178,7 +181,9 @@ class Pipeline:
         depth: int = 1,
         queue_bound: int | None = None,
         clipping_stats: "ClippingStats | None" = None,
+        detection_limit_stats: "DetectionLimitStats | None" = None,
         collect_results: bool = False,
+        detection_reader: "Callable[[int], OBBResult | None] | None" = None,
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
@@ -193,6 +198,13 @@ class Pipeline:
         self.clipping_stats = (
             clipping_stats if clipping_stats is not None else ClippingStats()
         )
+        # Run-scoped record of frames that hit MAX_DETECTIONS_PER_FRAME; shared
+        # with the owning InferenceRunner exactly like ``clipping_stats``.
+        self.detection_limit_stats = (
+            detection_limit_stats
+            if detection_limit_stats is not None
+            else DetectionLimitStats()
+        )
         # depth=1 -> synchronous (no threads). depth>=2 -> producer/consumer
         # with a single in-order consumer and a bounded prefetch queue. Increasing
         # depth deepens the prefetch (the OBB producer may run up to ``depth-1``
@@ -202,6 +214,10 @@ class Pipeline:
         self.stages = stages
         self.runtime = runtime
         self.cache_writer = cache_writer
+        # Partial cache reuse: when set, detections are read back from the
+        # (already confidence-ranked) detection cache per frame instead of
+        # running the detector; everything downstream is unchanged.
+        self.detection_reader = detection_reader
         # Effective execution model: 1 (sync) or N>=2 (deep prefetch). depth
         # takes effect directly — no clamping, except under the opt-in
         # deep-GPU profiling pass (HYDRA_PROFILE_GPU), which forces 1 so a
@@ -273,6 +289,18 @@ class Pipeline:
         and it walks windows in ascending frame order.
         """
         cfg = self.stages.config
+        reader = getattr(self, "detection_reader", None)
+        if reader is not None:
+            cached = []
+            for frame_idx in window.frame_indices:
+                obb = reader(frame_idx)
+                if obb is None:
+                    raise RuntimeError(
+                        f"frame {frame_idx} is missing from the reused detection "
+                        "cache"
+                    )
+                cached.append(obb)
+            return cached
         with span(N.DETECT, units=len(window.frames)):
             if cfg.detection_source == "bgsub":
                 with span(N.RUN_BGSUB_BATCH, units=len(window.frames)):
@@ -282,6 +310,7 @@ class Pipeline:
                         self.stages.bgsub_model,
                         cfg.bgsub,
                         self.runtime,
+                        limit_stats=self.detection_limit_stats,
                     )
             with span(N.RUN_OBB, units=len(window.frames)):
                 # DECODE is spanned in `_stream_windows`, the producer-side
@@ -344,10 +373,26 @@ class Pipeline:
         # Materialize + re-stamp detection_ids per frame, write detection cache
         # for EVERY frame (including empty), and collect filtered OBBs.
         filtered_by_frame: dict[int, OBBResult] = {}
-        det_indices_by_frame: dict[int, np.ndarray] = {}
+        det_indices_by_frame: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         nonempty_frames: list = []
         nonempty_obbs: list[OBBResult] = []
+        pending_empty: list[tuple[int, np.ndarray]] = []
 
+        def _flush_empty(before: int | None) -> None:
+            # Write deferred explicit-empty rows with frame_idx < ``before``
+            # (all remaining when None), keeping downstream writes in order.
+            while pending_empty and (before is None or pending_empty[0][0] < before):
+                e_idx, e_sel = pending_empty.pop(0)
+                self.cache_writer.write_downstream(
+                    e_idx,
+                    det_indices=e_sel,
+                    headtail=None,
+                    cnn_results=[],
+                    pose=None,
+                    apriltag=None,
+                )
+
+        from_cache = getattr(self, "detection_reader", None) is not None
         with span(N.MATERIALIZE, units=len(frames)):
             for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
                 obb_result = (
@@ -355,6 +400,17 @@ class Pipeline:
                     if isinstance(raw, _RawOBBTensors)
                     else raw
                 )
+                if cfg.detection_source == "obb" and not from_cache:
+                    # Every cached OBB frame is confidence-ranked and bounded
+                    # to the limit; a frame with more candidates (the probe
+                    # row survived) is a LOUD hit: WARNING + run summary.
+                    # A frame read back from the cache is already ranked and
+                    # must NOT be re-ranked: extraction breaks ties
+                    # later-first, so re-ranking would reverse tie groups
+                    # and re-key every per-animal row against the cache.
+                    obb_result, candidate_count = rank_and_bound(obb_result)
+                    if candidate_count > MAX_DETECTIONS_PER_FRAME:
+                        self.detection_limit_stats.record(frame_idx, candidate_count)
                 obb_result = OBBResult(
                     frame_idx=frame_idx,
                     centroids=obb_result.centroids,
@@ -370,28 +426,32 @@ class Pipeline:
                 )
                 self.cache_writer.write_detection(frame_idx, obb_result)
 
-                filtered_obb, det_indices = filter_for_source(
+                # Per-animal stages run on the N-free SUPERSET (every filter
+                # survivor, no 2N window / final N cut) so the downstream
+                # caches serve any N at replay; the in-memory result is the
+                # final-N set (a subset of the superset by construction).
+                superset_obb, superset_idx = filter_for_source(
+                    cfg, obb_result, self.stages.roi_mask, apply_max_detections=False
+                )
+                final_obb, final_idx = filter_for_source(
                     cfg, obb_result, self.stages.roi_mask
                 )
-                if filtered_obb.num_detections == 0:
-                    # Coverage is per enabled cache, not per detection. Persist
-                    # an explicit empty so an interrupted pass cannot look
-                    # complete in detection while downstream remains partial.
-                    self.cache_writer.write_downstream(
-                        frame_idx,
-                        det_indices=det_indices,
-                        headtail=None,
-                        cnn_results=[],
-                        pose=None,
-                        apriltag=None,
-                    )
+                if superset_obb.num_detections == 0:
+                    # Coverage is per enabled cache, not per detection. An
+                    # explicit empty row is persisted so an interrupted pass
+                    # cannot look complete in detection while downstream
+                    # remains partial. Deferred: the store requires strictly
+                    # increasing frame order, and non-empty frames are only
+                    # written after the per-animal stages run.
+                    pending_empty.append((frame_idx, superset_idx))
                     continue
-                filtered_by_frame[frame_idx] = filtered_obb
-                det_indices_by_frame[frame_idx] = det_indices
+                filtered_by_frame[frame_idx] = final_obb
+                det_indices_by_frame[frame_idx] = (superset_idx, final_idx)
                 nonempty_frames.append(frame)
-                nonempty_obbs.append(filtered_obb)
+                nonempty_obbs.append(superset_obb)
 
         if not nonempty_obbs:
+            _flush_empty(None)
             return []
 
         # F1 guard: record overflow_ratio once per detection here -- the one
@@ -408,10 +468,11 @@ class Pipeline:
                 for _corners in _obb.corners:
                     self.clipping_stats.record(_corners, geometry)
 
-        # Downstream crops are processed one frame at a time. Detection stays
-        # frame-batched above, but crop pixels can no longer scale with the
-        # detection window size. ``filter_for_source`` enforces the independent
-        # finite per-frame crop cap before reaching this boundary.
+        # Downstream crops are processed one frame at a time, and within a frame
+        # in ``DOWNSTREAM_CHUNK_SIZE``-row chunks of the superset. Detection
+        # stays frame-batched above, but crop pixels can no longer scale with
+        # the detection window size nor with the (up to
+        # ``MAX_DETECTIONS_PER_FRAME``) superset size.
         #
         # NOTE: this is a caller-side bound, not a limit of the stage functions.
         # ``run_headtail_batch``/``run_cnn_batch``/``run_pose_batch`` all flatten
@@ -428,32 +489,124 @@ class Pipeline:
         # accumulator here -- the memory bound this loop exists to enforce.
         assembled: list[FrameResult] = []
         for frame, obb in zip(nonempty_frames, nonempty_obbs):
+            _flush_empty(obb.frame_idx)
+            superset_idx, final_idx = det_indices_by_frame[obb.frame_idx]
             assembled.extend(
                 self._process_downstream_frame(
                     frame,
                     obb,
-                    det_indices_by_frame[obb.frame_idx],
+                    superset_idx,
+                    filtered_by_frame[obb.frame_idx],
+                    final_idx,
                     geometry,
                 )
             )
+        _flush_empty(None)
         return assembled
 
     def _process_downstream_frame(
         self,
         frame: Any,
-        obb: OBBResult,
-        det_indices: np.ndarray,
+        superset_obb: OBBResult,
+        superset_idx: np.ndarray,
+        final_obb: OBBResult,
+        final_idx: np.ndarray,
         geometry: Any,
     ) -> list[FrameResult]:
-        """Run crop consumers for one candidate-capped frame."""
+        """Run crop consumers for one frame's N-free superset, in chunks.
 
+        Every per-animal stage runs on the superset (all filter survivors) in
+        ``DOWNSTREAM_CHUNK_SIZE``-row chunks, so a frame with up to
+        ``MAX_DETECTIONS_PER_FRAME`` detections never materialises all its
+        crops at once. The downstream caches are written for the whole
+        superset keyed by RAW detection-cache index (CNN ``det_index`` and
+        AprilTag ``det_indices`` are raw); the returned ``FrameResult`` is
+        narrowed to the final-N set, positionally aligned with ``final_obb``.
+        """
+
+        from . import limits
+        from .downstream_select import (
+            apriltag_positions_to_raw,
+            cnn_positions_to_raw,
+            narrow_to_final,
+            run_superset_chunked,
+        )
         from .stages.assemble import scatter
+
+        cfg = self.stages.config
+        frame_idx = superset_obb.frame_idx
+
+        ht_all, cnn_all, pose_all, at_all = run_superset_chunked(
+            superset_obb,
+            lambda chunk, foreign: self._run_stages_on_chunk(
+                frame, chunk, geometry, foreign=foreign
+            ),
+            len(self.stages.cnn_models),
+            limits.DOWNSTREAM_CHUNK_SIZE,
+        )
+
+        # --- write RAW per-frame results to the per-type caches ------------
+        # Raw stage outputs (no foreign suppression -- an assemble-layer
+        # concern) for the whole superset, keyed by RAW cache index.
+        with span(N.CACHE_WRITE):
+            self.cache_writer.write_downstream(
+                frame_idx,
+                det_indices=superset_idx,
+                headtail=ht_all,
+                cnn_results=[
+                    None if r is None else cnn_positions_to_raw(r, superset_idx)
+                    for r in cnn_all
+                ],
+                pose=pose_all,
+                apriltag=apriltag_positions_to_raw(at_all, superset_idx),
+            )
+
+        if final_obb.num_detections == 0:
+            return []
+        # Final-N rows inside the superset; raises if final is not a subset.
+        ht_final, cnn_final, pose_final, at_final = narrow_to_final(
+            superset_idx, final_idx, ht_all, cnn_all, pose_all, at_all
+        )
+
+        # In-memory assembled view (foreign suppression applied here, per config).
+        with span(N.ASSEMBLE_SCATTER):
+            results = scatter(
+                {frame_idx: final_obb},
+                (None if self.stages.headtail_model is None else {frame_idx: ht_final}),
+                {frame_idx: cnn_final},
+                None if self.stages.pose_model is None else {frame_idx: pose_final},
+                (None if self.stages.apriltag_model is None else {frame_idx: at_final}),
+                cfg,
+                overrides_headtail=(
+                    cfg.pose.overrides_headtail if cfg.pose is not None else True
+                ),
+            )
+        for fr in results:
+            fr.filtered_indices = [int(i) for i in final_idx]
+        return results
+
+    def _run_stages_on_chunk(
+        self,
+        frame: Any,
+        obb: OBBResult,
+        geometry: Any,
+        *,
+        foreign: ForeignSet | None = None,
+    ) -> tuple[Any, list, Any, Any]:
+        """Run head-tail / CNN / pose / AprilTag on one chunk of one frame.
+
+        Returns this frame's ``(headtail, [cnn per phase], pose, apriltag)``
+        results, positionally aligned with ``obb`` (``None`` for a disabled
+        stage, or a phase/stage with no result for the frame). No cache writes.
+        ``foreign`` is the frame-wide foreign set for pose masking (defaults to
+        ``obb`` itself).
+        """
 
         cfg = self.stages.config
         frames = [frame]
         obbs = [obb]
         frame_idx = obb.frame_idx
-        filtered_by_frame = {frame_idx: obb}
+        foreign_by_frame = None if foreign is None else {frame_idx: foreign}
 
         # Head-tail and pose consume the same undirected Layer-1 canonical
         # geometry. When both are enabled, build that expensive warp once;
@@ -480,10 +633,12 @@ class Pipeline:
                     canonical_batch=shared_canonical_batch,
                 )
 
-        cnns_by_frame: dict[int, list] = {frame_idx: []}
         cnn_per_phase: list[dict[int, Any]] = []
         with span(N.CNN, units=obb.num_detections):
             for cfg_cnn, mdl in zip(cfg.cnn_phases, self.stages.cnn_models):
+                if mdl is None:  # reused phase under partial cache reuse
+                    cnn_per_phase.append({})
+                    continue
                 phase = run_cnn_batch(
                     frames,
                     obbs,
@@ -494,8 +649,6 @@ class Pipeline:
                     headtail_by_frame=headtail,
                 )
                 cnn_per_phase.append(phase)
-                for idx, result in phase.items():
-                    cnns_by_frame[idx].append(result)
 
         pose: dict[int, Any] | None = None
         if self.stages.pose_model is not None:
@@ -517,12 +670,14 @@ class Pipeline:
                             self.runtime,
                             suppress_foreign=suppress_foreign,
                             background_color=background_color,
+                            foreign_by_frame=foreign_by_frame,
                         )
                     elif suppress_foreign:
                         crop_batch = apply_foreign_mask_to_crop_batch(
                             shared_canonical_batch,
                             geometry,
                             background_color,
+                            foreign_by_frame=foreign_by_frame,
                         )
                     else:
                         crop_batch = shared_canonical_batch
@@ -545,38 +700,12 @@ class Pipeline:
                     aabb_crops, obb, self.stages.apriltag_model, cfg.apriltag
                 )
 
-        # --- write RAW per-frame results to the per-type caches ------------
-        # Mirrors _run_batch: writes raw stage outputs (no foreign suppression),
-        # only for non-empty frames, keyed by that frame's det_indices.
-        with span(N.CACHE_WRITE):
-            ht = headtail.get(frame_idx) if headtail is not None else None
-            cnn_results = [
-                phase[frame_idx] for phase in cnn_per_phase if frame_idx in phase
-            ]
-            pose_result = pose.get(frame_idx) if pose is not None else None
-            at_result = apriltag.get(frame_idx) if apriltag is not None else None
-            self.cache_writer.write_downstream(
-                frame_idx,
-                det_indices=det_indices,
-                headtail=ht,
-                cnn_results=cnn_results,
-                pose=pose_result,
-                apriltag=at_result,
-            )
-
-        # In-memory assembled view (foreign suppression applied here, per config).
-        with span(N.ASSEMBLE_SCATTER):
-            return scatter(
-                filtered_by_frame,
-                headtail,
-                cnns_by_frame,
-                pose,
-                apriltag,
-                cfg,
-                overrides_headtail=(
-                    cfg.pose.overrides_headtail if cfg.pose is not None else True
-                ),
-            )
+        return (
+            headtail.get(frame_idx) if headtail is not None else None,
+            [phase.get(frame_idx) for phase in cnn_per_phase],
+            pose.get(frame_idx) if pose is not None else None,
+            apriltag.get(frame_idx) if apriltag is not None else None,
+        )
 
     # --- production driver ---------------------------------------------
 

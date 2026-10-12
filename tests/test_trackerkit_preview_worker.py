@@ -627,3 +627,41 @@ def test_detection_panel_context_populates_runtime_tier(monkeypatch) -> None:
         assert context["enable_pose_extractor"] is True
     finally:
         mw.close()
+
+
+def test_preview_bgsub_iterates_final_rows_not_raw_indices(monkeypatch) -> None:
+    """M2: ``filtered_indices`` are RAW cache indices; ``fr.obb`` is the final
+    set. The bg-sub preview must draw every final row, never index the final
+    OBB by raw index (which only worked while the final set was a prefix)."""
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.result import OBBResult
+
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    c = np.array([[8.0, 10.0], [24.0, 10.0]], np.float32)
+    corners = np.stack([c + d for d in ([-6, -3], [6, -3], [6, 3], [-6, 3])], 1)
+    obb = OBBResult(
+        0,
+        c,
+        np.zeros(2, np.float32),
+        np.full(2, 72.0, np.float32),
+        np.ones((2, 2), np.float32),
+        np.ones(2, np.float32),
+        corners.astype(np.float32),
+        OBBResult.make_detection_ids(0, 2),
+    )
+    fr = SimpleNamespace(obb=obb, filtered_indices=[3, 7], fg_mask=None, bg_u8=None)
+    _install_fake_runner(monkeypatch, preview_worker, fr)
+    monkeypatch.setattr(
+        preview_worker,
+        "_preview_resize_frame",
+        lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
+    )
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    detections, dims, _out, _raw = preview_worker._preview_run_bg_subtraction(
+        frame, frame.copy(), {}, 1.0, True
+    )
+    assert [d[:2] for d in detections] == [(8.0, 10.0), (24.0, 10.0)]
+    assert len(dims) == 2

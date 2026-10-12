@@ -1161,7 +1161,9 @@ class MainWindow(QMainWindow):
         )
         self.al_build_btn.setToolTip(
             "Select the highest-value unlabeled images for labeling —\n"
-            "40% uncertain · 35% diverse · 15% representative (or balance) · 10% audit"
+            "30% uncertain · 25% diverse · 20% similar to model errors · "
+            "10% rare clusters · 10% representative (or balance) · 5% audit\n"
+            "(the error and rare-cluster shares are set below)"
         )
         self.al_build_btn.clicked.connect(self._build_al_batch)
         al_ctrl_row.addWidget(self.al_build_btn)
@@ -1186,6 +1188,63 @@ class MainWindow(QMainWindow):
         al_balance_row.addWidget(self.al_balance_check)
         al_balance_row.addStretch(1)
         al_group_layout.addLayout(al_balance_row)
+
+        al_mining_row = QHBoxLayout()
+        al_mining_row.setSpacing(6)
+        _mining_label_style = "color: #aaaaaa; font-size: 11px;"
+
+        def _mining_spin(maximum, value, suffix, tip):
+            spin = QSpinBox()
+            spin.setRange(0, maximum)
+            spin.setValue(value)
+            spin.setSuffix(suffix)
+            spin.setFixedWidth(64)
+            spin.setStyleSheet("background: #252526;")
+            spin.setToolTip(tip)
+            return spin
+
+        _err_lbl = QLabel("Errors:")
+        _err_lbl.setStyleSheet(_mining_label_style)
+        al_mining_row.addWidget(_err_lbl)
+        self.al_error_spin = _mining_spin(
+            60,
+            20,
+            "%",
+            "Share of the batch taken from unlabeled images most similar to images\n"
+            "the model currently gets WRONG (human-verified label != prediction),\n"
+            "taken round-robin over the errors, most confidently wrong first.\n"
+            "Needs verified labels the model has been run on; otherwise this\n"
+            "share goes to uncertainty. 0 = off.",
+        )
+        al_mining_row.addWidget(self.al_error_spin)
+
+        _rare_lbl = QLabel("Rare clusters:")
+        _rare_lbl.setStyleSheet(_mining_label_style)
+        al_mining_row.addWidget(_rare_lbl)
+        self.al_rare_spin = _mining_spin(
+            50,
+            10,
+            "%",
+            "Share of the batch sampled with a bias toward SMALL clusters (and\n"
+            "clusters with little labeled coverage), so under-represented groups\n"
+            "are not starved by large ones. Needs clusters. 0 = off.",
+        )
+        al_mining_row.addWidget(self.al_rare_spin)
+
+        _alpha_lbl = QLabel("Rarity:")
+        _alpha_lbl.setStyleSheet(_mining_label_style)
+        al_mining_row.addWidget(_alpha_lbl)
+        self.al_rare_alpha_spin = _mining_spin(
+            100,
+            75,
+            "%",
+            "How strongly small clusters are favoured.\n"
+            "0% = proportional to cluster size (no bias),\n"
+            "100% = every cluster gets the same expected share.",
+        )
+        al_mining_row.addWidget(self.al_rare_alpha_spin)
+        al_mining_row.addStretch(1)
+        al_group_layout.addLayout(al_mining_row)
 
         labeling_mode_row.addWidget(self.al_group, 1)
         labeling_options_layout.addLayout(labeling_mode_row)
@@ -7292,6 +7351,8 @@ class MainWindow(QMainWindow):
             saturation=settings.get("saturation", 0.0),
             brightness=settings.get("brightness", 0.0),
             contrast=settings.get("contrast", 0.0),
+            scale_jitter=settings.get("scale_jitter", 0.0),
+            aspect_jitter=settings.get("aspect_jitter", 0.0),
             decode_color_sim=settings.get("decode_color_sim", 0.0),
             resample_sim=settings.get("resample_sim", 0.0),
             monochrome=bool(settings.get("monochrome", False)),
@@ -11213,6 +11274,9 @@ class MainWindow(QMainWindow):
             else False
         )
         labeled_mask = np.array([bool(lbl) for lbl in self.image_labels])
+        predicted_labels, prediction_confidence, trusted_mask = (
+            self._collect_error_mining_inputs()
+        )
 
         from ..jobs.task_workers import ALBatchWorker
 
@@ -11231,6 +11295,12 @@ class MainWindow(QMainWindow):
                 if self._model_class_names is not None
                 else None
             ),
+            predicted_labels=predicted_labels,
+            prediction_confidence=prediction_confidence,
+            trusted_label_mask=trusted_mask,
+            error_fraction=self.al_error_spin.value() / 100.0,
+            rare_cluster_fraction=self.al_rare_spin.value() / 100.0,
+            rare_alpha=self.al_rare_alpha_spin.value() / 100.0,
         )
         worker.signals.success.connect(self._on_al_batch_success)
         worker.signals.error.connect(
@@ -11245,16 +11315,54 @@ class MainWindow(QMainWindow):
         self._refresh_prepared_candidate_table("Building active-learning batch…")
         self._threadpool_start(worker)
 
+    def _collect_error_mining_inputs(self):
+        """Head-aware predictions + which labels are trustworthy, for AL error mining.
+
+        Returns ``(predicted_labels, confidence, trusted_mask)``.  ``trusted_mask``
+        is True only for labels that are not pending machine review, so the
+        model's own unverified guesses are never treated as ground truth.
+        Predictions come from ``_prediction_summary_for_index`` so multi-head
+        models compare composite labels exactly as the UI shows them.  Runs on
+        the GUI thread because that helper reads widget state (threshold).
+        """
+        n = len(self.image_paths)
+        predicted: list[str | None] = [None] * n
+        confidence = np.zeros(n, dtype=np.float64)
+        trusted = np.zeros(n, dtype=bool)
+        for i in range(n):
+            summary = self._prediction_summary_for_index(i, top_k=1)
+            if summary is not None:
+                predicted[i] = str(summary.get("predicted_label") or "") or None
+                raw = summary.get("confidence")
+                confidence[i] = float(raw) if raw is not None else 0.0
+            if self.image_labels[i]:
+                record = self._image_review_status.get(str(self.image_paths[i]), {})
+                pending_machine = bool(record.get("label")) and not record.get(
+                    "verified"
+                )
+                trusted[i] = not pending_machine
+        return predicted, confidence, trusted
+
     def _on_al_batch_success(self, result):
         """Populate the Batch Builder candidate list."""
         self._al_candidates = result["selected_indices"]
         breakdown = result["breakdown"]
+        info = result.get("info") or {}
 
         # Build per-index reason map
         reason_map = {}
         for reason, indices in breakdown.items():
             for idx in indices:
                 reason_map[int(idx)] = reason
+
+        # "near error #E (true -> pred)" for error-neighbour picks
+        sources = info.get("error_sources") or {}
+        pairs = info.get("error_pairs") or {}
+        self._prepared_candidate_reason_detail = {
+            int(idx): f"near error #{err} ({pairs[err][0]}\u2192{pairs[err][1]})"
+            for idx, err in sources.items()
+            if err in pairs
+        }
 
         n = len(self._al_candidates)
         self.al_candidates_badge.setText(f"  {n} selected")
@@ -11264,8 +11372,10 @@ class MainWindow(QMainWindow):
         self._refresh_prepared_candidate_table(
             f"Active-learning batch ready: {n} candidates selected"
         )
+        n_err = info.get("n_errors")
+        err_note = f" ({n_err} known errors mined)" if n_err else ""
         self.status.showMessage(
-            f"Active-learning batch ready: {n} candidates — click Start Labeling to begin"
+            f"Active-learning batch ready: {n} candidates{err_note} — click Start Labeling to begin"
         )
 
     def _refresh_prepared_candidate_table(self, summary: str | None = None) -> None:
@@ -11299,16 +11409,21 @@ class MainWindow(QMainWindow):
                 # Use the head-aware summary: a global argmax over the
                 # concatenated columns of a multi-head model would report a
                 # single factor's label instead of the composite prediction.
-                summary = self._prediction_summary_for_index(idx, top_k=1)
-                if summary is not None:
-                    pred_class = str(summary.get("predicted_label") or "")
-                    raw_conf = summary.get("confidence")
+                pred_summary = self._prediction_summary_for_index(idx, top_k=1)
+                if pred_summary is not None:
+                    pred_class = str(pred_summary.get("predicted_label") or "")
+                    raw_conf = pred_summary.get("confidence")
                     conf = float(raw_conf) if raw_conf is not None else 0.0
                 else:
                     pred_class = ""
                     conf = 0.0
                 if not pred_class:
                     pred_class = "n/a"
+                reason_detail = getattr(
+                    self, "_prepared_candidate_reason_detail", {}
+                ).get(idx)
+                if reason_detail:
+                    reason = f"{reason} {reason_detail}"
                 detail = f"pred={pred_class} · conf={conf:.3f} · label={current_label} · {reason}"
             else:
                 cluster = (

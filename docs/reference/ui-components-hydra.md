@@ -181,7 +181,7 @@ Clean trajectories, interpolate gaps, and configure final visualization outputs.
 | Velocity z-score filter | Threshold, window, min velocity | Enable when sporadic spikes remain after tracking. | Filtering out true bursts in high-speed species. |
 | Interpolation | Method, max gap | Keep gap small; linear first, spline only when warranted. | Hallucinated paths over long missing intervals. |
 | Merge/refinement | Agreement distance, overlap frames | Tighten only when merges across neighbors are common. | Merging unrelated tracks under dense conditions. |
-| Video output | Render toggle, labels/orientation/trails, marker/text/arrow sizing | Enable for QA/reporting; disable for speed-focused production. | High-cost renders slowing full runs. |
+| Video output | Render toggle, output scale, labels/orientation/trails, marker/text/arrow sizing | Enable for QA/reporting; keep **Output scale** at 0.5 (default) unless you need full resolution. | Rendering at 1.0 on 4K+ sources: ~4x the pixels to decode, draw and encode. |
 | Histograms | Enable and history window | Use medium windows for responsive but stable monitoring. | Window too large hiding short-term quality collapse. |
 
 ## Tab 5: Dataset Generation

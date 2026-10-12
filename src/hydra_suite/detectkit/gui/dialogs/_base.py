@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication
+from PySide6.QtCore import QEvent, QObject, QSize, QTimer
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QLayout
 
 from hydra_suite.widgets.dialogs import BaseDialog
 
@@ -35,3 +35,89 @@ class DetectKitDialog(BaseDialog):
                 return self.isAncestorOf(current)
             current = current.parent()
         return False
+
+    def fit_to_content(
+        self,
+        base_minimum: QSize | None = None,
+        *,
+        follow_content_height: bool | None = None,
+    ) -> None:
+        """Keep an explicit minimum size from clipping the layout's content.
+
+        An explicit ``setMinimumSize`` disables the layout's own minimum, so
+        a dialog whose content grows (e.g. an expanded Advanced section)
+        would otherwise squeeze rows on top of one another. The minimum is
+        recomputed from the layout on every call, so it shrinks back too;
+        the window returns to its preferred size unless the user resized it.
+        Re-run on every show. The first call records ``base_minimum`` and the
+        current size as the preferred size.
+
+        ``follow_content_height``: until the user resizes the window, the
+        preferred HEIGHT is the layout's own size hint, so a section that
+        collapses (SAHI off) shrinks the dialog and grows it back on expand.
+        """
+        if follow_content_height is not None:
+            self._fit_follow = bool(follow_content_height)
+        if base_minimum is not None and not hasattr(self, "_fit_base"):
+            self._fit_base = QSize(base_minimum)
+            self._fit_preferred = self.size()
+            self._fit_last: QSize | None = None
+        elif base_minimum is not None:
+            self._fit_base = QSize(base_minimum)
+        if not hasattr(self, "_fit_base"):
+            return
+        # Read the size BEFORE activating the layout: activation can grow the
+        # window itself, which must not be mistaken for a user resize.
+        current = self.size()
+        # Nested layouts cache their minimums; hiding rows deep inside does
+        # not always reach the top, so drop every cache before measuring.
+        child_layouts = self.findChildren(QLayout)
+        for child_layout in child_layouts:
+            child_layout.invalidate()
+        # Activate leaf-first: the top layout alone does not recompute a
+        # nested minimum synchronously, so a collapse would not shrink back
+        # until a later event-loop iteration that no fit follows.
+        for child_layout in reversed(child_layouts):
+            child_layout.activate()
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        minimum = self._fit_base.expandedTo(self.minimumSizeHint())
+        if self._fit_last is not None and current != self._fit_last:
+            # A change that is exactly the layout enforcing its NEW minimum
+            # (Advanced opened wider rows) is layout-driven, not the user.
+            if current != self._fit_last.expandedTo(minimum):
+                # The user's size becomes the preferred one, so it survives
+                # repeated content changes and hide + show.
+                self._fit_preferred = current
+                self._fit_user_sized = True
+        self.setMinimumSize(minimum)
+        preferred = self._fit_preferred
+        if getattr(self, "_fit_follow", False) and not getattr(
+            self, "_fit_user_sized", False
+        ):
+            # Keep the current width (no wobble on collapse) and measure the
+            # height AT that width: sizeHint() measures word-wrapped notes at
+            # its own narrower width and over-estimates (a dead gap).
+            width = max(preferred.width(), current.width())
+            if layout is not None and layout.hasHeightForWidth():
+                margins = self.contentsMargins()
+                height = layout.totalHeightForWidth(
+                    width - margins.left() - margins.right()
+                )
+            else:
+                height = self.sizeHint().height()
+            preferred = QSize(width, height)
+        target = preferred.expandedTo(minimum)
+        self.resize(target)
+        self._fit_last = QSize(target)
+
+    def schedule_fit(self) -> None:
+        """Re-fit once pending layout requests (hidden/shown rows) settle."""
+        QTimer.singleShot(0, self, self.fit_to_content)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if hasattr(self, "_fit_base"):
+            self.schedule_fit()

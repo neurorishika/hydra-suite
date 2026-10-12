@@ -16,8 +16,27 @@ For a complete, control-by-control interface reference (question labels, value g
 | `csv_path` | Output CSV path | valid file path |
 | `video_output_enabled` | Render visualization video | `true` / `false` |
 | `video_output_path` | Output video path | valid file path |
+| `video_output_scale` | Annotated-video resolution relative to the source (GUI: **Output scale**; CLI: `--video-scale`). Missing key = `0.5`; out-of-range is an error, never clamped | `0.1 - 1.0` (default `0.5`) |
 | `fps` | Acquisition FPS used for temporal scaling | `1.0 - 240.0` |
 | `resize_factor` | Processing downscale factor (background subtraction only; clamped to `1.0` for YOLO OBB) | `0.1 - 1.0` |
+
+### Annotated video speed
+
+The final annotated video is rendered on three threads -- decode, draw,
+encode. Frames are decoded straight to the output size (`video_output_scale`;
+width and height are rounded to even numbers for H.264/HEVC), so at the
+default 0.5 every stage handles a quarter of the pixels. Markers, arrows,
+labels, trails and pose overlays scale with it; at `1.0` the overlay is
+pixel-identical to earlier releases. The decoder is chosen automatically: NVIDIA NVDEC
+with on-GPU resize first when a CUDA GPU is usable (Linux, Windows); then, when
+downscaling, PyAV software decode, PyAV hardware decode (VideoToolbox / CUDA),
+OpenCV; at scale 1.0, OpenCV (the historical path) leads. Videos with a
+display-rotation tag always use OpenCV, which applies the rotation tracking
+saw, and so do variable-frame-rate videos rendered from a start frame > 0
+(OpenCV's seek is where tracking started). The log names the decoder that was picked (`Annotated video decode: ...`).
+Hardware decoders have size limits (H.264 above 4096 px per side is
+typically refused), so such sources fall through to software decode
+automatically.
 
 ## Detection
 

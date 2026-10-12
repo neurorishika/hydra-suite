@@ -198,23 +198,26 @@ def _prefit_yolo_classify_dataset(
 
     copies = 0
     canon_aug = None
+    scale_crop_aug = _build_scale_crop_aug(profile, seed)
     if (
         profile is not None
         and getattr(profile, "enabled", False)
         and getattr(profile, "canonical_aug", False)
     ):
+        from .canonical_aug import CanonicalAug
+
+        canon_aug = CanonicalAug(seed=seed)
+    if (canon_aug is not None or scale_crop_aug is not None) and profile is not None:
         copies = max(0, int(getattr(profile, "canonical_aug_copies", 0)))
         if copies > 0:
-            from .canonical_aug import CanonicalAug
-
-            canon_aug = CanonicalAug(seed=seed)
             logger.info(
-                "YOLO-classify prefit: canonical_aug on, writing 1 clean + %d "
-                "augmented copies/image (seed=%d)",
+                "YOLO-classify prefit: writing 1 clean + %d augmented copies/image "
+                "(canonical_aug=%s, scale/aspect=%s, seed=%d)",
                 copies,
+                canon_aug is not None,
+                scale_crop_aug is not None,
                 seed,
             )
-
     transform = CanonicalFitTransform((int(imgsz), int(imgsz)))
     for split_dir in sorted(p for p in dataset_dir.iterdir() if p.is_dir()):
         for cls_dir in sorted(p for p in split_dir.iterdir() if p.is_dir()):
@@ -228,8 +231,13 @@ def _prefit_yolo_classify_dataset(
                 except Exception:
                     continue
                 cv2.imwrite(str(out_cls_dir / img_path.name), transform(img))
-                for k in range(1, copies + 1):
-                    aug_img = canon_aug(img)
+                # Augmented copies are train-only: val/test stay clean so the
+                # validation metrics measure the unperturbed distribution.
+                n_copies = copies if split_dir.name == "train" else 0
+                for k in range(1, n_copies + 1):
+                    aug_img = canon_aug(img) if canon_aug is not None else img
+                    if scale_crop_aug is not None:
+                        aug_img = scale_crop_aug(aug_img)
                     cv2.imwrite(
                         str(out_cls_dir / f"{img_path.stem}.aug{k}{img_path.suffix}"),
                         transform(aug_img),
@@ -472,6 +480,9 @@ def _build_tiny_dataset_class(input_w, input_h):
             self.profile = profile
             self._rng = np.random.default_rng(seed)
             self._canon_aug = None
+            self._scale_crop_aug = _build_scale_crop_aug(
+                profile if augment else None, seed
+            )
             if (
                 augment
                 and profile
@@ -499,6 +510,8 @@ def _build_tiny_dataset_class(input_w, input_h):
             # via augmentation_profile.canonical_aug.
             if self._canon_aug is not None:
                 img = self._canon_aug(img)
+            if self._scale_crop_aug is not None:
+                img = self._scale_crop_aug(img)
             if img.shape[1] != input_w or img.shape[0] != input_h:
                 img = fit_transform(img)
             x = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 255.0
@@ -506,6 +519,19 @@ def _build_tiny_dataset_class(input_w, input_h):
             return x, y
 
     return TinyDataset
+
+
+def _build_scale_crop_aug(profile, seed):
+    """Return a ``ScaleCropAug`` for ``profile`` or None when it is disabled."""
+    if profile is None or not getattr(profile, "enabled", False):
+        return None
+    scale = float(getattr(profile, "scale_jitter", 0.0) or 0.0)
+    aspect = float(getattr(profile, "aspect_jitter", 0.0) or 0.0)
+    if scale <= 0.0 and aspect <= 0.0:
+        return None
+    from .scale_crop_aug import ScaleCropAug
+
+    return ScaleCropAug(scale_jitter=scale, aspect_jitter=aspect, seed=seed)
 
 
 def _apply_tiny_augmentation(img, augment, profile, rng=None):
@@ -1548,6 +1574,9 @@ def _train_custom_classify(
         train_transforms.append(
             transforms.Lambda(CanonicalAug(seed=getattr(spec, "seed", 42)))
         )
+    _sc_aug = _build_scale_crop_aug(profile, getattr(spec, "seed", 42))
+    if _sc_aug is not None:
+        train_transforms.append(transforms.Lambda(_sc_aug))
     train_transforms += [
         CanonicalFitTransform(resize_hw),
         transforms.Lambda(bgr_to_rgb_pil),
@@ -1936,6 +1965,9 @@ def _train_multihead_shared_classify(
         train_tf_steps.append(
             transforms.Lambda(CanonicalAug(seed=getattr(spec, "seed", 42)))
         )
+    _sc_aug = _build_scale_crop_aug(profile, getattr(spec, "seed", 42))
+    if _sc_aug is not None:
+        train_tf_steps.append(transforms.Lambda(_sc_aug))
     train_tf_steps += [
         CanonicalFitTransform(resize_hw),
         transforms.Lambda(bgr_to_rgb_pil),
@@ -1944,7 +1976,12 @@ def _train_multihead_shared_classify(
         train_tf_steps.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
         train_tf_steps.append(transforms.RandomVerticalFlip(p=profile.flipud))
-    if profile.brightness > 0 or profile.contrast > 0:
+    if (
+        profile.brightness > 0
+        or profile.contrast > 0
+        or getattr(profile, "saturation", 0.0) > 0
+        or getattr(profile, "hue", 0.0) > 0
+    ):
         train_tf_steps.append(
             transforms.ColorJitter(
                 brightness=float(profile.brightness),

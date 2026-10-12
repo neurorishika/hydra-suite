@@ -335,7 +335,10 @@ def load_pose_context_from_params(
     from hydra_suite.core.individual.properties.cache import IndividualPropertiesCache
 
     pose_props_cache = IndividualPropertiesCache(cache_path, mode="r")
-    if not pose_props_cache.is_compatible():
+    max_targets = params.get("MAX_TARGETS")
+    if not pose_props_cache.is_compatible(
+        max_targets=None if max_targets is None else int(max_targets)
+    ):
         logger.warning(
             "Pose cache incompatible, pose direction disabled: %s", cache_path
         )

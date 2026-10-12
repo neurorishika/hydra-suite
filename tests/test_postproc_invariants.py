@@ -755,3 +755,45 @@ def test_full_coverage_after_merge_simple() -> None:
         f"Frames {sorted(missing)} were tracked by both passes but are "
         f"missing from the merged output."
     )
+
+
+def test_co_occluded_frames_do_not_resplit_diverged_trajectories() -> None:
+    """
+    A frame where BOTH passes are occluded carries no evidence that they agree.
+    _conservative_merge used to classify it as "agree", which flushed the two
+    split segments of a diverged pair and reopened them on the next frame, so
+    every co-occlusion inside a disagreement shredded both trajectories.
+    """
+    from hydra_suite.core.post.processing import _conservative_merge
+
+    frames = list(range(1, 41))
+    co_occluded = {20, 30}
+
+    def _traj(x_after_divergence: float) -> pd.DataFrame:
+        xs = [
+            (
+                np.nan
+                if f in co_occluded
+                else (float(f) if f <= 10 else x_after_divergence + f)
+            )
+            for f in frames
+        ]
+        return pd.DataFrame(
+            {
+                "TrajectoryID": 0,
+                "FrameID": frames,
+                "X": xs,
+                "Y": [0.0] * len(frames),
+                "Theta": [0.0] * len(frames),
+                "State": ["occluded" if f in co_occluded else "active" for f in frames],
+            }
+        )
+
+    # Agree on frames 1-10, then follow two animals 100 px apart.
+    fwd = _traj(0.0)
+    bwd = _traj(100.0)
+
+    segments = _conservative_merge(fwd, bwd, agreement_distance=5.0, min_length=1)
+
+    spans = sorted((int(s["FrameID"].min()), int(s["FrameID"].max())) for s in segments)
+    assert spans == [(1, 10), (11, 40), (11, 40)], spans

@@ -54,7 +54,7 @@ def test_systemd_command_places_kernel_limits_outside_bootstrap():
         "--quiet",
     )
     assert "--wait" not in launch.command
-    assert "--property=MemoryHigh=100" in launch.command
+    assert not any(a.startswith("--property=MemoryHigh") for a in launch.command)
     assert "--property=MemoryMax=200" in launch.command
     assert "--property=MemorySwapMax=0" in launch.command
     assert "--property=TasksMax=512" in launch.command
@@ -477,3 +477,22 @@ def test_backend_selection_prefers_systemd_then_posix_fallback():
         select_limit_backend(system="Darwin", systemd_available=False)
         is LimitBackend.WATCHDOG_ONLY
     )
+
+
+def test_signal_systemd_scope_uses_an_option_old_systemd_accepts(monkeypatch):
+    # systemd 249 (Ubuntu 22.04) rejects --kill-whom; only --kill-who exists
+    # across versions. Mocked-out signalling hid this and made Stop Run fail.
+    import subprocess
+
+    from hydra_suite.runtime import resource_limits
+
+    seen = {}
+
+    def fake_run(command, **_kwargs):
+        seen["command"] = command
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(resource_limits.subprocess, "run", fake_run)
+    assert resource_limits.signal_systemd_scope("u.scope", 15)
+    assert "--kill-who=all" in seen["command"]
+    assert not any(a.startswith("--kill-whom") for a in seen["command"])

@@ -23,7 +23,7 @@ from hydra_suite.core.inference.cache.store import (
     CNNCacheHandle,
     DetectionCacheHandle,
 )
-from hydra_suite.core.inference.config import InferenceConfig, OBBConfig
+from hydra_suite.core.inference.config import CNNConfig, InferenceConfig, OBBConfig
 from hydra_suite.core.inference.result import (
     AprilTagResult,
     CNNDetectionPrediction,
@@ -75,8 +75,11 @@ def _permissive_config() -> InferenceConfig:
     # iou_threshold=1.0 skips NMS; confidence_threshold=0.0 keeps everything --
     # filtered_obb ends up identical to the raw read, in raw order, so det_ids
     # line up 1:1 with the CNN predictions' det_index by construction.
+    # The CNN phase is declared so the replay loader (which labels results by
+    # config phase, phase-aligned with caches.cnn) reads the "cnn_id" cache.
     return InferenceConfig(
-        obb=OBBConfig(confidence_threshold=0.0, iou_threshold=1.0, max_detections=0)
+        obb=OBBConfig(confidence_threshold=0.0, iou_threshold=1.0, max_detections=0),
+        cnn_phases=[CNNConfig(label="cnn_id", model_path="/cnn.pt")],
     )
 
 

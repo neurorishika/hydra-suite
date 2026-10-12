@@ -26,11 +26,16 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.geometry_drift import stamped_object_tile_fraction
 from hydra_suite.core.inference.semantic.base import SemanticInstance
 from hydra_suite.core.inference.semantic.calibration import CONFIDENCE_GRID
+from hydra_suite.core.inference.semantic.calibration_record import (
+    resolve_serving_calibration,
+)
 from hydra_suite.core.inference.semantic.checkpoints import (
     SAM3_VARIANTS,
     resolve_checkpoint,
+    sidecar_for,
 )
 from hydra_suite.core.inference.semantic.shape_prior import AreaBand
 from hydra_suite.core.inference.semantic.tiling import (
@@ -239,6 +244,157 @@ def staged_dirname_for(
         ).encode("utf-8")
     ).hexdigest()[:10]
     return f"{src.name}-sam3-{prompt_slug(prompt)}-{content_hash}"
+
+
+def _positive_float(value) -> float:
+    """``float(value)`` when finite and > 0, else 0.0 -- never raises."""
+    if value is None or isinstance(value, bool):
+        return 0.0
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return parsed if math.isfinite(parsed) and parsed > 0 else 0.0
+
+
+def _calibrated_tiling(project, variant: str) -> tuple[float, float] | None:
+    """(tile_fraction, body px) of *variant*'s serving calibration, if any.
+
+    SAM3 records carry ``recommended_index`` and the body under
+    ``parameters`` (no ``chosen_index``, no top-level body -- plan review M4),
+    so every lookup is guarded. A record for another variant does not apply.
+    """
+    record, _origin = resolve_serving_calibration(
+        sidecar_for(variant), getattr(project, "semantic_calibration", {}) or {}
+    )
+    if not isinstance(record, dict) or record.get("variant") != variant:
+        return None
+    points = record.get("points")
+    index = record.get("recommended_index")
+    if not isinstance(points, list) or isinstance(index, bool):
+        return None
+    if not isinstance(index, int) or not 0 <= index < len(points):
+        return None
+    point = points[index]
+    if not isinstance(point, dict):
+        return None
+    parameters = record.get("parameters")
+    body = _positive_float(
+        parameters.get("reference_body_px") if isinstance(parameters, dict) else None
+    )
+    return _positive_float(point.get("tile_fraction")), body
+
+
+def default_semantic_tiling(
+    project, variant: str, *, body_chain_px: float | None = None
+) -> dict:
+    """The tiling a SAM3 run of *variant* uses when nobody overrides it (F3).
+
+    The ONE answer for the dialog's opening state and the headless
+    ``detectkit escalate sam3`` command (mirrors SAM2's
+    ``default_geometry_tiling``). Precedence:
+
+    1. the settings the user last accepted for this variant (a saved dict
+       without a ``variant`` key is the dialog's legacy shape and restores the
+       same way the dialog restores it);
+    2. this variant's serving calibration: the recommended point's fraction at
+       the body it was calibrated at;
+    3. the model's stamp: its trained fraction, with the dialog's body chain,
+       else the stamped body;
+    4. the dialog's own opening state: ``SEMANTIC_TILE_FRACTION_SEED`` with the
+       dialog's body chain (project slice-training reference -> label median).
+
+    Full frame (``tile_fraction=None``) only when the resolved body is 0, as
+    ``resolve_tile_px`` treats it. ``overlap``/``merge_iou``/area band are what
+    the dialog opens with: saved values when present, else the defaults.
+    ``body_chain_px`` lets the dialog pass the chain it already resolved
+    (measuring labels decodes images). Never raises.
+    """
+    try:
+        saved = dict(getattr(project, "semantic_escalation_settings", {}) or {})
+    except (TypeError, ValueError):
+        saved = {}
+
+    def saved_float(key: str, default: float) -> float:
+        try:
+            return float(saved.get(key, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    result = {
+        "overlap": saved_float("overlap", DEFAULT_OVERLAP),
+        "merge_iou": saved_float("merge_iou", DEFAULT_MERGE_IOU),
+        "area_min_px2": saved_float("area_min_px2", 0.0),
+        "area_max_px2": saved_float("area_max_px2", 0.0),
+    }
+
+    def finish(fraction: float, body: float, origin: str) -> dict:
+        if fraction > 0 and body > 0:
+            return {
+                **result,
+                "reference_body_px": body,
+                "tile_fraction": fraction,
+                "origin": origin,
+            }
+        if origin == "saved":  # an explicit, saved full-frame choice
+            return {
+                **result,
+                "reference_body_px": body,
+                "tile_fraction": None,
+                "origin": origin,
+            }
+        return {
+            **result,
+            "reference_body_px": body,
+            "tile_fraction": None,
+            "origin": "full_frame",
+        }
+
+    chain: list[float] = []
+
+    def body_chain() -> float:
+        if not chain:
+            if body_chain_px is not None:
+                chain.append(_positive_float(body_chain_px))
+            else:
+                try:
+                    from hydra_suite.detectkit.gui.escalation_actions import (
+                        resolve_reference_body_px,
+                    )
+
+                    chain.append(_positive_float(resolve_reference_body_px(project)[0]))
+                except Exception:  # unreadable labels: no body, not a crash
+                    logger.debug("SAM3 body chain unavailable", exc_info=True)
+                    chain.append(0.0)
+        return chain[0]
+
+    try:
+        saved_variant = str(saved.get("variant") or "")
+        if "tile_fraction" in saved and saved_variant in ("", variant):
+            return finish(
+                _positive_float(saved.get("tile_fraction")),
+                (
+                    _positive_float(saved.get("reference_body_px"))
+                    if "reference_body_px" in saved
+                    else body_chain()
+                ),
+                "saved",
+            )
+        calibrated = _calibrated_tiling(project, variant)
+        if calibrated is not None and calibrated[0] > 0:
+            fraction, body = calibrated
+            return finish(fraction, body or body_chain(), "calibration")
+        meta = sidecar_for(variant)
+        stamped = stamped_object_tile_fraction(meta)
+        if stamped is not None and stamped > 0:
+            body = body_chain() or _positive_float(
+                (meta or {}).get("reference_body_px")
+            )
+            return finish(float(stamped), body, "stamped")
+        return finish(float(SEMANTIC_TILE_FRACTION_SEED), body_chain(), "default")
+    except Exception:  # never raise into the CLI or the dialog
+        logger.warning("Could not resolve the default SAM3 tiling", exc_info=True)
+        return finish(0.0, 0.0, "full_frame")
 
 
 def labeler_checkpoint_for(model_key: str):

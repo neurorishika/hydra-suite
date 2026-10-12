@@ -16,7 +16,16 @@ from uuid import uuid4
 
 import numpy as np
 
-SLICE_META_SCHEMA_VERSION = 2
+SLICE_META_SCHEMA_VERSION = 3
+# Document envelope, never geometry. ``training_geometry`` is listed so a
+# malformed (non-dict) nested value is not read back as a geometry key.
+_ENVELOPE_KEYS = (
+    "schema_version",
+    "model_family",
+    "primary_profile_id",
+    "profiles",
+    "training_geometry",
+)
 _GEOMETRY_MODES = {"auto_model", "auto_object", "custom"}
 
 
@@ -48,9 +57,11 @@ def write_slice_meta(model_path: str | Path, meta: dict[str, Any]) -> Path:
 
 
 def training_geometry(meta: dict[str, Any]) -> dict[str, Any]:
-    """Return v2 training geometry or a legacy flat payload, without mutation."""
+    """Return nested training geometry or a legacy flat payload, without mutation."""
     nested = meta.get("training_geometry")
-    return dict(nested) if isinstance(nested, dict) else dict(meta)
+    if isinstance(nested, dict):
+        return dict(nested)
+    return {k: v for k, v in meta.items() if k not in _ENVELOPE_KEYS}
 
 
 def new_profile_id(name: str) -> str:
@@ -64,9 +75,14 @@ def new_profile_id(name: str) -> str:
 
 
 def normalized_slice_meta(meta: dict[str, Any]) -> dict[str, Any]:
-    """Promote legacy metadata to the v2 document shape without inventing profiles."""
+    """Promote legacy metadata to the current document shape without inventing profiles.
+
+    v1/v2 documents were written only for YOLO direct detectors, so an absent
+    ``model_family`` means ``"yolo"``.
+    """
     return {
         "schema_version": SLICE_META_SCHEMA_VERSION,
+        "model_family": str(meta.get("model_family") or "yolo"),
         "training_geometry": training_geometry(meta),
         "primary_profile_id": str(meta.get("primary_profile_id", "") or ""),
         "profiles": available_slice_profiles(meta),
@@ -176,13 +192,18 @@ def available_slice_profiles(meta: dict[str, Any]) -> list[dict[str, Any]]:
         ):
             continue
         seen.add(profile_id)
+        measurement = raw.get("measurement")
         valid.append(
             {
                 "id": profile_id,
                 "name": name,
                 "note": str(raw.get("note", "") or ""),
                 "settings": dict(settings),
-                "measurement": dict(raw.get("measurement") or {}),
+                # A malformed measurement ("oops", [1, 2], 5) is evidence we
+                # cannot read, not a reason to drop the profile or the file.
+                "measurement": (
+                    dict(measurement) if isinstance(measurement, dict) else {}
+                ),
             }
         )
     return valid
@@ -199,7 +220,10 @@ def profile_summary(meta: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_training_geometry(
-    existing: dict[str, Any] | None, training_geometry: dict[str, Any]
+    existing: dict[str, Any] | None,
+    training_geometry: dict[str, Any],
+    *,
+    model_family: str,
 ) -> dict[str, Any]:
     """Replace training geometry while preserving user-approved profiles.
 
@@ -207,6 +231,7 @@ def merge_training_geometry(
     """
     result = normalized_slice_meta(existing or {})
     result["training_geometry"] = dict(training_geometry)
+    result["model_family"] = str(model_family)
     return result
 
 
@@ -271,7 +296,7 @@ def profile_by_id(
 def _clamped_float(value: object, default: float, lo: float, hi: float) -> float:
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(lo, min(hi, parsed)) if np.isfinite(parsed) else default
 
@@ -279,7 +304,7 @@ def _clamped_float(value: object, default: float, lo: float, hi: float) -> float
 def _clamped_int(value: object, default: int, lo: int, hi: int) -> int:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return max(lo, min(hi, parsed))
 
@@ -292,7 +317,7 @@ def _training_values(geometry: dict[str, Any]) -> dict[str, Any]:
     for target in geometry.get("target_sizes") or []:
         try:
             targets.append(float(target))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
     imgsz = _clamped_int(geometry.get("imgsz"), 0, 0, 8192)
     if targets and imgsz > 0:

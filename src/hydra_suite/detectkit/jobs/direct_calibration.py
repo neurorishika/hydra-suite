@@ -183,8 +183,9 @@ def resolve_calibration_dataset_yaml(dataset_dir) -> Path | None:
     A sliced-training run's derived dataset holds TILES, not acquisition
     frames. Calibrating SAHI on tiles measures the wrong thing entirely --
     the whole point of the sweep is how slicing behaves on full frames -- so
-    a sliced manifest (``type == "sliced_obb"``) is followed back to the
-    unsliced ``source`` dataset it was cut from. The hop is bounded so a
+    a sliced manifest (``type == "sliced_obb"``) and a ``derived_*`` manifest
+    (``derived_segment``, cut from a sliced dataset) are both followed back to
+    the unsliced ``source`` dataset they were cut from. The hop is bounded so a
     corrupt manifest chain cannot loop forever.
 
     Returns ``None`` when no yaml can be resolved; callers must then fall
@@ -203,7 +204,7 @@ def resolve_calibration_dataset_yaml(dataset_dir) -> Path | None:
             except (OSError, ValueError):
                 manifest = {}
             if isinstance(manifest, dict) and str(manifest.get("type", "")).startswith(
-                "sliced"
+                ("sliced", "derived")
             ):
                 source = str(manifest.get("source", "") or "").strip()
                 if not source:
@@ -1054,7 +1055,7 @@ def run_direct_calibration(request, *, progress=None, should_stop=None):
         # polygons exist at all; the confidence gate is post-merge, but
         # recovering a row from a permissive preview needs an UNCAPPED
         # post-filter set, and that cap is clamped at
-        # MAX_DOWNSTREAM_CROPS_PER_FRAME -- so no superset exists above it.
+        # MAX_DETECTIONS_PER_FRAME -- so no superset exists above it.
         for merge in request.merge_settings:
             for confidence in request.confidences:
                 outcome.previews.append(

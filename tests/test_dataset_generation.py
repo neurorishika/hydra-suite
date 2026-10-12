@@ -1631,12 +1631,9 @@ def test_detect_records_for_frames_uses_a_cache_built_by_a_separate_runner(
     # excluded from the cache key. Model path/mode must match export's
     # defaults for the keys to agree, which is exactly what the fix makes
     # possible.
-    # `max_targets` MUST match what export will ask for. It is part of the
-    # cache key (`keys.py`: `max_detections` + `raw_detection_cap`) because it
-    # decides which raw detections exist at all, and export deliberately runs
-    # an uncapped-for-AL ceiling rather than the tracking animal count. A cache
-    # written under a SMALLER cap must not be reused -- see
-    # `test_export_does_not_reuse_a_cache_capped_below_its_own_ceiling`.
+    # `max_targets` is no longer part of the detection cache key (schema v6:
+    # extraction is N-free, N is applied at replay); it is kept equal to
+    # export's ceiling here only so the two configs are otherwise identical.
     tracking_cfg = build_obb_only_config(
         "yolo26s-obb.pt",
         confidence_threshold=0.25,

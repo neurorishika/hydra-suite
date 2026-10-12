@@ -44,6 +44,7 @@ def run_tracking_cli(
     config_path: str | None = None,
     keystone_override: bool = False,
     sahi_profile: str | None = None,
+    video_scale: float | None = None,
     gpus: str | None = None,
     jobs: int | None = None,
     threads_per_job: int | None = None,
@@ -68,6 +69,7 @@ def run_tracking_cli(
         explicit_config_path=config_path,
         keystone_override=keystone_override,
         sahi_profile=sahi_profile,
+        video_scale=video_scale,
         apply_tuned_inference=apply_tuned_inference,
         inference_autotune_manual=inference_autotune_manual,
     )

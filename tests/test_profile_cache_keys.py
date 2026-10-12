@@ -18,6 +18,7 @@ depend on app layers" rule: TESTS may import an app-layer module even though
 from hydra_suite.core.inference.cache.keys import _slice_config_hash
 from hydra_suite.core.inference.config import _slice_config_from_params
 from hydra_suite.core.inference.slice_meta import (
+    SLICE_META_SCHEMA_VERSION,
     slice_meta_to_panel_values,
     upsert_slice_profile,
 )
@@ -109,4 +110,7 @@ def test_two_profiles_live_on_one_artifact():
     meta = upsert_slice_profile(
         meta, name="Fast scan", settings=dict(BASE_SETTINGS, object_tile_fraction=0.7)
     )
-    assert len(meta["profiles"]) == 2 and meta["schema_version"] == 2
+    assert (
+        len(meta["profiles"]) == 2
+        and meta["schema_version"] == SLICE_META_SCHEMA_VERSION
+    )

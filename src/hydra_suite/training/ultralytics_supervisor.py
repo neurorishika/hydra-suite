@@ -178,6 +178,9 @@ def _estimate_host_bytes(spec) -> int:
             and not is_hidden_file(path)
         )
         estimate += count * imgsz * imgsz * 3
+    # Host use keeps creeping up after the first validation (measured about
+    # 0.14 GiB/min on yolo26n-seg), so leave headroom over the static sum.
+    estimate = int(estimate * 1.35)
     return max(4 * GiB, estimate)
 
 
@@ -303,7 +306,13 @@ def _run_ultralytics_once(
                 admission_warnings,
             ),
         }
-    hard = min(budget.usable_host_bytes, estimate)
+    # The cap comes from the HOST, not from our guess of the job. The estimate
+    # decides admission only; using it as the kill threshold meant any
+    # under-estimate (hardware, dataset, worker growth) killed a healthy run
+    # while the machine had tens of GiB free. Keep the same 10% headroom the
+    # DetectKit sidecars leave so the prelaunch re-check tolerates jitter.
+    usable = budget.usable_host_bytes
+    hard = min(usable, max(estimate, int(usable * 0.9)))
     soft = max(1, int(hard * 0.9))
     environment = dict(os.environ)
     cuda_uuid = None

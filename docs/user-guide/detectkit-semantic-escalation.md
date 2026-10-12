@@ -79,39 +79,55 @@ output, not masks — so you don't need polygon labels to calibrate.
 
 Calibration fits **two** parameters against your labelled frames:
 
-1. **Tile fraction** — whether (and how finely) the frame is tiled before
-   inference, and
+1. **Object scale** (the tile fraction, `--tile-fraction` on the command
+   line) — whether (and how finely) the frame is tiled before inference.
+   Tile size = body size ÷ object scale; `0` shows as "full frame (no
+   tiling)", and
 2. **Confidence** — the score threshold used to keep or drop a detected
    instance.
 
-**The tile-fraction default shown in the dialog (`0.05`) is an unvalidated
+**The object-scale default shown in the dialog (`0.05`) is an unvalidated
 starting guess taken from a single measured configuration on one dataset.
 It is not a tuned value, and it should not be treated as one.** It exists
 only to prefill the dialog if you skip calibration. Calibration is how you
-actually fit the tile fraction (and the confidence) to your own images.
+actually fit the object scale (and the confidence) to your own images.
 
-This asymmetry matters operationally: **changing the tile fraction requires
+This asymmetry matters operationally: **changing the object scale requires
 a full re-run** (tile geometry is baked into what gets inferred), while
 **changing the confidence does not** — a staged run keeps every candidate
 detection in a cache, and re-thresholding it to a different confidence is
 free (no inference, just re-filtering the cache). Calibrate confidence
-liberally; calibrate tile fraction only when you actually plan to re-run.
+liberally; calibrate the object scale only when you actually plan to re-run.
 
-### Reference body size, and where it comes from
+### Body size, and where it comes from
 
 Tiling needs to know roughly how large one animal is, in pixels: the tile
-edge is `reference body size / tile fraction`. DetectKit resolves it from
-the first of these that yields a value:
+edge is `body size / object scale`, shown read-only in the **Resolved tile**
+row. DetectKit resolves the body size from the first of these that yields a
+value:
 
-1. the project's sliced-training reference body size,
+1. the project's sliced-training reference body size (badge `project`),
 2. the **median longest side of the labels you already have** in the
-   selected sources, then
-3. **you** — the dialog's "Reference body size (px)" field is editable, and
-   shows which of the three it was prefilled from.
+   selected sources (badge `dataset`), then
+3. **you**: an unknown body size ("unknown (tiling off)") stays editable.
+   A derived one is read-only until you check **Override**.
 
-If none of them resolves, tiling switches **off**, which is the worst
-configuration measured for small animals. The dialog says so explicitly
-rather than proceeding quietly.
+A finetuned model's stamped body size (badge `stamped`) is used when the
+model was trained at one and the project chain is empty. If no body size
+resolves, tiling switches **off**, which is the worst configuration measured
+for small animals. The dialog says so explicitly rather than proceeding
+quietly.
+
+The dialog opens with the settings you last accepted for that model
+variant, else its saved calibration, else the model's stamped scale, else
+the `0.05` starting guess at the body size above. The headless
+`detectkit escalate sam3` command resolves its tiling the same way, so a
+run with no tiling flags stages what the dialog would have opened with.
+`--tile-fraction` and `--reference-body-px` override it (see [SAM2 and SAM3:
+install and run](sam-install-and-run.md#running-from-the-command-line)).
+The tiling rows are the shared SAHI widget. [SAHI Settings](sahi-settings.md)
+describes every row, badge, and the whole-animal overlap hint, including
+why a deliberate overlap of 0.5 is never nudged down.
 
 ### The exhaustive-labelling checkbox
 
@@ -404,6 +420,13 @@ use elsewhere in DetectKit — so a training tile and an inference tile are
 built the same way. Polygon labels are the only geometry level training can
 use; AABB/OBB-only sources need geometry escalation first.
 
+The panel's **Tiling (SAHI geometry)** group is the shared SAHI widget (see
+[SAHI Settings](sahi-settings.md)). It defaults to "Fit to animal size", an
+object scale of `0.055` of the 1008 px input, and a tile overlap of `0.25`.
+Fragments below the minimum retained area are kept but marked `is_crowd`
+rather than dropped. The `0.055` training default is deliberately not the
+escalation dialog's `0.05` starting guess.
+
 ### Defaults
 
 The panel's defaults come from a training spike, not from taste — see the
@@ -444,8 +467,12 @@ usable evidence either way. See the module docstring of
 A finished run publishes a **merged, full checkpoint** — the LoRA adapter
 folded into the base weights, not the adapter alone — to
 `get_models_dir() / "sam3_finetuned"`, alongside a JSON sidecar recording
-the run's parameters and dataset fingerprint, and registers it in the
-model registry. From then on, the escalation dialog's model selector
+the run's parameters and dataset fingerprint
+(`<checkpoint>.sam3_meta.json`), and registers it in the model registry.
+Publishing also writes the tiling geometry to
+`<checkpoint>.slice_meta.json` (schema 3, `model_family: "sam3"`), the
+same sidecar format YOLO models use. The geometry stays in
+`.sam3_meta.json` too, so older readers keep working. From then on, the escalation dialog's model selector
 offers it next to the stock `sam3` checkpoint.
 
 A load guard (`assert_checkpoint_loaded`) checks that a selected checkpoint

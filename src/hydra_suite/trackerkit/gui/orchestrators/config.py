@@ -44,6 +44,10 @@ from hydra_suite.core.inference.model_paths import (
     remove_model_from_repository,
 )
 from hydra_suite.core.inference.slice_meta import profile_summary, read_slice_meta
+from hydra_suite.core.post.video_output_scale import (
+    DEFAULT_VIDEO_OUTPUT_SCALE,
+    validate_video_output_scale,
+)
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.engine_params import (
     RuntimeContext,
@@ -451,7 +455,7 @@ class ConfigOrchestrator:
         advanced = self._mw.advanced_config
         return {
             "enabled": bool(panel.chk_slice_enabled.isChecked()),
-            "geometry_mode": panel.combo_slice_geometry.currentText(),
+            "geometry_mode": panel.combo_slice_geometry.currentData(),
             "overlap": panel.spin_slice_overlap.value(),
             "object_tile_fraction": panel.spin_slice_object_fraction.value(),
             "trained_body_px": advanced.get("slice_trained_body_px", 0.0),
@@ -500,7 +504,8 @@ class ConfigOrchestrator:
         slice_geo = str(get_cfg("slice_geometry_mode", default="auto_model")).strip()
         if slice_geo not in {"auto_model", "auto_object", "custom"}:
             slice_geo = "auto_model"
-        self._panels.detection.combo_slice_geometry.setCurrentText(slice_geo)
+        geometry_combo = self._panels.detection.combo_slice_geometry
+        geometry_combo.setCurrentIndex(geometry_combo.findData(slice_geo))
         self._mw.advanced_config["slice_profile_id"] = str(
             get_cfg("slice_profile_id", default="") or ""
         )
@@ -722,7 +727,14 @@ class ConfigOrchestrator:
         self._mw._on_runtime_context_changed()
 
     def _load_config_core_tracking(self, get_cfg, get_cfg_time):
-        self._panels.setup.spin_max_targets.setValue(get_cfg("max_targets", default=4))
+        from hydra_suite.trackerkit.gui.limit_guard import loaded_target_count_or_report
+
+        # setValue would silently clamp an N above the per-frame limit to it.
+        n_targets = loaded_target_count_or_report(
+            self._mw, get_cfg("max_targets", default=4)
+        )
+        if n_targets is not None:
+            self._panels.setup.spin_max_targets.setValue(n_targets)
         self._panels.tracking.spin_max_dist.setValue(
             get_cfg(
                 "max_assignment_distance_multiplier",
@@ -1103,6 +1115,14 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_arrow_length.setValue(
             get_cfg("video_arrow_length", default=0.7)
         )
+        raw_scale = get_cfg("video_output_scale", default=DEFAULT_VIDEO_OUTPUT_SCALE)
+        try:
+            scale = validate_video_output_scale(raw_scale)
+        except ValueError as exc:
+            # Never let the spinbox clamp it quietly; keep the default and say so.
+            logger.error("%s -- keeping %.2f", exc, DEFAULT_VIDEO_OUTPUT_SCALE)
+            scale = DEFAULT_VIDEO_OUTPUT_SCALE
+        self._panels.postprocess.spin_video_output_scale.setValue(scale)
         self._panels.postprocess.check_video_show_pose.setChecked(
             get_cfg(
                 "video_show_pose",
@@ -1768,7 +1788,7 @@ class ConfigOrchestrator:
                 ],
                 "yolo_fixed_angle_deg": self._panels.detection.spin_yolo_fixed_angle.value(),
                 "slice_enabled": self._panels.detection.chk_slice_enabled.isChecked(),
-                "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentText(),
+                "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentData(),
                 "slice_profile_id": str(
                     self._mw.advanced_config.get("slice_profile_id", "") or ""
                 ),
@@ -1974,6 +1994,7 @@ class ConfigOrchestrator:
                 "video_marker_size": self._panels.postprocess.spin_marker_size.value(),
                 "video_text_scale": self._panels.postprocess.spin_text_scale.value(),
                 "video_arrow_length": self._panels.postprocess.spin_arrow_length.value(),
+                "video_output_scale": self._panels.postprocess.spin_video_output_scale.value(),
                 "video_show_pose": self._panels.postprocess.check_video_show_pose.isChecked(),
                 "video_pose_color_mode": (
                     "track"
@@ -3328,7 +3349,13 @@ class ConfigOrchestrator:
             )
             return
 
-        params = self.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(
+            self._mw, "Optimizer", getter=self.get_parameters_dict
+        )
+        if params is None:
+            return
 
         cache_path, already_valid = self._find_or_plan_optimizer_cache_path(
             video_path, params, start_frame, end_frame
@@ -3381,7 +3408,13 @@ class ConfigOrchestrator:
             QMessageBox.warning(self._mw, "No Video", "Please load a video first.")
             return
 
-        params = self.get_parameters_dict()
+        from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit
+
+        params = params_or_report_limit(
+            self._mw, "Background helper", getter=self.get_parameters_dict
+        )
+        if params is None:
+            return
 
         dialog = BgParameterHelperDialog(video_path, params, self._mw)
         if dialog.exec() == QDialog.Accepted:
@@ -3531,6 +3564,23 @@ class ConfigOrchestrator:
         return filename
 
     @staticmethod
+    def _is_registered_yolo_model(metadata):
+        if not isinstance(metadata, dict):
+            return False
+        return bool(
+            str(metadata.get("task_family", "")).strip()
+            or _normalize_usage_role(metadata.get("usage_role", ""))
+        )
+
+    @staticmethod
+    def _is_in_model_dirs(model_abs, models_dir, model_dirs):
+        """True when ``model_abs`` sits directly in one of ``model_dirs``."""
+        parent = os.path.normcase(
+            os.path.normpath(os.path.relpath(os.path.dirname(model_abs), models_dir))
+        )
+        return any(parent == os.path.normcase(os.path.normpath(d)) for d in model_dirs)
+
+    @staticmethod
     def _yolo_model_matches_filter(metadata, task_family=None, usage_role=None):
         if not isinstance(metadata, dict):
             return True
@@ -3572,8 +3622,15 @@ class ConfigOrchestrator:
         usage_role=None,
         repository_dir=None,
         recursive=False,
+        unregistered_dirs=None,
     ):
-        """Populate a YOLO-model combo with optional metadata role filtering."""
+        """Populate a YOLO-model combo with optional metadata role filtering.
+
+        ``unregistered_dirs`` (paths relative to the scanned directory) limits
+        where a checkpoint with no registry role may come from. A recursive
+        scan of the models root otherwise lists SAM, pose and classifier
+        weights, which carry no role and so pass the role filter.
+        """
         selected_path = preferred_model_path
         if selected_path is None:
             selected_data = combo.currentData(Qt.UserRole)
@@ -3614,6 +3671,11 @@ class ConfigOrchestrator:
                 metadata, task_family=task_family, usage_role=usage_role
             ):
                 continue
+            if unregistered_dirs is not None and not self._is_registered_yolo_model(
+                metadata
+            ):
+                if not self._is_in_model_dirs(model_abs, models_dir, unregistered_dirs):
+                    continue
             entries[rel_path] = self._format_yolo_model_label(rel_path)
 
         combo.blockSignals(True)

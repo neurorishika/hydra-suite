@@ -49,6 +49,14 @@ A model predicts oriented boxes per frame; detections feed the same tracking pip
 - Background subtraction is unstable.
 - You have a suitable OBB model.
 
+### Sliced Inference (SAHI)
+
+In direct mode, "Enable sliced inference (SAHI)" tiles each frame so that
+small animals keep more pixels. When the model carries a
+`.slice_meta.json` sidecar, the tiling controls fill in from it (its
+calibration profile, else its training geometry). See [SAHI
+Settings](sahi-settings.md) for every control.
+
 ## Practical Selection Matrix
 
 | Scenario | Preferred Mode | Why |

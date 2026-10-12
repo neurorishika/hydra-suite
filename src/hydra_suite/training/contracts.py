@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 from hydra_suite.utils.slice_geometry import DEFAULT_MIN_AREA_RATIO
+from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS
 
 
 class TrainingRole(str, Enum):
@@ -270,7 +271,8 @@ class Sam3LoraParams:
     adapt_scoring_head: bool = False
     # Tiling, mirroring the SAHI sliced-training knobs.
     geometry_mode: str = "auto_object"  # auto_object | auto_model | custom
-    object_tile_fraction: float = 0.055
+    # The SAM3 training default from the one defaults table (F4/F8).
+    object_tile_fraction: float = BACKEND_DEFAULTS["sam3"].object_tile_fractions[0]
     # Multi-scale fan-out. EMPTY means "use the scalar above", so today's
     # single-scale build is bit-for-bit unchanged by default. These are
     # ``object_tile_fraction``-valued (fractions of the model input for a
@@ -380,6 +382,11 @@ class AugmentationProfile:
         0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
     )
     resample_sim: float = 0.0  # 0=off; ~0.3 recommended. P(apply) alternate resampler.
+    # Scale / aspect-ratio invariance for canonical classifier crops
+    # (training-only; see training/scale_crop_aug.py). 0 = off. The crop
+    # centre is never moved; only the window's size / aspect ratio change.
+    scale_jitter: float = 0.0  # window size factor ~ U(1-j, 1+j)
+    aspect_jitter: float = 0.0  # window w:h ratio, log-uniform in [1/(1+a), 1+a]
     canonical_aug: bool = False  # off by default; opt-in Moderate CanonicalAug
     # (resample-kernel swap + sub-pixel warp jitter + mild blur/JPEG degrade)
     # applied to the canonical crop before the Layer-2 letterbox. Training-only.

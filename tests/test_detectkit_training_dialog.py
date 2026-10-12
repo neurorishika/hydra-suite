@@ -1420,3 +1420,95 @@ def test_close_button_is_refused_while_training(qapp, tmp_path, monkeypatch):
     dlg._training_running = False
     dlg.reject()
     assert not dlg.isVisible()
+
+
+def _registry_run(tmp_path, name, status, *, with_last=True):
+    run_dir = tmp_path / "runs" / name
+    (run_dir / "weights").mkdir(parents=True)
+    if with_last:
+        (run_dir / "weights" / "last.pt").write_bytes(b"ckpt")
+    dataset = tmp_path / "derived"
+    dataset.mkdir(exist_ok=True)
+    return {
+        "run_id": name,
+        "status": status,
+        "role": "segment_direct",
+        "run_dir": str(run_dir),
+        "spec": {"derived_dataset_dir": str(dataset)},
+    }
+
+
+def test_find_resumable_runs_offers_crashed_runs_with_a_checkpoint(
+    tmp_path, monkeypatch
+):
+    from hydra_suite.training import registry
+
+    runs = [
+        _registry_run(tmp_path, "old-crash", "failed"),
+        _registry_run(tmp_path, "done", "completed"),
+        _registry_run(tmp_path, "no-ckpt", "failed", with_last=False),
+        _registry_run(tmp_path, "owned", "recovery-required"),
+    ]
+    monkeypatch.setattr(registry, "load_registry", lambda: {"runs": runs})
+
+    found = registry.find_resumable_runs()
+
+    assert [r["run_id"] for r in found] == ["owned", "old-crash"]
+    assert found[0]["_run_dir"].endswith("owned")
+    assert found[0]["role"] == "segment_direct"
+
+
+def test_resume_is_enabled_after_a_restart_from_the_registry(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs import training_dialog as td
+    from hydra_suite.training import registry
+
+    runs = [_registry_run(tmp_path, "crashed", "failed")]
+    monkeypatch.setattr(registry, "load_registry", lambda: {"runs": runs})
+
+    dialog = td.TrainingDialog(_make_proj(tmp_path))
+
+    assert dialog._last_training_results == []
+    assert dialog.btn_resume.isEnabled()
+
+
+def test_training_dialog_sahi_off_collapses_the_slice_group(qapp, tmp_path):
+    """S6: SAHI off hides every SAHI row but Enable (and the preview); the
+    scroll page re-lays out shorter, and grows back with values intact."""
+    from PySide6.QtWidgets import QLayout, QScrollArea
+
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.sam3_panel._probed_once = True
+    group = dlg.slice_group
+    scroll = group.parentWidget()
+    while not isinstance(scroll, QScrollArea):
+        scroll = scroll.parentWidget()
+    page = scroll.widget()
+
+    def page_height() -> int:
+        for _ in range(3):
+            qapp.processEvents()
+        for layout in reversed(page.findChildren(QLayout)):
+            layout.invalidate()
+            layout.activate()
+        return page.minimumSizeHint().height()
+
+    dlg.show()
+    group.chk_slice_enabled.setChecked(True)
+    before = group.to_settings()
+    on_height = page_height()
+    assert group.preview.isVisibleTo(group)
+    group.chk_slice_enabled.setChecked(False)
+    off_height = page_height()
+    assert not group.preview.isVisibleTo(group)
+    assert not group.combo_slice_geometry.isVisibleTo(group)
+    assert not group.btn_slice_advanced.isVisibleTo(group)
+    assert group.chk_slice_enabled.isVisibleTo(group)
+    assert off_height < on_height - 150
+    group.chk_slice_enabled.setChecked(True)
+    assert page_height() == on_height
+    assert group.to_settings() == before
+    dlg.close()

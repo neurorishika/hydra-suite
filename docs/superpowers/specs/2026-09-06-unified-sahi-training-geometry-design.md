@@ -8,7 +8,7 @@ leaves behind — Parts 5 and 6.)*
 "We have a parallel sahi calibration inside semantic escalation. We should just unify all
 these paths to have minimal divergences." The document now covers four paths, not two.)*
 
-**Status:** design proposal, pending review. No implementation.
+**Status:** Superseded by 2026-10-09-sahi-unification-design.md (shipped, merged to main e34ca06f)
 **Repo:** `/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker` @ `main` (`097408af`), read-only audit.
 
 > ## AMENDED 2026-09-06 (second pass) — the YOLO baseline MOVED under this document

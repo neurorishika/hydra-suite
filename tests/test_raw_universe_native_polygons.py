@@ -189,15 +189,12 @@ def test_concat_raw_concatenates_polygons():
     )
 
 
-def test_filter_from_tensors_subsets_polygons():
+def test_replay_filter_subsets_polygons():
     from hydra_suite.core.inference.config import OBBConfig
-    from hydra_suite.core.inference.stages.filtering import filter_from_tensors
-
-    class _Rt:
-        tensor_on_cuda = True
-        device = "cpu"
+    from hydra_suite.core.inference.stages.filtering import filter_with_indices
 
     cfg = OBBConfig(confidence_threshold=0.85)  # keeps row 0 only (0.9 vs 0.8)
-    out = filter_from_tensors(_raw_with_polygons(2), cfg, None, _Rt())
+    raw = m.materialize_tensors(_raw_with_polygons(2))
+    out, _idx = filter_with_indices(raw, cfg, None)
     assert out.num_detections == 1
     assert out.polygons is not None and len(out.polygons) == 1

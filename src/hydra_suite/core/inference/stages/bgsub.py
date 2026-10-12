@@ -22,6 +22,7 @@ from hydra_suite.core.background.model import BackgroundModel
 from hydra_suite.utils.image_processing import apply_image_adjustments
 
 from ..config import BgSubConfig
+from ..limits import MAX_DETECTIONS_PER_FRAME, DetectionLimitStats
 from ..result import OBBResult
 from ..runtime import RuntimeContext
 
@@ -137,6 +138,7 @@ def run_bgsub(
     config: BgSubConfig,
     runtime: RuntimeContext,
     roi_mask: np.ndarray | None = None,
+    limit_stats: DetectionLimitStats | None = None,
 ) -> OBBResult:
     """Detect on one frame. Frames MUST arrive in order.
 
@@ -185,15 +187,39 @@ def run_bgsub(
     emit_polygons = bool(getattr(config, "emit_native_geometry", False))
     if emit_polygons:
         meas, sizes, shapes, confidences, contours = model.measurer.detect_objects(
-            fg_mask, frame_idx, return_contours=True
+            fg_mask, frame_idx, return_contours=True, apply_target_gates=False
         )
     else:
         meas, sizes, shapes, confidences = model.measurer.detect_objects(
-            fg_mask, frame_idx
+            fg_mask, frame_idx, apply_target_gates=False
         )
         contours = None
     if not meas:
         return _empty_result(frame_idx)
+
+    # N-free extraction: the cache stores every contour that survives the
+    # N-independent size filters, ranked by area (stable) and bounded at the
+    # hard per-frame limit. MAX_TARGETS rules are applied at replay.
+    order = np.argsort(-np.asarray(sizes, dtype=np.float64), kind="stable")
+    if len(order) > MAX_DETECTIONS_PER_FRAME:
+        if limit_stats is not None:
+            limit_stats.record(frame_idx, len(order), criterion="area")
+        else:
+            logger.warning(
+                "Frame %d: %d background-subtraction contours exceed the hard "
+                "limit of %d per frame; keeping the %d largest.",
+                frame_idx,
+                len(order),
+                MAX_DETECTIONS_PER_FRAME,
+                MAX_DETECTIONS_PER_FRAME,
+            )
+        order = order[:MAX_DETECTIONS_PER_FRAME]
+    meas = [meas[i] for i in order]
+    sizes = [sizes[i] for i in order]
+    shapes = [shapes[i] for i in order]
+    confidences = [confidences[i] for i in order]
+    if contours is not None:
+        contours = [contours[i] for i in order]
 
     centroids = np.array([[m[0], m[1]] for m in meas], np.float32)
     angles = np.array([m[2] for m in meas], np.float32)
@@ -264,6 +290,7 @@ def run_bgsub_batch(
     config: BgSubConfig,
     runtime: RuntimeContext,
     roi_mask: np.ndarray | None = None,
+    limit_stats: DetectionLimitStats | None = None,
 ) -> list[OBBResult]:
     """Detect a window of frames.
 
@@ -293,6 +320,14 @@ def run_bgsub_batch(
             for f in frames
         ]
     return [
-        run_bgsub(frame, idx, model, config, runtime, roi_mask=roi_mask)
+        run_bgsub(
+            frame,
+            idx,
+            model,
+            config,
+            runtime,
+            roi_mask=roi_mask,
+            limit_stats=limit_stats,
+        )
         for frame, idx in zip(frames, frame_indices)
     ]

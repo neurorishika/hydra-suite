@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from hydra_suite.core.inference.cache.base import CacheKey
+from hydra_suite.utils.tiling_spec import DEFAULT_YOLO_IMGSZ
 
 Progress = Callable[[int, str], None]
 
@@ -73,7 +74,7 @@ def run_dataset_inference(
         predict_obb_for_frame_sequential,
         predict_preview_detections_for_image,
         predict_sliced_obb_result,
-        preview_object_tile_fraction,
+        sliced_preview_fraction,
     )
     from hydra_suite.detectkit.jobs.prediction_cache import (
         MAX_PATH_BYTES,
@@ -183,7 +184,13 @@ def run_dataset_inference(
                 frame = cv2.imread(str(image_path))
                 if frame is None:
                     raise RuntimeError(f"Could not read image: {image_path}")
-                imgsz = max(1, int(payload.get("imgsz_obb_direct", 640)))
+                imgsz = max(
+                    1,
+                    int(
+                        payload.get("slice_imgsz")
+                        or payload.get("imgsz_obb_direct", DEFAULT_YOLO_IMGSZ)
+                    ),
+                )
                 task = {"detect_direct": "detect", "segment_direct": "segment"}.get(
                     inference_kind, "obb"
                 )
@@ -193,15 +200,13 @@ def run_dataset_inference(
                     geometry_mode=slice_settings.geometry_mode,
                     imgsz=imgsz,
                     reference_body_px=slice_settings.reference_body_px,
-                    object_tile_fraction=preview_object_tile_fraction(
-                        slice_settings.target_sizes_for(imgsz),
-                        slice_settings.object_tile_fraction,
-                        imgsz,
-                    ),
+                    object_tile_fraction=sliced_preview_fraction(slice_settings),
                     slice_width=slice_settings.slice_width,
                     slice_height=slice_settings.slice_height,
                     overlap=slice_settings.overlap,
                     merge_threshold=slice_settings.merge_threshold,
+                    merge_policy=str(payload.get("slice_merge_policy") or "greedy_nmm"),
+                    merge_metric=str(payload.get("slice_merge_metric") or "ios"),
                     confidence_threshold=threshold,
                     task=task,
                 )

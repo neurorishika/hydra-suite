@@ -4,12 +4,10 @@ from typing import Any
 
 import cv2
 import numpy as np
-import torch
 
 from ..config import OBBConfig
+from ..limits import MAX_DETECTIONS_PER_FRAME, require_target_count_within_limit
 from ..result import OBBResult
-from ..runtime import RuntimeContext
-from .obb import _numpy_descending_indices, _RawOBBTensors
 
 # Size gates compare against ELLIPSE area, not the OBB rectangle area. The
 # MIN/MAX_OBJECT_SIZE thresholds are derived from a circular body area
@@ -20,201 +18,29 @@ from .obb import _numpy_descending_indices, _RawOBBTensors
 # keeps. Multiply by pi/4 to convert rectangle area -> ellipse area for parity.
 _ELLIPSE_AREA_FRACTION = np.pi / 4.0
 
-# Downstream crop consumers are intentionally frame-local. This finite cap is
-# independent of the detection frame batch and bounds canonical/AABB crop
-# materialization even for legacy configs where max_detections=0 meant
-# unlimited. Normal tracker configs use much smaller MAX_TARGETS values.
-MAX_DOWNSTREAM_CROPS_PER_FRAME = 128
+
+def _rank(confidences: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """Order (into the given arrays) by confidence desc, then raw index asc.
+
+    The single replay ranking. Detection caches are stored confidence-ranked
+    (``obb.rank_and_bound``), so a cache prefix IS a top-k under this ranking
+    -- which makes the 2N window, NMS and the final cut agree for every N and
+    keeps every replay set inside the per-animal superset. Extraction breaks
+    equal confidences later-first (``obb._numpy_descending_indices``), but
+    storage re-stamps rows in that rank order, so on a stored frame this
+    ranking is the identity: the two never disagree about a cached frame.
+    (Re-running ``rank_and_bound`` on a stored frame is NOT the identity on
+    ties -- cached frames must never be re-ranked.)
+    """
+    return np.lexsort((np.asarray(positions), -np.asarray(confidences)))
 
 
-def _effective_max_detections(config: OBBConfig) -> int:
+def _final_cap(config: OBBConfig) -> int:
+    """The replay-time final cap N. 0/unset means 'no N cut' (the limit)."""
     requested = int(getattr(config, "max_detections", 0) or 0)
     if requested <= 0:
-        return MAX_DOWNSTREAM_CROPS_PER_FRAME
-    return min(requested, MAX_DOWNSTREAM_CROPS_PER_FRAME)
-
-
-def filter_raw(
-    raw: OBBResult | _RawOBBTensors,
-    config: OBBConfig,
-    roi_mask: np.ndarray | None,
-    roi_mask_cuda: torch.Tensor | None,
-    runtime: RuntimeContext,
-) -> OBBResult:
-    """Dispatcher: CUDA path uses filter_from_tensors; CPU/MPS uses filter_detections."""
-    if isinstance(raw, _RawOBBTensors):
-        return filter_from_tensors(raw, config, roi_mask_cuda, runtime)
-    return filter_detections(raw, config, roi_mask)
-
-
-def filter_detections(
-    raw: OBBResult,
-    config: OBBConfig,
-    roi_mask: np.ndarray | None = None,
-) -> OBBResult:
-    """CPU/MPS path: apply confidence, size, ROI, NMS, and max-count gates in NumPy.
-
-    Per Correction 14: detection_ids of survivors are SUBSETS of raw.detection_ids;
-    they are never regenerated — this preserves cache stability across threshold edits.
-    """
-    n = raw.num_detections
-    if n == 0:
-        return raw
-
-    keep = np.ones(n, dtype=bool)
-    keep &= raw.confidences >= config.confidence_threshold
-
-    ellipse_area = raw.sizes * _ELLIPSE_AREA_FRACTION
-    if config.min_object_size > 0:
-        keep &= ellipse_area >= config.min_object_size
-    if config.max_object_size < float("inf"):
-        keep &= ellipse_area <= config.max_object_size
-
-    if config.min_aspect_ratio > 0 or config.max_aspect_ratio < float("inf"):
-        aspect = raw.shapes[:, 1]
-        keep &= (aspect >= config.min_aspect_ratio) & (
-            aspect <= config.max_aspect_ratio
-        )
-
-    if roi_mask is not None:
-        h, w = roi_mask.shape[:2]
-        for i in range(n):
-            if not keep[i]:
-                continue
-            cx, cy = int(raw.centroids[i, 0]), int(raw.centroids[i, 1])
-            if 0 <= cy < h and 0 <= cx < w:
-                keep[i] = bool(roi_mask[cy, cx])
-            else:
-                keep[i] = False
-
-    indices = np.where(keep)[0]
-    if len(indices) == 0:
-        return _select(raw, indices)
-
-    if config.iou_threshold < 1.0 and len(indices) > 1:
-        indices = _obb_nms(raw, indices, config.iou_threshold)
-
-    max_detections = _effective_max_detections(config)
-    if len(indices) > max_detections:
-        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
-        # LARGEST (sort by size)", inherited from the legacy detector, which
-        # let a large low-confidence blob displace a small high-confidence
-        # animal on any frame with more detections than targets. Shares
-        # `_numpy_descending_indices` with the raw cap so both cuts rank and
-        # break ties identically.
-        order = _numpy_descending_indices(raw.confidences[indices])[:max_detections]
-        indices = indices[order]
-
-    return _select(raw, indices)
-
-
-def filter_from_tensors(
-    raw: _RawOBBTensors,
-    config: OBBConfig,
-    roi_mask_cuda: torch.Tensor | None,
-    runtime: RuntimeContext,
-) -> OBBResult:
-    """CUDA path: gates run as tensor ops on device; only survivors are pulled to CPU for NMS.
-
-    Per Correction 14: this path generates detection_ids fresh because _RawOBBTensors
-    does not carry them — IDs follow `frame_idx * STRIDE + slot` over the post-filter
-    survivors, which becomes the canonical primary key for downstream caches.
-    """
-    n = raw.xywhr.shape[0]
-    if n == 0:
-        return _empty_obb_result(raw.frame_idx)
-
-    keep = raw.conf >= config.confidence_threshold
-
-    w_t = raw.xywhr[:, 2]
-    h_t = raw.xywhr[:, 3]
-    # H6 parity: drop non-finite / non-positive-geometry detections (legacy
-    # _obb_geometry:303-312) so NaN/Inf can't reach assignment/Kalman.
-    keep = keep & torch.isfinite(raw.xywhr).all(dim=1) & torch.isfinite(raw.conf)
-    keep = keep & (w_t > 0) & (h_t > 0)
-    sizes_t = w_t * h_t
-    ellipse_area_t = sizes_t * _ELLIPSE_AREA_FRACTION
-    if config.min_object_size > 0:
-        keep = keep & (ellipse_area_t >= config.min_object_size)
-    if config.max_object_size < float("inf"):
-        keep = keep & (ellipse_area_t <= config.max_object_size)
-
-    if config.min_aspect_ratio > 0 or config.max_aspect_ratio < float("inf"):
-        major_t = torch.maximum(w_t, h_t)
-        minor_t = torch.minimum(w_t, h_t).clamp_min(1e-6)
-        aspect_t = major_t / minor_t
-        keep = (
-            keep
-            & (aspect_t >= config.min_aspect_ratio)
-            & (aspect_t <= config.max_aspect_ratio)
-        )
-
-    if roi_mask_cuda is not None:
-        mask_h, mask_w = roi_mask_cuda.shape[:2]
-        cx = raw.xywhr[:, 0].long().clamp(0, mask_w - 1)
-        cy = raw.xywhr[:, 1].long().clamp(0, mask_h - 1)
-        keep = keep & roi_mask_cuda[cy, cx].bool()
-
-    indices_t = keep.nonzero(as_tuple=True)[0]
-    if indices_t.numel() == 0:
-        return _empty_obb_result(raw.frame_idx)
-
-    xywhr_np = raw.xywhr[indices_t].cpu().numpy()
-    corners_np = raw.corners[indices_t].cpu().numpy()
-    conf_np = raw.conf[indices_t].cpu().numpy()
-    cls_np = (
-        raw.cls[indices_t].cpu().numpy().astype(np.int64)
-        if raw.cls is not None
-        else np.zeros(int(indices_t.numel()), dtype=np.int64)
-    )
-    sizes_np = (xywhr_np[:, 2] * xywhr_np[:, 3]).astype(np.float32)
-    safe_h = np.where(xywhr_np[:, 3] > 0, xywhr_np[:, 3], 1.0)
-    aspect_np = np.where(xywhr_np[:, 3] > 0, xywhr_np[:, 2] / safe_h, 1.0).astype(
-        np.float32
-    )
-
-    m = int(len(conf_np))
-    subset = OBBResult(
-        frame_idx=raw.frame_idx,
-        centroids=xywhr_np[:, :2].astype(np.float32),
-        angles=xywhr_np[:, 4].astype(np.float32),
-        sizes=sizes_np,
-        shapes=np.stack([sizes_np, aspect_np], axis=1),
-        confidences=conf_np.astype(np.float32),
-        corners=corners_np.astype(np.float32),
-        detection_ids=OBBResult.make_detection_ids(raw.frame_idx, m),
-        class_ids=cls_np,
-        # Export-only native contours ride the same row subset as the tensors
-        # above; `_select` below reorders them with the NMS/cap survivors.
-        polygons=(
-            None
-            if raw.polygons is None
-            else [
-                raw.polygons[int(i)]
-                for i in indices_t.detach().cpu().numpy().astype(np.int64, copy=False)
-            ]
-        ),
-    )
-
-    local_idx = np.arange(m)
-
-    if config.iou_threshold < 1.0 and m > 1:
-        local_idx = _obb_nms(subset, local_idx, config.iou_threshold)
-
-    max_detections = _effective_max_detections(config)
-    if len(local_idx) > max_detections:
-        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
-        # LARGEST (sort by size)", inherited from the legacy detector, which
-        # let a large low-confidence blob displace a small high-confidence
-        # animal on any frame with more detections than targets. Shares
-        # `_numpy_descending_indices` with the raw cap so both cuts rank and
-        # break ties identically.
-        order = _numpy_descending_indices(subset.confidences[local_idx])[
-            :max_detections
-        ]
-        local_idx = local_idx[order]
-
-    return _select(subset, local_idx)
+        return MAX_DETECTIONS_PER_FRAME
+    return require_target_count_within_limit(requested)
 
 
 def _obb_nms(raw: OBBResult, indices: np.ndarray, iou_threshold: float) -> np.ndarray:
@@ -225,7 +51,7 @@ def _obb_nms(raw: OBBResult, indices: np.ndarray, iou_threshold: float) -> np.nd
     ``cv2.intersectConvexConvex`` (NOT a reconstructed RotatedRect), so the
     suppression decisions near the IoU threshold match the legacy detector.
     """
-    order = indices[np.argsort(raw.confidences[indices])[::-1]]
+    order = indices[_rank(raw.confidences[indices], indices)]
     hulls: dict[int, tuple[np.ndarray, float]] = {}
     # Axis-aligned bbox per detection for the cheap overlap pre-check (matches
     # legacy: boxes whose AABBs don't overlap have zero polygon IoU, so the
@@ -314,22 +140,27 @@ def filter_with_indices(
     *,
     apply_max_detections: bool = True,
 ) -> tuple[OBBResult, np.ndarray]:
-    """Run the same gates as filter_detections and return (filtered, pre-filter indices).
+    """The replay gates; returns ``(filtered, raw indices into raw)``.
 
-    Returned indices index into `raw`. They are used as the primary key by downstream
-    caches so that a threshold edit never invalidates HeadTail/CNN/Pose caches —
-    only the OBB detection cache stores pre-filter results; downstream caches are
-    keyed by these indices and re-aligned on load_frame.
+    ``raw`` must be a confidence-ranked cached frame (``rank_and_bound``
+    order). Order: 2N window (a prefix slice), confidence / size / aspect /
+    ROI gates, OBB NMS, final N cut. The returned RAW indices key every
+    per-animal cache; ``load_frame`` re-aligns per-animal rows by them.
 
-    ``apply_max_detections=False`` is a diagnostic-only mode for measuring
-    source candidates before the configured final tracking-target cap. The
-    independent hard downstream crop ceiling is still retained.
+    ``apply_max_detections=False`` returns the N-free SUPERSET (no 2N window,
+    no final N cut; still bounded by ``MAX_DETECTIONS_PER_FRAME``): the set
+    every per-animal stage is computed on, so their caches serve any N.
     """
     n = raw.num_detections
     if n == 0:
         return raw, np.zeros(0, dtype=np.int32)
 
+    final_cap = _final_cap(config) if apply_max_detections else MAX_DETECTIONS_PER_FRAME
     keep = raw.confidences >= config.confidence_threshold
+    if apply_max_detections:
+        # 2N replay window: the cache is confidence-ranked, so the first
+        # min(2N, n) rows are exactly the legacy "raw cap" candidates.
+        keep[min(n, 2 * final_cap) :] = False
     ellipse_area = raw.sizes * _ELLIPSE_AREA_FRACTION
     if config.min_object_size > 0:
         keep = keep & (ellipse_area >= config.min_object_size)
@@ -354,20 +185,9 @@ def filter_with_indices(
         keep_nms = _obb_nms(subset, np.arange(len(indices)), config.iou_threshold)
         indices = indices[keep_nms]
         subset = _select(raw, indices)
-    max_detections = (
-        _effective_max_detections(config)
-        if apply_max_detections
-        else MAX_DOWNSTREAM_CROPS_PER_FRAME
-    )
-    if len(indices) > max_detections:
-        # Keep the most CONFIDENT detections. This was "H5 parity: keep the
-        # LARGEST (sort by size)", inherited from the legacy detector, which
-        # let a large low-confidence blob displace a small high-confidence
-        # animal on any frame with more detections than targets. Shares
-        # `_numpy_descending_indices` with the raw cap so both cuts rank and
-        # break ties identically.
-        order = _numpy_descending_indices(raw.confidences[indices])[:max_detections]
-        indices = indices[order]
+    if len(indices) > final_cap:
+        order = _rank(raw.confidences[indices], indices)[:final_cap]
+        indices = indices[np.sort(order)]
         subset = _select(raw, indices)
     return subset, indices.astype(np.int32)
 
@@ -381,29 +201,37 @@ def filter_for_source(
 ) -> tuple[OBBResult, np.ndarray]:
     """Detection-source-aware dispatch in front of ``filter_with_indices``.
 
-    OBB emits raw, un-gated detections, so the gates live here. bg-sub does not:
-    ``BackgroundMeasurer.detect_objects`` already applies the contour-area, size,
-    and MAX_TARGETS gates, and ``run_bgsub`` already intersects the ROI with the
-    foreground mask — so by the time a bg-sub ``OBBResult`` reaches this layer
-    there is nothing left to filter and the identity is correct. There is
-    also no ``OBBConfig`` to gate with (``config.obb is None``), and bg-sub's
-    confidences are NaN, so running the OBB gates would silently drop every
-    detection on the confidence comparison.
+    OBB emits raw, un-gated detections, so the OBB gates live here. bg-sub
+    does not need them: ``BackgroundMeasurer.detect_objects`` applies the
+    contour-area and size gates and ``run_bgsub`` intersects the ROI with the
+    foreground mask. Only bg-sub's two N rules live here, at replay: skip the
+    frame when the stored contour count exceeds ``N * MAX_CONTOUR_MULTIPLIER``,
+    else keep the top N by area. There is no ``OBBConfig`` to gate bg-sub
+    with (``config.obb is None``), and its confidences are NaN, so the OBB
+    gates would drop every detection on the confidence comparison.
 
-    ``apply_max_detections=False`` is reserved for source-count diagnostics;
-    normal inference and replay use the default final target cap.
+    ``apply_max_detections=False`` returns the N-free superset (see
+    ``filter_with_indices``); normal replay applies the N rules.
     """
     if config.detection_source == "bgsub":
-        indices = np.arange(raw.num_detections, dtype=np.int32)
-        if raw.num_detections > MAX_DOWNSTREAM_CROPS_PER_FRAME:
-            # Background subtraction has no confidence gate (its confidences
-            # are NaN), but its legacy count gate keeps the largest objects.
-            # Apply the same ordering before any downstream crop consumer so
-            # loaded/multi-arena configs cannot bypass the hard crop bound.
-            order = np.argsort(raw.sizes)[::-1][:MAX_DOWNSTREAM_CROPS_PER_FRAME]
-            indices = np.ascontiguousarray(order, dtype=np.int32)
-            raw = _select(raw, indices)
-        return raw, indices
+        bg = getattr(config, "bgsub", None)
+        order = np.argsort(-np.asarray(raw.sizes, np.float64), kind="stable")
+        cap = MAX_DETECTIONS_PER_FRAME
+        if apply_max_detections and bg is not None:
+            target = require_target_count_within_limit(max(1, int(bg.max_targets)))
+            budget = target * int(bg.max_contour_multiplier)
+            # Contour-budget noise guard. It now counts the STORED contours
+            # (after the N-free area/size filters), not the raw findContours
+            # count -- an accepted semantic change of the N-free cache.
+            if raw.num_detections > budget:
+                order = order[:0]
+            cap = target
+        # Top-`cap` by area; re-sorted ascending so raw-index keying stays
+        # monotone for downstream caches.
+        indices = np.ascontiguousarray(np.sort(order[:cap]), dtype=np.int32)
+        if len(indices) == raw.num_detections:
+            return raw, indices
+        return _select(raw, indices), indices
     return filter_with_indices(
         raw,
         config.obb,

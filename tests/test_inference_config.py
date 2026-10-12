@@ -14,6 +14,7 @@ from hydra_suite.core.inference.config import (
     SliceConfig,
     build_inference_config_from_params,
 )
+from hydra_suite.core.inference.limits import EXTRACTION_CONFIDENCE_FLOOR
 
 
 def _minimal_cpu_config() -> InferenceConfig:
@@ -114,7 +115,9 @@ def test_tracker_sequential_raw_stage_uses_floor_not_final_confidence_filter():
 
     assert cfg.obb is not None
     assert cfg.obb.sequential is not None
-    assert cfg.obb.sequential.obb_confidence_threshold == pytest.approx(1e-3)
+    assert cfg.obb.sequential.obb_confidence_threshold == pytest.approx(
+        EXTRACTION_CONFIDENCE_FLOOR
+    )
     assert cfg.obb.confidence_threshold == pytest.approx(0.72)
 
 
@@ -403,3 +406,41 @@ def test_build_obb_only_config_rejects_unknown_task():
 
     with pytest.raises(ValueError, match="model_task"):
         build_obb_only_config("m.pt", runtime_tier="cpu", model_task="pose")
+
+
+_DIRECT_PARAMS = {"YOLO_OBB_MODE": "direct", "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt"}
+_SEQUENTIAL_PARAMS = {
+    "DETECTION_METHOD": "yolo_obb",
+    "YOLO_OBB_MODE": "sequential",
+    "YOLO_DETECT_MODEL_PATH": "/tmp/detect.pt",
+    "YOLO_CROP_OBB_MODEL_PATH": "/tmp/obb.pt",
+}
+
+
+@pytest.mark.parametrize("mode_params", [_DIRECT_PARAMS, _SEQUENTIAL_PARAMS])
+def test_obb_size_gate_is_off_when_size_filtering_disabled(mode_params):
+    """engine_params always emits MIN/MAX_OBJECT_SIZE from the multipliers;
+    ENABLE_SIZE_FILTERING alone decides whether they gate (legacy
+    yolo_detector and the bg-sub path both honour the flag)."""
+    params = dict(
+        mode_params,
+        ENABLE_SIZE_FILTERING=False,
+        MIN_OBJECT_SIZE=522,
+        MAX_OBJECT_SIZE=2437,
+    )
+    obb = build_inference_config_from_params(params).obb
+    assert obb.min_object_size == 0.0
+    assert obb.max_object_size == float("inf")
+
+
+@pytest.mark.parametrize("mode_params", [_DIRECT_PARAMS, _SEQUENTIAL_PARAMS])
+def test_obb_size_gate_applies_when_size_filtering_enabled(mode_params):
+    params = dict(
+        mode_params,
+        ENABLE_SIZE_FILTERING=True,
+        MIN_OBJECT_SIZE=522,
+        MAX_OBJECT_SIZE=2437,
+    )
+    obb = build_inference_config_from_params(params).obb
+    assert obb.min_object_size == pytest.approx(522.0)
+    assert obb.max_object_size == pytest.approx(2437.0)

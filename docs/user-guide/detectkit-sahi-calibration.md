@@ -10,6 +10,10 @@ knobs -- tile size, overlap, confidence, merge policy -- and the right values
 depend on your model, your animals, and your images. Calibration measures
 those knobs against your own labelled frames instead of asking you to guess.
 
+The tiling controls themselves (tile strategy, object scale, body size, tile
+overlap and their source badges) are the same in every host. See [SAHI
+Settings](sahi-settings.md).
+
 ## What calibration measures, and what it never touches
 
 Calibration runs your existing, already-trained detection model across a
@@ -106,6 +110,43 @@ measured with, and its scores are valid *for the cap named in the results
 table*. If your TrackerKit `MAX_TARGETS` is far below that cap, expect
 fewer detections per frame than the frontier reported.
 
+## Explore the tradeoff plot
+
+Results open on **Tradeoff plot**, with recall against measured seconds per
+full frame. Prefer points toward the upper left: more animals found with
+less inference time. Switch to tile cost, precision versus recall, F1, or
+match quality to explore other tradeoffs. Tile cost is the number of tile
+jobs per full frame (an unsliced frame is 1); it is a work proxy, not a speed
+ratio. Actual time depends on the model, hardware, batching, and merging.
+
+Blue rings identify the Pareto frontier for the two displayed metrics.
+A point is dominated when another improves at least one metric without
+worsening the other. This frontier does not replace the recommendation rule
+or its quality floors. Green stars mark the recommendation; orange squares
+mark your selection. **Scroll** over the chart to zoom around the cursor.
+**Box zoom** lets you drag a rectangle around a crowded region; **Pan** lets
+you drag the view. **Reset view**, **Back**, and **Forward** restore or revisit
+views. Turn Pan or Box zoom off to select points. Selection preserves your
+zoom and pan. Hover over a point to read its settings and measured metrics.
+
+Use **Pareto frontier only** to hide dominated settings while keeping every
+measurement in the table. Click a cluster and use **Points at click** to
+choose an exact setting when points overlap; the chooser also works with
+the keyboard. **Inspect recommended** selects the rule's suggested setting.
+The selected metrics and frame preview appear beside the chart. Expand
+**Recommendation details** to read the complete rule and explanation.
+
+Click any point to inspect its metrics and stored
+prediction overlays or stage a named profile. Repeated clicks cycle points
+that overlap. Selecting a point does not save or apply it.
+
+**Table (all measurements)** retains every row, including failed settings.
+Failed, unmeasured, and nonfinite results are excluded from the plot; the
+plot reports how many rows are unavailable in each view. Timing comparisons
+apply to the calibration evidence and runtime, not guaranteed deployment
+speed. These points compare settings for the calibrated checkpoint, rather
+than ranking different trained models.
+
 ## How to read the frontier columns
 
 Calibration reports one row per measured operating point (one tiling
@@ -140,15 +181,16 @@ Calibration can suggest a balanced operating point, but it never applies
 one automatically -- you always review and choose. The rule it uses, shown
 in the app and quoted here verbatim:
 
-> Balanced rule: drop failed and undersampled points, keep the Pareto
-> frontier of misses, extras and time, then take the fastest point whose F1
-> is within 0.01 of the best and whose localization quality is at least
-> 0.5.
+> Recall-first rule: drop failed points, keep only those recalling at
+> least 90% of labelled instances, then only those whose mean match
+> quality is at least 0.35, then only those with at least 60 matched
+> instances; among the survivors take the cheapest measured
+> seconds/frame, breaking ties on fewer tiles then higher confidence.
 
-If no point clears the eligibility floors (at least 60 matched instances
-and mean IoU at least 0.5), calibration refuses to recommend anything
-rather than post a misleadingly perfect score from a handful of lucky
-matches. In that case, label a few more frames or widen the sweep.
+If no point clears these eligibility floors, calibration refuses to
+recommend anything. The plot can still help diagnose the tradeoff, but a
+frontier point is not automatically eligible. Label more frames or widen
+the sweep when the evidence is insufficient.
 
 ## Saving, naming, and the primary profile
 
@@ -173,8 +215,11 @@ When you select a model with saved SAHI profiles in TrackerKit's detection
 panel, a profile selector appears alongside the tiling controls. Choosing
 "Training geometry" resets tiling to the values the model was trained
 with, with no calibration applied. Choosing a named profile fills in its
-measured tile size, overlap, object-tile fraction, confidence, and merge
-settings.
+measured tile size, overlap, object scale, confidence, and merge
+settings. The body size, and a custom tile size, carry a `profile` badge,
+or `stamped` for training geometry. A profile's overlap is never nudged toward the
+whole-animal minimum: if it sits below that minimum, the widget only notes
+it.
 
 If you then hand-edit any of those fields after selecting a profile, the
 selector switches to **`Custom (based on <name>)`** -- it keeps naming the
@@ -192,7 +237,7 @@ says so in the status line; otherwise it falls back to training geometry.
 `trackerkit track --config <video>_config.json` now honours the calibration
 profile named in the saved config: if the config's `slice_profile_id` points
 at a profile the model's sidecar still carries, the CLI run uses that
-profile's tile size, overlap, object-tile fraction, and merge settings --
+profile's tile size, overlap, object scale, and merge settings --
 the same values the GUI applied when the config was saved. Previously the
 CLI ignored `slice_profile_id` entirely and always ran with
 `advanced_config.json`'s machine-global defaults, so a config saved against
@@ -220,7 +265,7 @@ used to. Whenever the config's direct-detection model has **any** sidecar
 attached (every sliced-training publish stamps one, calibration or not),
 `trackerkit track` now takes the tiling knobs from that sidecar: the model's
 primary profile if one is marked, otherwise the geometry the model was
-trained with. Tile size, overlap, object-tile fraction and trained body size
+trained with. Tile size, overlap, object scale and trained body size
 therefore come from the model, and the four `slice_merge_*` knobs are reset
 to their defaults, instead of all of them being read from the local
 machine's `advanced_config.json`.
@@ -249,7 +294,7 @@ the config for you.
 ### Known residual: other `advanced_config` keys stay machine-global
 
 This fix carries only the SAHI/merge/confidence-adjacent knobs a profile
-actually measures (tile size, overlap, object-tile fraction, trained body
+actually measures (tile size, overlap, object scale, trained body
 size, and merge policy/metric/threshold/backend) from the named profile
 into a CLI run. Every other key in `advanced_config.json` -- for example
 `obb_seg_*` segmentation settings -- is still read from the local
