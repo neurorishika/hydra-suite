@@ -369,11 +369,11 @@ Examples:
     pack_shared_group = job_pack.add_mutually_exclusive_group()
     pack_shared_group.add_argument("--no-shared", action="store_true")
     pack_shared_group.add_argument("--shared-only", action="store_true")
-    # Deliberately NO --gpus / --jobs / --threads-per-job / --cpu-budget: they
-    # describe the COMPUTE BOX, not the experiment, and belong to `job run`. Not
-    # registering them makes passing one an "unrecognized arguments"
-    # SystemExit from argparse itself -- a loud rejection, not a silent
-    # ignore. Same reasoning as the calibrate subparser above.
+    # Deliberately NO --gpus / --jobs / --jobs-per-gpu / --longest-first /
+    # --threads-per-job / --cpu-budget: they describe the COMPUTE BOX, not the
+    # experiment, and belong to `job run`. Not registering them makes passing
+    # one an "unrecognized arguments" SystemExit from argparse itself -- a loud
+    # rejection, not a silent ignore. Same reasoning as the calibrate subparser above.
     # Fix X8: --force alone only allows repacking a non-empty job_dir
     # (clears models/config, removes only the OLD manifest's own
     # video/sidecar pack artifacts). It does NOT authorize discarding
@@ -439,6 +439,8 @@ Examples:
     job_run.add_argument("--jobs", type=int, default=None)
     job_run.add_argument("--threads-per-job", type=int, default=None)
     job_run.add_argument("--cpu-budget", type=int, default=None, metavar="N")
+    job_run.add_argument("--jobs-per-gpu", type=int, default=None, metavar="K")
+    job_run.add_argument("--longest-first", action="store_true")
     job_run.add_argument("--detach", action="store_true")
     job_run.add_argument("--calibrate", action="store_true")
     job_run.add_argument("--allow-tier-fallback", action="store_true")
@@ -547,12 +549,24 @@ def parse_arguments(argv: list[str] | None = None) -> object:
             ("jobs", "--jobs"),
             ("threads_per_job", "--threads-per-job"),
             ("cpu_budget", "--cpu-budget"),
+            ("jobs_per_gpu", "--jobs-per-gpu"),
         ):
             value = getattr(args, attr, None)
             if value is not None and int(value) < 1:
                 _subparser_choices(subcommands["job"])[job_command].error(
                     f"{flag} must be >= 1"
                 )
+        if job_command == "run":
+            # Mirror track's own checks so a bad combination fails here, not
+            # on the compute box after preflight (or over ssh).
+            job_run_parser = _subparser_choices(subcommands["job"])["run"]
+            has_gpus = bool(str(getattr(args, "gpus", None) or "").strip())
+            if int(getattr(args, "jobs_per_gpu", None) or 1) > 1 and not has_gpus:
+                job_run_parser.error("--jobs-per-gpu needs --gpus")
+            if getattr(args, "longest_first", False) and not (
+                has_gpus or int(getattr(args, "jobs", None) or 1) > 1
+            ):
+                job_run_parser.error("--longest-first needs --gpus or --jobs > 1")
 
     if args.command == "calibrate":
         cpu_budget = getattr(args, "cpu_budget", None)

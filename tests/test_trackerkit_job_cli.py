@@ -31,7 +31,8 @@ def test_job_pack_rejects_neither():
 
 
 @pytest.mark.parametrize(
-    "flag", ["--gpus", "--jobs", "--threads-per-job", "--cpu-budget"]
+    "flag",
+    ["--gpus", "--jobs", "--threads-per-job", "--cpu-budget", "--jobs-per-gpu"],
 )
 def test_job_pack_rejects_compute_box_flags(flag):
     """They describe the compute box, not the experiment (calibrate precedent)."""
@@ -381,7 +382,7 @@ def test_shared_root_remove_unknown_alias_names_the_known_ones(tmp_path, monkeyp
 
 
 _FANOUT_ARGV = ["--gpus", "0,1", "--jobs", "2", "--threads-per-job", "3"]
-_FANOUT_ARGV += ["--cpu-budget", "8"]
+_FANOUT_ARGV += ["--cpu-budget", "8", "--jobs-per-gpu", "2", "--longest-first"]
 
 
 def _write_min_job(job_dir):
@@ -486,7 +487,27 @@ def test_job_run_rejects_non_positive_cpu_budget():
         parse_arguments(["job", "run", "/tmp/j", "--cpu-budget", "0"])
 
 
-@pytest.mark.parametrize("flag", ["--jobs", "--threads-per-job"])
+def test_job_pack_rejects_longest_first():
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "pack", "/tmp/j", "a.mp4", "--longest-first"])
+
+
+def test_job_run_rejects_jobs_per_gpu_without_gpus(capsys):
+    """Same rule as `track`, raised before preflight / ssh instead of after."""
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "run", "/tmp/j", "--jobs-per-gpu", "2"])
+    assert "--jobs-per-gpu needs --gpus" in capsys.readouterr().err
+
+
+def test_job_run_rejects_longest_first_without_fanout(capsys):
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "run", "/tmp/j", "--longest-first"])
+    assert "--longest-first needs --gpus or --jobs > 1" in capsys.readouterr().err
+    args = parse_arguments(["job", "run", "/tmp/j", "--jobs", "2", "--longest-first"])
+    assert args.longest_first is True
+
+
+@pytest.mark.parametrize("flag", ["--jobs", "--threads-per-job", "--jobs-per-gpu"])
 def test_job_run_rejects_non_positive_fanout_counts(flag, capsys):
     with pytest.raises(SystemExit):
         parse_arguments(["job", "run", "/tmp/j", flag, "0"])
