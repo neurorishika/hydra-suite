@@ -42,7 +42,7 @@ def probe_trt_session_in_child(
         {"model": str(model_path), "providers": _jsonable_providers(providers)}
     )
     proc = runner(
-        [sys.executable, "-m", __name__, payload],
+        [sys.executable, "-P", "-m", __name__, payload],
         capture_output=True,
         text=True,
     )
