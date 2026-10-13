@@ -149,8 +149,18 @@ class ClippingStats:
     degenerate_skipped_count: int = 0
 
     def record(self, corners: np.ndarray, geometry: CanonicalGeometry) -> float:
-        """Update the running tally for one detection; returns its overflow_ratio."""
-        ratio = overflow_ratio(corners, geometry)
+        """Update the running tally for one detection; returns its overflow_ratio.
+
+        A degenerate OBB (zero-length edge) is tallied via
+        :meth:`record_degenerate` and returns NaN: this is a diagnostic, and
+        letting the geometry error escape killed whole tracking runs on one
+        collapsed detector box.
+        """
+        try:
+            ratio = overflow_ratio(corners, geometry)
+        except ValueError:
+            self.record_degenerate()
+            return float("nan")
         self.total_count += 1
         if ratio > self.worst_overflow_ratio:
             self.worst_overflow_ratio = ratio
