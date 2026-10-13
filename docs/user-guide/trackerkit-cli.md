@@ -160,7 +160,7 @@ Two related habits on a shared box:
 
 The GUI exposes the same feature under **Batch › Run videos in parallel (processes per GPU)**;
 the spinbox next to it is `--jobs-per-gpu` and **Longest first** is
-`--longest-first` (the GUI has no thread-cap control).
+`--longest-first`; the **CPU cores** spinbox is `--cpu-budget` (threads per child are split automatically).
 
 ### CPU budget
 

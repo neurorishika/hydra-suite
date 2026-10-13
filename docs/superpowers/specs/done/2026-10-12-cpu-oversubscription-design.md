@@ -1,6 +1,6 @@
 # TrackerKit CPU oversubscription protection — design
 
-**Status:** Shipped — merged to main (merge/cpu-oversubscription).
+**Status:** Shipped — merged to main (4e913b90).
 
 ## Problem
 

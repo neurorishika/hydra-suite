@@ -818,6 +818,7 @@ def test_cli_and_gui_plan_the_same_k_fanout(
             opts.jobs,
             opts.jobs_per_gpu,
             opts.threads_per_job,
+            opts.longest_first,
         )
 
     assert _key(cli_opts) == _key(gui_opts)
