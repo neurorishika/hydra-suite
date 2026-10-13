@@ -8,6 +8,8 @@ def test_defaults():
     assert c.batch_parallel is False
     assert c.batch_parallel_jobs == 0
     assert c.batch_parallel_gpus == "auto"
+    assert c.batch_parallel_jobs_per_gpu == 1
+    assert c.batch_parallel_longest_first is False
 
 
 def test_round_trip():
@@ -37,6 +39,7 @@ def test_from_dict_tolerates_missing_keys():
     assert back.batch_parallel is False
     assert back.batch_parallel_jobs == 0
     assert back.batch_parallel_gpus == "auto"
+    assert back.batch_parallel_jobs_per_gpu == 1
 
 
 def test_fanout_fields_never_reach_engine_config():
@@ -47,3 +50,17 @@ def test_fanout_fields_never_reach_engine_config():
 
     src = Path(mod.__file__).read_text()
     assert "batch_parallel" not in src
+
+
+def test_jobs_per_gpu_round_trips():
+    c = TrackerConfig(batch_parallel_jobs_per_gpu=3)
+    d = c.to_dict()
+    assert d["batch_parallel_jobs_per_gpu"] == 3
+    assert TrackerConfig.from_dict(d).batch_parallel_jobs_per_gpu == 3
+
+
+def test_longest_first_round_trips():
+    d = TrackerConfig(batch_parallel_longest_first=True).to_dict()
+    assert d["batch_parallel_longest_first"] is True
+    assert TrackerConfig.from_dict(d).batch_parallel_longest_first is True
+    assert TrackerConfig.from_dict({}).batch_parallel_longest_first is False

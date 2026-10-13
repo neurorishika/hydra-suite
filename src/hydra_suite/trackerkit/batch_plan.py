@@ -99,6 +99,18 @@ def _retarget_side_outputs(cfg: dict[str, Any], video_path: str) -> dict[str, An
     return cfg
 
 
+# A frame range describes ONE video. A borrowed config that kept the keystone's
+# would clip every longer video to the keystone's last frame.
+_FRAME_RANGE_KEYS = ("start_frame", "end_frame")
+
+
+def _drop_frame_range(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Track the whole video: the engine defaults to frame 0 .. last frame."""
+    for key in _FRAME_RANGE_KEYS:
+        cfg.pop(key, None)
+    return cfg
+
+
 def _reject_render_collisions(specs: Sequence[BatchJobSpec]) -> None:
     """Belt and braces: two videos must never render into one annotated mp4.
 
@@ -135,9 +147,10 @@ def plan_batch_jobs(
     Semantics are exactly the pre-refactor ``cli.run_tracking_cli`` loop:
     video 1's resolved config becomes the keystone baseline; a video with no
     config of its own inherits the baseline; ``sahi_profile`` is applied to
-    every video. The one deliberate divergence is that a config a video
-    BORROWED from another gets its side-output paths retargeted -- see
-    ``_retarget_side_outputs`` and the guard at its call site.
+    every video. Two deliberate divergences for a config a video BORROWED
+    from another: its side-output paths are retargeted (see
+    ``_retarget_side_outputs``), and it never inherits a frame range, so the
+    video is tracked whole (see ``_drop_frame_range``).
     """
     videos = [str(v).strip() for v in video_paths if str(v).strip()]
     if not videos:
@@ -211,6 +224,10 @@ def plan_batch_jobs(
             provenance == "explicit" and len(plan) > 1
         ):
             cfg = _retarget_side_outputs(cfg, item.video_path)
+        # Only a video's OWN config (its sidecar, or the --config named for the
+        # first video) may restrict its frames; an inherited one never does.
+        if provenance == "keystone-baseline":
+            cfg = _drop_frame_range(cfg)
         if index == 1:
             # The keystone's own resolved dict IS the baseline; a video that
             # inherits it necessarily has no config file of its own, which can

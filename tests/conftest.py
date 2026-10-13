@@ -126,6 +126,53 @@ def _neutralize_leaked_training_flags():
             widget._training_running = False
 
 
+_BLOCKING_MESSAGE_BOXES = ("information", "warning", "critical", "question")
+
+
+@pytest.fixture(autouse=True)
+def _no_blocking_message_boxes(monkeypatch):
+    """Turn an unpatched static ``QMessageBox`` call into a test error, not a hang.
+
+    Offscreen, a real ``QMessageBox.information`` spins ``QDialog::exec`` until
+    someone clicks -- forever. pytest-timeout cannot break it: the signal
+    method needs the main thread back in Python, and the thread method
+    ``os._exit``s the whole run. A test that leaks a running worker hits this
+    even when every test patches its own boxes: the worker finishes during the
+    *next* test, after the patch was undone, and its completion slot opens a
+    real modal. So every test gets non-blocking stand-ins that record the call
+    and fail the test that pumped it. Tests that patch these themselves still
+    win (monkeypatch restores to the stand-in).
+    """
+    qtwidgets = sys.modules.get("PySide6.QtWidgets")
+    if qtwidgets is None:
+        yield
+        return
+    message_box = qtwidgets.QMessageBox
+    calls = []
+
+    def _stand_in(name):
+        def _record(*args, **kwargs):
+            title = args[1] if len(args) > 1 else kwargs.get("title")
+            text = args[2] if len(args) > 2 else kwargs.get("text")
+            calls.append(f"QMessageBox.{name}({title!r}, {text!r})")
+            if name == "question":
+                return message_box.StandardButton.Cancel
+            return message_box.StandardButton.Ok
+
+        return _record
+
+    for name in _BLOCKING_MESSAGE_BOXES:
+        monkeypatch.setattr(message_box, name, _stand_in(name))
+    yield
+    if calls:
+        pytest.fail(
+            "unpatched modal message box would have hung the suite "
+            "(patch it in the test, or join the worker whose slot raised it): "
+            + "; ".join(calls),
+            pytrace=False,
+        )
+
+
 # --- Portable tracking-job fixtures (shared by pack/verify/preflight tests) ---
 
 

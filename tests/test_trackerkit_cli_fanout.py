@@ -243,3 +243,138 @@ def test_restore_skips_a_none_previous_handler(monkeypatch):
         for sig, handler in saved.items():
             if handler is not None:
                 real_signal(sig, handler)
+
+
+# --- --jobs-per-gpu -----------------------------------------------------------
+
+
+def test_parse_jobs_per_gpu(tmp_path):
+    v = _videos(tmp_path, 1)
+    args = parse_arguments(["track", v[0], "--gpus", "0", "--jobs-per-gpu", "2"])
+    assert args.jobs_per_gpu == 2
+    assert parse_arguments(["track", v[0]]).jobs_per_gpu == 1
+
+
+@pytest.mark.parametrize(
+    "argv_tail",
+    [
+        ["--gpus", "0", "--jobs-per-gpu", "0"],
+        ["--jobs-per-gpu", "2"],
+        ["--jobs", "2", "--jobs-per-gpu", "2"],
+    ],
+)
+def test_parse_rejects_bad_jobs_per_gpu(tmp_path, argv_tail):
+    v = _videos(tmp_path, 1)
+    with pytest.raises(SystemExit):
+        parse_arguments(["track", v[0], *argv_tail])
+
+
+def _capture_options(monkeypatch, tmp_path, seen):
+    def _fake_fanout(specs, options, *, should_stop, events=None):
+        seen["jobs"] = options.jobs
+        seen["jobs_per_gpu"] = options.jobs_per_gpu
+        seen["gpus"] = len(options.gpus)
+        return _ok_result(specs, tmp_path)
+
+    monkeypatch.setattr(cli, "list_cuda_devices", _three_gpus)
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+
+
+def test_jobs_per_gpu_defaults_jobs_to_gpus_times_k(tmp_path, monkeypatch):
+    seen = {}
+    _capture_options(monkeypatch, tmp_path, seen)
+    assert cli.run_tracking_cli(_videos(tmp_path), gpus="0-2", jobs_per_gpu=2) == 0
+    assert seen == {"jobs": 6, "jobs_per_gpu": 2, "gpus": 3}
+
+
+@pytest.mark.parametrize("jobs, expected", [(99, 6), (4, 4)])
+def test_jobs_is_clamped_to_gpus_times_k(tmp_path, monkeypatch, jobs, expected):
+    seen = {}
+    _capture_options(monkeypatch, tmp_path, seen)
+    assert (
+        cli.run_tracking_cli(_videos(tmp_path), gpus="0-2", jobs=jobs, jobs_per_gpu=2)
+        == 0
+    )
+    assert seen["jobs"] == expected
+
+
+def test_k1_cli_options_are_unchanged(tmp_path, monkeypatch):
+    seen = {}
+    _capture_options(monkeypatch, tmp_path, seen)
+    assert cli.run_tracking_cli(_videos(tmp_path), gpus="0-2", jobs=99) == 0
+    assert seen == {"jobs": 3, "jobs_per_gpu": 1, "gpus": 3}
+
+
+def test_gpu_listed_twice_raises_even_with_jobs_per_gpu(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "list_cuda_devices", _three_gpus)
+    monkeypatch.setattr(
+        cli, "run_batch_fanout", lambda *a, **k: pytest.fail("must not launch")
+    )
+    with pytest.raises(ValueError):
+        cli.run_tracking_cli(_videos(tmp_path), gpus="0,0", jobs_per_gpu=2)
+
+
+def test_run_tracking_cli_rejects_k_below_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "list_cuda_devices", _three_gpus)
+    with pytest.raises(ValueError, match="jobs_per_gpu"):
+        cli.run_tracking_cli(_videos(tmp_path), gpus="0", jobs_per_gpu=0)
+
+
+def test_jobs_per_gpu_without_gpus_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="--gpus"):
+        cli.run_tracking_cli(_videos(tmp_path), jobs=2, jobs_per_gpu=2)
+
+
+# --- --longest-first -----------------------------------------------------------
+
+
+def test_parse_longest_first(tmp_path):
+    v = _videos(tmp_path, 1)
+    assert parse_arguments(
+        ["track", v[0], "--jobs", "2", "--longest-first"]
+    ).longest_first
+    assert parse_arguments(["track", v[0]]).longest_first is False
+
+
+def test_parse_rejects_longest_first_without_fanout(tmp_path):
+    v = _videos(tmp_path, 1)
+    with pytest.raises(SystemExit):
+        parse_arguments(["track", v[0], "--longest-first"])
+
+
+def test_longest_first_reaches_the_fanout_options(tmp_path, monkeypatch):
+    seen = {}
+
+    def _fake_fanout(specs, options, *, should_stop, events=None):
+        seen["longest_first"] = options.longest_first
+        return _ok_result(specs, tmp_path)
+
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+    assert cli.run_tracking_cli(_videos(tmp_path), jobs=2, longest_first=True) == 0
+    assert seen == {"longest_first": True}
+    assert cli.run_tracking_cli(_videos(tmp_path), jobs=2) == 0
+    assert seen == {"longest_first": False}
+
+
+def test_longest_first_without_fanout_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="--longest-first"):
+        cli.run_tracking_cli(_videos(tmp_path), longest_first=True)
+
+
+def test_jobs_per_gpu_with_auto_on_a_host_without_cuda_warns(
+    tmp_path, monkeypatch, caplog
+):
+    """`auto` stays best-effort, but dropping K must not be silent."""
+    seen = {}
+
+    def _fake_fanout(specs, options, *, should_stop, events=None):
+        seen["jobs_per_gpu"] = options.jobs_per_gpu
+        return _ok_result(specs, tmp_path)
+
+    monkeypatch.setattr(cli, "list_cuda_devices", lambda: [])
+    monkeypatch.setattr(cli, "host_has_cuda", lambda: False)
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.cli")
+    assert cli.run_tracking_cli(_videos(tmp_path), gpus="auto", jobs_per_gpu=2) == 0
+    assert seen == {"jobs_per_gpu": 1}
+    assert any("--jobs-per-gpu" in r.getMessage() for r in caplog.records)

@@ -327,6 +327,7 @@ ipython_config.py
 
 # pytest
 .pytest_cache/
+.pytest-per-file/
 .cache/
 
 # Coverage reports

@@ -1154,30 +1154,7 @@ class TrackingOrchestrator:
                     self._mw.current_batch_index
                 )
 
-                # If the video has its own config, load it.  Otherwise restore the
-                # keystone config so that videos without per-video configs always
-                # use the keystone parameters, not leftover params from a previous
-                # video that did have its own config.
-                plan = resolve_video_plan(
-                    fp,
-                    keystone_config_path=_get_video_config_path(
-                        self._mw.batch_videos[0]
-                    ),
-                    keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
-                )
-                # NOTE: _setup_video_file unconditionally clears the ROI/arena
-                # state near its top (clear_roi()), so a keystone-config load
-                # must happen AFTER it, not before -- loading first would just
-                # be wiped out again by the clear inside _setup_video_file.
-                # (Confirmed via a live repro; see Fix Wave 16 and Fix Wave 17
-                # reports for the root cause and verification.)
-                self._mw._setup_video_file(
-                    fp,
-                    skip_config_load=plan.use_keystone_baseline
-                    or not plan.has_own_config,
-                )
-                if plan.use_keystone_baseline and plan.config_path:
-                    self._mw._config_orch._load_config_from_file(plan.config_path)
+                self._load_next_batch_video(fp)
 
                 # Small delay to ensure UI updates before starting next
                 logger.info(
@@ -1195,6 +1172,35 @@ class TrackingOrchestrator:
         else:
             # Ensure reset if batch mode is disabled mid-run or not used
             self._mw.current_batch_index = -1
+
+    def _load_next_batch_video(self, fp: str) -> None:
+        """Load batch video *fp* with the config that should drive it.
+
+        Its own config when it has one; otherwise the keystone's, so a video
+        without per-video config never runs on leftover params from a previous
+        video that had one. A borrowed config never restricts frames: the
+        keystone's frame range describes the keystone, so the video is reset
+        to its whole length (the planner does the same for CLI/fan-out).
+        """
+        plan = resolve_video_plan(
+            fp,
+            keystone_config_path=_get_video_config_path(self._mw.batch_videos[0]),
+            keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
+        )
+        borrowed = plan.use_keystone_baseline or not plan.has_own_config
+        # NOTE: _setup_video_file unconditionally clears the ROI/arena
+        # state near its top (clear_roi()), so a keystone-config load
+        # must happen AFTER it, not before -- loading first would just
+        # be wiped out again by the clear inside _setup_video_file.
+        # (Confirmed via a live repro; see Fix Wave 16 and Fix Wave 17
+        # reports for the root cause and verification.)
+        self._mw._setup_video_file(fp, skip_config_load=borrowed)
+        if plan.use_keystone_baseline and plan.config_path:
+            self._mw._config_orch._load_config_from_file(plan.config_path)
+        if borrowed:
+            # After the keystone load, which would otherwise restore its range;
+            # _setup_video_file alone also leaves a previous start frame behind.
+            self._mw._reset_frame_range()
 
     def start_backward_tracking(self):
         """start_backward_tracking method documentation."""
@@ -1316,6 +1322,7 @@ class TrackingOrchestrator:
         )
         from hydra_suite.trackerkit.batch_fanout import (
             FanoutOptions,
+            build_gpu_slots,
             decide_gpu_slots,
             host_has_cuda,
         )
@@ -1342,18 +1349,27 @@ class TrackingOrchestrator:
             QMessageBox.warning(self._mw, "GPU selection", str(exc))
             return None
 
+        # Meaningless without a device to share; the CLI refuses it there.
+        jobs_per_gpu = max(1, int(cfg.batch_parallel_jobs_per_gpu)) if devices else 1
         requested = int(cfg.batch_parallel_jobs or 0)
         if devices and requested <= 0:
-            # "Unspecified": the scheduler gives one slot per selected GPU.
+            # "Unspecified": the scheduler opens every GPU slot.
             jobs = None
         else:
-            jobs = max(1, requested or 1)
-            if devices:
-                jobs = min(jobs, len(devices))
-        return FanoutOptions(gpus=devices, jobs=jobs, log_level="INFO")
+            jobs = len(
+                build_gpu_slots(devices, jobs=requested or 1, jobs_per_gpu=jobs_per_gpu)
+            )
+        return FanoutOptions(
+            gpus=devices,
+            jobs=jobs,
+            jobs_per_gpu=jobs_per_gpu,
+            longest_first=bool(cfg.batch_parallel_longest_first),
+            log_level="INFO",
+        )
 
     def start_batch_fanout(self) -> bool:
         """Run the whole batch as headless child processes, one per slot."""
+        from hydra_suite.trackerkit.batch_fanout import build_gpu_slots
         from hydra_suite.trackerkit.batch_plan import BatchPlanError, plan_batch_jobs
         from hydra_suite.trackerkit.gui.dialogs.batch_fanout_dialog import (
             BatchFanoutDialog,
@@ -1395,13 +1411,13 @@ class TrackingOrchestrator:
         options = self._resolve_fanout_options()
         if options is None:
             return False
-        # Mirror run_batch_fanout's own slot arithmetic so the status line
-        # cannot claim more slots than the scheduler will actually open.
-        if options.gpus:
-            requested = len(options.gpus) if options.jobs is None else int(options.jobs)
-            slots = max(1, min(requested, len(options.gpus)))
-        else:
-            slots = max(1, int(options.jobs or 1))
+        # run_batch_fanout's own slot arithmetic, so the status line cannot
+        # claim more slots than the scheduler will actually open.
+        slots = len(
+            build_gpu_slots(
+                options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
+            )
+        )
 
         # Never leave a previous run's table parented to the window forever.
         previous = getattr(self._mw, "batch_fanout_dialog", None)

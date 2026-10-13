@@ -68,14 +68,17 @@ Environment names: `hydra`, `hydra-mps`, `hydra-cuda` (sidecars: `hydra-sam3`, `
 ## Running Tests
 
 ```bash
-make pytest                # Run all tests
+make pytest                # Run all tests: one process per file, parallel (PYTEST_JOBS=N, PYTEST_ARGS="-- -k x")
+make pytest-serial         # Old single-process run (order-dependent hangs can stall it)
 python -m pytest tests/test_<name>.py         # Run a single test file
 python -m pytest tests/test_<name>.py::test_fn  # Run a single test function
 make test-cov              # Tests + terminal coverage
 make test-cov-html         # Tests + HTML coverage (htmlcov/index.html)
 ```
 
-pytest is configured in `pyproject.toml`. Test files are in `tests/`. Benchmarks are excluded by default (`-m "not benchmark"`).
+pytest is configured in `pytest.ini`. Test files are in `tests/`. Benchmarks are excluded by default (`-m "not benchmark"`).
+
+`make pytest` runs `tools/run_tests_per_file.py`: each file in its own process, longest-first, with a hard per-file kill (`--file-timeout`, default 1800s). Results land in `.pytest-per-file/` — `failures.txt` is the sorted `FAILED`/`ERROR`/`HUNG`/`CRASHED` set to `comm` against a baseline run, and `logs/` has one log per file. Compare failure sets only between runs made the same way (per-file vs single-process isolation changes which tests fail). An unpatched static `QMessageBox` call fails the test that pumped it (`tests/conftest.py`) instead of hanging offscreen.
 
 ## Equivalence & Benchmark Verification (byte-identical tracking + perf, MPS + CUDA)
 
@@ -179,7 +182,7 @@ refinekit      # RefineKit interactive proofreading
 detectkit      # DetectKit detection tool
 ```
 
-`trackerkit track --video-list x.txt --gpus auto` fans a batch out one child process per GPU (see `docs/user-guide/trackerkit-cli.md`); fan-out engages only with `--gpus` or `--jobs > 1`, so the plain CLI path stays byte-identical.
+`trackerkit track --video-list x.txt --gpus auto` fans a batch out one child process per GPU (see `docs/user-guide/trackerkit-cli.md`); fan-out engages only with `--gpus` or `--jobs > 1`, so the plain CLI path stays byte-identical. `--jobs-per-gpu K` (needs `--gpus`) runs K children per GPU; use it when one job leaves the GPU underused — 2 was the sweet spot on RTX 6000 Ada 4512² videos (+16% total fps, 3 added nothing) — and pair it with `--threads-per-job ≈ cpu_count / (GPUs × K)`. `--longest-first` launches the longest videos first (opt-in; default is input order).
 
 ## Code Quality
 

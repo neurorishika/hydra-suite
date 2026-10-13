@@ -17,8 +17,11 @@ from hydra_suite.runtime.resolver import ResolvedBackend
 
 def test_probe_reports_child_success_and_failure():
     def ok_runner(cmd, **kw):
-        assert cmd[:3] == [
+        # -P: the tracking process's working directory (a data folder) must
+        # not shadow imports in the probe child.
+        assert cmd[:4] == [
             sys.executable,
+            "-P",
             "-m",
             "hydra_suite.core.individual.classification.trt_probe",
         ]

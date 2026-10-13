@@ -25,6 +25,30 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def _join_dialog_workers(qapp, monkeypatch):
+    """Never let a test leave a dialog's worker running.
+
+    A test that misses its deadline (e.g. under load) used to return with the
+    worker still copying files. Its queued ``finished`` then ran the dialog's
+    completion slot during the next test -- after this test's QMessageBox
+    patches were undone -- and opened a real modal that hung the suite.
+    Requesting ``monkeypatch`` keeps this test's patches live until the
+    worker is joined and its slot has run.
+    """
+    yield
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+
+    for widget in qapp.topLevelWidgets():
+        if not isinstance(widget, SourceManagerDialog):
+            continue
+        for attr in ("_inspection_worker", "_import_worker", "_project_import_worker"):
+            worker = getattr(widget, attr, None)
+            if worker is not None:
+                worker.wait(30_000)
+    qapp.processEvents()
+
+
 def _make_proj(tmp_path):
     from hydra_suite.detectkit.gui.models import DetectKitProject
 
