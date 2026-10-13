@@ -32,13 +32,14 @@ def pytest_addoption(parser):
 
 
 import json
+import os
 
 import numpy as np
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolate_cpu_budget(monkeypatch):
+def _isolate_cpu_budget():
     """No test sees a box-level CPU budget, and none leaves the process capped.
 
     ``HYDRA_CPU_BUDGET``/``HYDRA_CPU_THREADS`` exported on the host (e.g. a
@@ -46,10 +47,21 @@ def _isolate_cpu_budget(monkeypatch):
     and a real ``set_process_cpu_cap(n)`` (GUI worker start, CLI single run)
     would leak capped thread env vars/pools into every later test. Lifting is
     a no-op when nothing was capped; the module is only touched if imported.
+
+    Deliberately does NOT request ``monkeypatch``: an autouse fixture that
+    does pulls monkeypatch's setup ahead of later autouse fixtures, so its
+    undo runs AFTER their teardown -- e.g. the Qt top-level-widget sweep
+    below would then see a test's still-patched ``QApplication``.
     """
-    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
-    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    saved = {
+        var: os.environ.pop(var)
+        for var in ("HYDRA_CPU_BUDGET", "HYDRA_CPU_THREADS")
+        if var in os.environ
+    }
     yield
+    for var in ("HYDRA_CPU_BUDGET", "HYDRA_CPU_THREADS"):
+        os.environ.pop(var, None)
+    os.environ.update(saved)
     cpu_budget = sys.modules.get("hydra_suite.runtime.cpu_budget")
     if cpu_budget is not None and cpu_budget.current_cpu_cap() is not None:
         cpu_budget.set_process_cpu_cap(None)

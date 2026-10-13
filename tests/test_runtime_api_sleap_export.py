@@ -135,7 +135,9 @@ def test_sleap_export_backend_onnx_predicts_canonical_output(tmp_path: Path) -> 
             self.name = name
 
     class _FakeSession:
-        def __init__(self, path, providers):
+        def __init__(self, path, providers, sess_options=None):
+            # Uncapped (plain path): ORT defaults, no SessionOptions.
+            assert sess_options is None
             providers_seen.append((str(path), list(providers)))
             self._providers = list(providers)
 
@@ -157,7 +159,9 @@ def test_sleap_export_backend_onnx_predicts_canonical_output(tmp_path: Path) -> 
                 peak_vals[i] = (0.9, 0.7, 0.1)
             return [peaks, peak_vals]
 
-    sys.modules["onnxruntime"] = types.SimpleNamespace(InferenceSession=_FakeSession)
+    # Restored on exit (a bare sys.modules assignment leaked the fake into
+    # every later test that imports onnxruntime).
+    stubs["onnxruntime"] = types.SimpleNamespace(InferenceSession=_FakeSession)
 
     with _patched_modules(stubs):
         backend = mod.SleapExportedBackend(
