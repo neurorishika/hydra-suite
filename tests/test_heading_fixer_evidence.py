@@ -40,9 +40,30 @@ def test_short_isolated_flips_are_corrected():
 
 
 def test_long_consistent_evidence_is_kept_without_motion():
-    theta = np.full(300, 1.0)
-    theta[100:160] = 1.0 + PI  # 60 frames of consistent opposite head calls
+    theta = np.full(400, 1.0)
+    theta[100:220] = 1.0 + PI  # 120 frames of consistent opposite head calls
     out = _fix_heading_globally(theta)
+    assert not _flipped(out, theta).any()
+
+
+def test_instant_reversal_in_a_still_animal_is_folded_in():
+    # 40 frames whose head calls all reverse at once while the animal stands
+    # still: physically impossible, so the shorter side follows the longer.
+    n = 300
+    theta = np.full(n, 1.0)
+    theta[100:140] = 1.0 + PI
+    x, y = np.zeros(n), np.zeros(n)
+    out = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0)
+    assert not _flipped(out, np.full(n, 1.0)).any()
+
+
+def test_reversal_at_a_track_join_is_allowed():
+    # A position jump of several body lengths is a join onto another animal;
+    # its heading may legitimately differ by 180 degrees.
+    n = 200
+    theta = np.r_[np.full(100, 1.0), np.full(100, 1.0 + PI)]
+    x = np.r_[np.zeros(100), np.full(100, 200.0)]
+    out = _fix_heading_globally(theta, x=x, y=np.zeros(n), body_size_px=40.0)
     assert not _flipped(out, theta).any()
 
 
@@ -56,8 +77,6 @@ def test_medium_flip_against_clear_motion_is_corrected():
     x, y = _walk_plus_x(n)
     theta = np.zeros(n)
     theta[80:100] = PI  # 20 frames pointing backwards while walking forward
-    kept = _fix_heading_globally(theta)  # no motion information: evidence wins
-    assert _flipped(kept, np.zeros(n))[80:100].all()
     out = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0)
     assert not _flipped(out, np.zeros(n)).any()
 

@@ -4663,6 +4663,16 @@ _HEADING_MOTION_COST = 0.3
 # the +-_HEADING_MOTION_HALF_WINDOW frame window.
 _HEADING_MOTION_MIN_BODY_FRAC = 0.25
 _HEADING_MOTION_HALF_WINDOW = 2
+# An animal cannot reverse its heading between two consecutive frames: a change
+# above _HEADING_REVERSAL_RAD costs an extra _HEADING_REVERSAL_COST, so a
+# reversed run of up to ~(2*pi + 2*cost) / _HEADING_OBS_COST frames (~52) is
+# folded into its surroundings even when its own head calls are consistent
+# (head-tail and pose both falter on curled, grooming or wall-climbing ants).
+# Exempt when the position also jumps by more than half a body length, which
+# is a track join onto another animal, not a turn.
+_HEADING_REVERSAL_RAD = 2.0 * np.pi / 3.0
+_HEADING_REVERSAL_COST = 10.0
+_HEADING_JOIN_BODY_FRAC = 0.5
 
 
 def heading_body_size_px(params, resize_factor: float = 1.0) -> float | None:
@@ -4713,7 +4723,9 @@ def _fix_heading_globally(
     two-state Viterbi minimises
 
     * smoothness: the circular heading change between consecutive valid
-      frames, so the result has no spurious frame-to-frame 180-degree flips;
+      frames, plus ``_HEADING_REVERSAL_COST`` when adjacent frames differ by
+      more than ``_HEADING_REVERSAL_RAD`` without a position jump, so the
+      result has no spurious frame-to-frame 180-degree flips;
     * evidence: ``_HEADING_OBS_COST`` for every frame reported opposite to its
       own directed heading (the head-tail/pose call that ``theta`` carries),
       plus ``_HEADING_MOTION_COST`` for every frame pointing against clear
@@ -4764,13 +4776,30 @@ def _fix_heading_globally(
         unary[:, has_mot] += _HEADING_MOTION_COST * against
 
     m = len(valid_idx)
+    # Pairs where an instant reversal is physically impossible: adjacent frames
+    # without a position jump (a jump means the track joined another animal).
+    no_reversal = np.zeros(m, dtype=bool)
+    no_reversal[1:] = np.diff(valid_idx) == 1
+    if x is not None and y is not None:
+        px = np.asarray(x, dtype=np.float64)[valid_idx]
+        py = np.asarray(y, dtype=np.float64)[valid_idx]
+        step = np.r_[0.0, np.hypot(np.diff(px), np.diff(py))]
+        if body_size_px and body_size_px > 0:
+            no_reversal &= ~(step > _HEADING_JOIN_BODY_FRAC * float(body_size_px))
+
+    def _pair(a, b, j):
+        d = _circ(a, b)
+        if no_reversal[j] and d > _HEADING_REVERSAL_RAD:
+            d += _HEADING_REVERSAL_COST
+        return d
+
     parent = np.zeros((m, 2), dtype=np.int8)
     dp = unary[:, 0].copy()
     for j in range(1, m):
         new = np.empty(2)
         for s in (0, 1):
-            c0 = dp[0] + _circ(cand[s, j], cand[0, j - 1])
-            c1 = dp[1] + _circ(cand[s, j], cand[1, j - 1])
+            c0 = dp[0] + _pair(cand[s, j], cand[0, j - 1], j)
+            c1 = dp[1] + _pair(cand[s, j], cand[1, j - 1], j)
             # Ties keep the previous frame unflipped (state 0).
             if c1 < c0:
                 new[s] = c1
