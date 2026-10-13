@@ -79,7 +79,9 @@ Cores this process may actually use, ≥ 1:
 - Invalid `HYDRA_CPU_BUDGET` (non-int, < 1) → warning, ignored.
 
 **Precedence inside a process:** `HYDRA_CPU_THREADS` (set by fan-out for its
-child; wins outright) > `--cpu-budget` > `HYDRA_CPU_BUDGET`. `build_child_env`
+child, or exported in the shell) is a ceiling: an explicit `--cpu-budget` / GUI
+budget can only lower it (`min`), and `HYDRA_CPU_BUDGET` never overrides it.
+Without `HYDRA_CPU_THREADS`: `--cpu-budget` > `HYDRA_CPU_BUDGET`. `build_child_env`
 strips `HYDRA_CPU_BUDGET` from the child env so a child never re-resolves the
 whole-box budget. `HYDRA_CPU_BUDGET` is local-only; `--cpu-budget` is the
 only form forwarded by remote `job run`.
@@ -120,8 +122,13 @@ idempotently (last setter wins, guarded by a lock):
   plain path stays byte-identical). `set_process_cpu_cap(None)` after a cap →
   restores the originals recorded on the first set.
 - `set_process_cpu_cap(n)`:
-  - `os.environ`: `OMP/MKL/OPENBLAS/NUMBA/VECLIB_MAXIMUM/NUMEXPR_NUM_THREADS`
-    and `OPENCV_FFMPEG_THREADS` → `min(original, n)` (unset → `n`). Sidecars
+  - `os.environ`: `OMP/MKL/OPENBLAS/VECLIB_MAXIMUM/NUMEXPR_NUM_THREADS`
+    and `OPENCV_FFMPEG_THREADS` → `min(original, n)` (unset → `n`).
+    `NUMBA_NUM_THREADS` is written only while numba is not yet imported —
+    which never holds at the real entry points (importing `trackerkit.cli`
+    loads numba) — so in-process numba is capped per thread by
+    `bind_thread_cpu_cap()`, and children get `NUMBA_NUM_THREADS` from
+    `build_child_env`. Sidecars
     spawned afterwards (SLEAP service, Ultralytics predict subprocess)
     inherit it, and **`OPENCV_FFMPEG_THREADS` is read by OpenCV at each
     `VideoCapture` open**, so it caps every tracking decoder without touching
@@ -205,6 +212,12 @@ the GUI sets it before starting a tracking/post-processing/export worker.
 - `trackerkit job run`: forward `--gpus`, `--jobs`, `--threads-per-job`,
   `--cpu-budget` into the generated `track` invocation instead of dropping
   them.
+- `trackerkit calibrate --cpu-budget N` (≥ 1): same single-run cap
+  (`single_run_cpu_cap`), applied before the session/inference config is
+  built. `job run --calibrate --cpu-budget N` (and `job calibrate
+  --cpu-budget N`, local or remote) forwards it to the calibrate leg. The
+  tuning profile key has no cap term: a profile is measured under whatever
+  cap is in force.
 
 ### GUI
 
@@ -218,9 +231,13 @@ the GUI sets it before starting a tracking/post-processing/export worker.
   and the clamped jobs into `FanoutOptions`.
 - Single in-process GUI run: before starting a `TrackingWorker` or
   `SessionWorker` (post-tracking + exports), the orchestrator calls
-  `set_process_cpu_cap(resolve_process_cap(cpu_budget or None))` — so 0 falls
+  `set_process_cpu_cap(single_run_cpu_cap(cpu_budget or None))` — so 0 falls
   back to `HYDRA_CPU_BUDGET`, else `None` (no-op if never set, restore if
-  previously set). Thread-local binding happens in core (engine + pipeline
+  previously set). The same cap is also applied eagerly at GUI startup, on
+  every CPU-budget spinbox change (deferred while a run or fan-out is
+  active), and again when a fan-out batch ends, so every heavy GUI path
+  (calibration, parameter helpers, previews) runs under it, not only the
+  tracking workers. Thread-local binding happens in core (engine + pipeline
   threads), so it covers GUI and CLI alike.
 - Before starting a GUI fan-out, the orchestrator calls
   `set_process_cpu_cap(None)`, so a previous single-run cap left in

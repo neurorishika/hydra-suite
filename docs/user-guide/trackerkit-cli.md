@@ -116,8 +116,10 @@ Two related habits on a shared box:
   GPU. Pick a device with
   `export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i 4)`.
 - Give hydra a share of the CPU, not the whole box: `--cpu-budget 32` (or
-  `export HYDRA_CPU_BUDGET=32` in your shell profile) keeps every parallel
-  child, and a single run, inside 32 cores. See [CPU budget](#cpu-budget).
+  `export HYDRA_CPU_BUDGET=32` in your shell profile) splits 32 threads
+  across the parallel children, and caps each thread pool of a single run at
+  32. The cap is per pool, not a hard core limit; see
+  [CPU budget](#cpu-budget).
 - Requirements in each child: `conda` on `PATH` for SLEAP pose, and the same
   `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` as the parent (inherited automatically).
 
@@ -156,17 +158,28 @@ export HYDRA_CPU_BUDGET=32                                             # same as
   get a warning, but the run goes ahead (it may oversubscribe).
 - **A single run** (no `--gpus`, `--jobs` 1) is capped only when you ask for it,
   with `--cpu-budget` or `HYDRA_CPU_BUDGET`. Without either, nothing changes.
+  The same applies to `trackerkit calibrate` (it accepts `--cpu-budget` too),
+  and the GUI applies its CPU budget to everything it runs (tracking,
+  calibration, parameter helpers, previews) as soon as it starts.
+- **The cap is per thread pool, not per process.** A capped process sizes each
+  of its pools (video decoder, ONNX Runtime, PyTorch, BLAS/Numba, video
+  encoder) to at most N threads, but those pools can run at the same time, so
+  a child capped at N may briefly have several times N runnable threads
+  (roughly 4-6 x N in a full tracking run). The budget stops the N-fold
+  multiplication across parallel children; it is not an exact core limit.
 - **`HYDRA_CPU_THREADS`** is the per-process cap a parallel run hands each
-  child. If it is already set where you launch a parallel run (exported in the
-  shell, or a run nested inside another), it is a ceiling: the whole run's
-  budget becomes the smaller of it and `--cpu-budget`.
+  child. If it is already set where you launch a run (exported in the shell,
+  or a run nested inside another), it is a ceiling: the run's budget becomes
+  the smaller of it and `--cpu-budget` (a single run included), and
+  `HYDRA_CPU_BUDGET` does not raise it.
 - **Pose with SLEAP:** the SLEAP sidecar process inherits the same per-job cap
   but is a separate process, so a pose job may use up to about twice its share.
 - **`HYDRA_CPU_BUDGET` is local only.** It is read from the environment of the
   process that plans the run. `trackerkit job run user@box:...` runs over ssh,
   where your local shell's variables are not set; pass `--cpu-budget N` to
   `job run` instead (it is forwarded to `trackerkit track` on the box, along
-  with `--gpus`, `--jobs` and `--threads-per-job`).
+  with `--gpus`, `--jobs` and `--threads-per-job`, and to the calibration
+  step of `job run --calibrate`).
 
 **What a cap changes in the outputs.** Tracking CSVs do not depend on the
 encoder's thread count, so they are unaffected by a cap on video encoding.
@@ -196,6 +209,7 @@ at its configured value even when a profile exists for it.
 trackerkit calibrate --video video.mp4                          # uses video_config.json beside the video
 trackerkit calibrate --video video.mp4 --config my.json         # explicit config
 trackerkit calibrate --video video.mp4 --budget-seconds 1800    # wall-clock cap on the search
+trackerkit calibrate --video video.mp4 --cpu-budget 8           # cap its CPU thread pools, like track
 ```
 
 `calibrate` measures this box's own inference throughput against the given
