@@ -359,3 +359,22 @@ def test_longest_first_reaches_the_fanout_options(tmp_path, monkeypatch):
 def test_longest_first_without_fanout_is_an_error(tmp_path):
     with pytest.raises(ValueError, match="--longest-first"):
         cli.run_tracking_cli(_videos(tmp_path), longest_first=True)
+
+
+def test_jobs_per_gpu_with_auto_on_a_host_without_cuda_warns(
+    tmp_path, monkeypatch, caplog
+):
+    """`auto` stays best-effort, but dropping K must not be silent."""
+    seen = {}
+
+    def _fake_fanout(specs, options, *, should_stop, events=None):
+        seen["jobs_per_gpu"] = options.jobs_per_gpu
+        return _ok_result(specs, tmp_path)
+
+    monkeypatch.setattr(cli, "list_cuda_devices", lambda: [])
+    monkeypatch.setattr(cli, "host_has_cuda", lambda: False)
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.cli")
+    assert cli.run_tracking_cli(_videos(tmp_path), gpus="auto", jobs_per_gpu=2) == 0
+    assert seen == {"jobs_per_gpu": 1}
+    assert any("--jobs-per-gpu" in r.getMessage() for r in caplog.records)

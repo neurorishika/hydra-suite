@@ -954,3 +954,43 @@ def test_video_frame_count_reads_a_real_clip_and_tolerates_garbage(tmp_path):
     bogus = tmp_path / "bogus.mp4"
     bogus.write_bytes(b"\x00")
     assert video_frame_count(str(bogus)) is None
+
+
+def test_no_oversubscription_warning_when_jobs_cap_leaves_one_child_per_gpu(
+    tmp_path, caplog
+):
+    """--jobs-per-gpu 2 --jobs 2 on 2 GPUs opens one slot per GPU: no sharing."""
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    result = run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs=2,
+            jobs_per_gpu=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    assert result.success
+    assert not _oversubscription_warnings(caplog)
+
+
+def test_oversubscription_suggestion_uses_the_real_slot_count(
+    tmp_path, caplog, monkeypatch
+):
+    import hydra_suite.trackerkit.batch_fanout as fanout_mod
+
+    monkeypatch.setattr(fanout_mod.os, "cpu_count", lambda: 30)
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs=3,  # 3 slots out of 2 x 2
+            jobs_per_gpu=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    (warning,) = _oversubscription_warnings(caplog)
+    assert "--threads-per-job 10" in warning.getMessage()

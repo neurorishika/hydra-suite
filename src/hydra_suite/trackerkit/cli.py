@@ -97,6 +97,14 @@ def run_tracking_cli(
     # 1 with no GPUs); an explicit --jobs is honoured but never exceeds the
     # slot count, so a GPU is shared only when --jobs-per-gpu asks for it.
     effective_jobs = len(build_gpu_slots(devices, jobs=jobs, jobs_per_gpu=jobs_per_gpu))
+    if int(jobs_per_gpu) > 1 and not devices:
+        logger.warning(
+            "--jobs-per-gpu %d ignored: --gpus %s resolved to no CUDA device, "
+            "so the batch runs unpinned with %d job(s).",
+            int(jobs_per_gpu),
+            gpus,
+            effective_jobs,
+        )
     options = FanoutOptions(
         gpus=devices,
         jobs=effective_jobs,
@@ -246,6 +254,7 @@ def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
                 + (
                     f" x {options.jobs_per_gpu} jobs per GPU"
                     if options.jobs_per_gpu > 1
+                    and (options.jobs is None or options.jobs > len(options.gpus))
                     else ""
                 )
                 if options.gpus

@@ -721,16 +721,17 @@ def run_batch_fanout(
     slots = build_gpu_slots(
         options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
     )
-    if options.gpus and int(options.jobs_per_gpu) > 1 and not options.threads_per_job:
+    # Keyed on the slots actually opened: a --jobs cap can leave one child
+    # per GPU even at jobs_per_gpu > 1, and then nothing is shared.
+    if options.gpus and len(slots) > len(options.gpus) and not options.threads_per_job:
         logger.warning(
-            "Fan-out: %d jobs per GPU without --threads-per-job risks CPU "
-            "oversubscription -- every child starts one OpenMP/BLAS/torch "
-            "thread per core. Consider --threads-per-job %d "
-            "(cpu_count / (GPUs x jobs per GPU)).",
-            int(options.jobs_per_gpu),
-            suggested_threads_per_job(
-                len(options.gpus) * int(options.jobs_per_gpu), os.cpu_count()
-            ),
+            "Fan-out: %d children across %d GPU(s) without --threads-per-job "
+            "risks CPU oversubscription -- every child starts one "
+            "OpenMP/BLAS/torch thread per core. Consider --threads-per-job %d "
+            "(cpu_count / concurrent children).",
+            len(slots),
+            len(options.gpus),
+            suggested_threads_per_job(len(slots), os.cpu_count()),
         )
 
     owns_run_dir = not options.run_dir
@@ -746,6 +747,10 @@ def run_batch_fanout(
 
     pending = list(specs)
     if options.longest_first:
+        logger.info(
+            "Fan-out: reading frame counts of %d video(s) for longest-first",
+            len(specs),
+        )
         pending = order_longest_first(specs, options.video_frames or video_frame_count)
         logger.info(
             "Fan-out: longest first -> %s",

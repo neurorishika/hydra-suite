@@ -388,7 +388,9 @@ class SetupPanel(QWidget):
         h_par.setContentsMargins(0, 0, 0, 0)
         h_par.addWidget(QLabel("Jobs:"))
         self.spin_batch_parallel_jobs = QSpinBox()
-        self.spin_batch_parallel_jobs.setRange(1, 64)
+        # Room for every GPU at the highest processes-per-GPU, so the cap can
+        # never silently undo the spinbox below.
+        self.spin_batch_parallel_jobs.setRange(1, max(64, len(cuda_devices) * 8))
         default_jobs = int(self._main_window.config.batch_parallel_jobs) or max(
             1, len(cuda_devices) * self.spin_batch_parallel_jobs_per_gpu.value()
         )
