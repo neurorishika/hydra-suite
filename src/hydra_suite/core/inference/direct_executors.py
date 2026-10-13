@@ -551,14 +551,22 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
 
         import onnxruntime as ort
 
-        from hydra_suite.runtime.onnx_providers import preload_ort_cuda_libraries
+        from hydra_suite.runtime.cpu_budget import current_cpu_cap
+        from hydra_suite.runtime.onnx_providers import (
+            preload_ort_cuda_libraries,
+            session_options_for,
+        )
 
         preload_ort_cuda_libraries()
         providers = [
             ("CUDAExecutionProvider", {"device_id": 0}),
             "CPUExecutionProvider",
         ]
-        self.session = ort.InferenceSession(self.artifact_path, providers=providers)
+        self.session = ort.InferenceSession(
+            self.artifact_path,
+            providers=providers,
+            sess_options=session_options_for(current_cpu_cap()),
+        )
         if "CUDAExecutionProvider" not in self.session.get_providers():
             raise RuntimeError(
                 "onnxruntime CUDAExecutionProvider is unavailable for direct OBB execution"

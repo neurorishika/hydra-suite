@@ -3361,6 +3361,10 @@ class ConfigOrchestrator:
         self._mw._cache_builder_worker.finished_signal.connect(
             self._mw._on_optimizer_cache_built
         )
+        # After run() returns: re-apply a CPU budget deferred during the build.
+        self._mw._cache_builder_worker.finished.connect(
+            self._mw._on_cache_builder_thread_finished
+        )
         self._mw.progress_bar.setVisible(True)
         self._mw.progress_label.setVisible(True)
         self._mw.progress_bar.setValue(0)

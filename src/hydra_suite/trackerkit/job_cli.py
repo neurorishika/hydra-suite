@@ -481,6 +481,34 @@ def _run_track_args(job_dir: Path) -> list[str]:
     return passthrough
 
 
+def _fanout_flags(args) -> list[str]:
+    """`job run`'s compute-box flags, re-emitted for `run.sh` -> `track`.
+
+    They describe the box the job runs on (not the experiment), so they are
+    never packed into the manifest; run.sh passes its own "$@" straight to
+    `trackerkit track`. Unset flags are omitted, so a plain `job run` still
+    invokes run.sh with only the packed track args.
+    """
+    flags: list[str] = []
+    for name, flag in (
+        ("gpus", "--gpus"),
+        ("jobs", "--jobs"),
+        ("threads_per_job", "--threads-per-job"),
+        ("cpu_budget", "--cpu-budget"),
+    ):
+        value = getattr(args, name, None)
+        if value is not None and str(value) != "":
+            flags += [flag, str(value)]
+    return flags
+
+
+def _cpu_budget_flag(args) -> list[str]:
+    """``--cpu-budget N`` for the calibrate leg, so it measures under the
+    same cap the tracking run will use (empty when unset)."""
+    value = getattr(args, "cpu_budget", None)
+    return ["--cpu-budget", str(value)] if value is not None else []
+
+
 def _cmd_run(args) -> int:
     target = args.target
     passthrough = _run_track_args(Path(target)) if _is_local(target) else None
@@ -514,7 +542,7 @@ def _cmd_run(args) -> int:
         preflight_args = _preflight_flag_string(shared_overrides, allow_tier_fallback)
         if preflight_args:
             env["HYDRA_JOB_PREFLIGHT_ARGS"] = preflight_args.strip()
-        run_argv = ["./run.sh", *passthrough]
+        run_argv = ["./run.sh", *passthrough, *_fanout_flags(args)]
         if getattr(args, "detach", False):
             with open(os.devnull, "wb") as devnull:
                 subprocess.Popen(
@@ -534,7 +562,7 @@ def _cmd_run(args) -> int:
     remote = parse_remote(target)
     bootstrap = _bootstrap_prefix(getattr(args, "remote_bootstrap", "") or "")
     preflight_flags = _preflight_flag_string(shared_overrides, allow_tier_fallback)
-    passthrough = list(passthrough or [])
+    passthrough = list(passthrough or []) + _fanout_flags(args)
     tk = _remote_trackerkit_invocation()
     run_tail = f"./run.sh {shlex.join(passthrough)}".rstrip()
     if getattr(args, "detach", False):
@@ -584,6 +612,7 @@ def _run_calibrate(target: str, args) -> int:
         ]
         for field in manual_fields:
             argv += ["--inference-autotune-manual", str(field)]
+        argv += _cpu_budget_flag(args)
         result = subprocess.run(argv, cwd=str(job_dir), env=env, check=False)
         return result.returncode
 
@@ -591,6 +620,9 @@ def _run_calibrate(target: str, args) -> int:
     bootstrap = _bootstrap_prefix(getattr(args, "remote_bootstrap", "") or "")
     tk = _remote_trackerkit_invocation()
     remote_cmd = f"{bootstrap}cd {shlex.quote(remote.path)} && {tk} job calibrate ."
+    cpu_flag = _cpu_budget_flag(args)
+    if cpu_flag:
+        remote_cmd += " " + shlex.join(cpu_flag)
     result = subprocess.run(
         ["ssh", remote.host, remote_cmd], check=False, stdin=subprocess.DEVNULL
     )

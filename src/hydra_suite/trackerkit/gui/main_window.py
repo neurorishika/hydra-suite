@@ -942,6 +942,9 @@ class MainWindow(QMainWindow):
         self._setup_panel.calibrate_inference_requested.connect(
             self._tracking_orch.open_calibration_dialog
         )
+        self._tracking_orch.refresh_cpu_plan_label()
+        # Apply the CPU budget (HYDRA_CPU_* env) eagerly, before any heavy path.
+        self._tracking_orch.apply_cpu_budget_now()
         from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
         self._config_orch = ConfigOrchestrator(
@@ -1071,6 +1074,9 @@ class MainWindow(QMainWindow):
         self._config_orch._build_optimizer_detection_cache(
             video_path, cache_path, params
         )
+
+    def _on_cache_builder_thread_finished(self) -> None:
+        self._tracking_orch.on_cache_builder_thread_finished()
 
     def _on_optimizer_cache_built(self, ok: bool, cache_path: str):
         """Called when DetectionCacheBuildWorker finishes. ``cache_path`` is the
@@ -1719,7 +1725,9 @@ class MainWindow(QMainWindow):
 
     def _on_batch_parallel_changed(self, *_args) -> None:
         """Mirror the Batch › Parallel controls into session state."""
-        panel = self._setup_panel
+        panel = getattr(self, "_setup_panel", None)
+        if panel is None:
+            return  # fired while the setup panel is still being constructed
         self.config.batch_parallel = bool(panel.chk_batch_parallel.isChecked())
         self.config.batch_parallel_jobs = int(panel.spin_batch_parallel_jobs.value())
         self.config.batch_parallel_gpus = (
@@ -1735,6 +1743,21 @@ class MainWindow(QMainWindow):
         panel.spin_batch_parallel_jobs_per_gpu.setVisible(
             self.config.batch_parallel and panel._batch_parallel_has_cuda
         )
+        label = getattr(panel, "lbl_batch_parallel_cpu_plan", None)
+        if label is not None:
+            label.setVisible(self.config.batch_parallel)
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()
+
+    def _on_cpu_budget_changed(self, *_args) -> None:
+        """Mirror the CPU-budget spinbox into session state (0 = Auto)."""
+        panel = getattr(self, "_setup_panel", None)
+        if panel is None:
+            return
+        self.config.cpu_budget = int(panel.spin_cpu_budget.value())
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()
+            self._tracking_orch.apply_cpu_budget_now()
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""
@@ -1747,6 +1770,8 @@ class MainWindow(QMainWindow):
         else:
             # If turning off batch mode, keep the current video but reset batch tracking state
             self.current_batch_index = -1
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()
 
     def _sync_keystone_to_batch(self):
         """Ensure the currently loaded video is the FIRST item in the batch list."""
@@ -1768,6 +1793,8 @@ class MainWindow(QMainWindow):
         """Refresh the batch list widget with markers for the keystone."""
         if hasattr(self, "_session_orch"):
             self._session_orch._sync_batch_list_ui()
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()  # video count changed
 
     def _on_batch_video_double_clicked(self, *args):
         """Switch to a video from the batch list: auto-saves current config then loads the new video's config."""

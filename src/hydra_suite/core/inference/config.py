@@ -16,6 +16,7 @@ from hydra_suite.core.individual.classification.errors import (
     PoseModelUnresolvedError,
 )
 from hydra_suite.core.pose_instances import MAX_POSES_PER_CROP
+from hydra_suite.runtime.cpu_budget import apriltag_thread_count
 from hydra_suite.runtime.resolver import RuntimeTier
 from hydra_suite.utils.tiling_spec import BACKEND_DEFAULTS, DEFAULT_OVERLAP
 
@@ -1402,7 +1403,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     apriltag_cfg = AprilTagConfig(
         enabled=bool(params.get("USE_APRILTAGS", False)),
         tag_family=str(params.get("APRILTAG_FAMILY", "tag36h11")),
-        threads=int(params.get("APRILTAG_THREADS", 4)),
+        threads=apriltag_thread_count(params),
         max_hamming=int(params.get("APRILTAG_MAX_HAMMING", 1)),
         decimate=float(params.get("APRILTAG_DECIMATE", 1.0)),
         blur=float(params.get("APRILTAG_BLUR", 0.8)),

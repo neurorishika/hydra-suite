@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping
 import numpy as np
 
 from hydra_suite.paths import get_data_dir
+from hydra_suite.runtime.cpu_budget import capped_child_env, current_cpu_cap
 from hydra_suite.runtime.process_supervisor import (
     ContainmentPlan,
     ExitKind,
@@ -465,6 +466,11 @@ class ContainedTrialExecutor:
             )
             limits = self._limits()
             probe = self.spec.resource_probe
+            # A capped calibrating process hands its cap to the trial child
+            # (which applies it in-process), so the profile is measured under
+            # the same cap the tracking run uses. Uncapped: None, i.e. the
+            # launcher's own os.environ copy, exactly as before.
+            cap = current_cpu_cap()
             launch = build_limited_launch(
                 (
                     sys.executable,
@@ -481,6 +487,9 @@ class ContainedTrialExecutor:
                     else None
                 ),
                 accelerator_pci_bus_id=None,
+                environment=(
+                    None if cap is None else capped_child_env(os.environ, cap)
+                ),
             )
             plan = ContainmentPlan(
                 launch=launch,

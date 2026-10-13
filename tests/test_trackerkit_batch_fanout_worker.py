@@ -293,6 +293,10 @@ def _patch_devices(monkeypatch, devices, has_cuda):
 
     monkeypatch.setattr(cuda_mod, "list_cuda_devices", lambda **_kw: list(devices))
     monkeypatch.setattr(fanout_mod, "host_has_cuda", lambda: has_cuda)
+    # The options are CPU-planned now; keep the plan independent of this box.
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 16)
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
 
 
 def _capture_warnings(monkeypatch):
@@ -333,7 +337,9 @@ def test_gui_pins_the_selected_devices(monkeypatch):
     _capture_warnings(monkeypatch)
     options = _orchestrator("1")._resolve_fanout_options()
     assert options is not None and options.gpus == [devices[1]]
-    assert options.jobs is None  # unspecified: one slot per selected GPU
+    # Unspecified jobs -> one slot per selected GPU, now resolved by the CPU
+    # plan into an explicit count.
+    assert options.jobs == 1
     assert options.jobs_per_gpu == 1
 
 
@@ -343,8 +349,10 @@ def test_gui_jobs_per_gpu_reaches_the_options_and_clamps_jobs(monkeypatch):
     _capture_warnings(monkeypatch)
     options = _orchestrator("auto", jobs=99, jobs_per_gpu=2)._resolve_fanout_options()
     assert options.jobs_per_gpu == 2 and options.jobs == 4
+    # Unspecified jobs -> every GPU slot (GPUs x K), resolved by the CPU plan
+    # into an explicit count.
     options = _orchestrator("auto", jobs_per_gpu=2)._resolve_fanout_options()
-    assert options.jobs_per_gpu == 2 and options.jobs is None
+    assert options.jobs_per_gpu == 2 and options.jobs == 4
 
 
 def test_gui_longest_first_reaches_the_options(monkeypatch):
@@ -751,3 +759,66 @@ def test_starting_a_new_batch_resets_the_close_warned_flag(app, monkeypatch, tmp
 
     assert orch.start_batch_fanout() is True
     assert main_window._fanout_close_warned is False
+
+
+# --- Merge integration: CLI and GUI planners agree with --jobs-per-gpu ---------
+
+
+@pytest.mark.parametrize(
+    "jobs, jobs_per_gpu, cpu_budget, n_videos, expected",
+    [
+        (0, 2, 16, 10, (4, 4)),  # unspecified jobs: every slot, 4 x 4 threads
+        (0, 2, 3, 10, (3, 1)),  # over budget: clamped to 3 x 1
+        (3, 2, 12, 10, (3, 4)),  # explicit jobs below GPUs x K
+        (0, 2, 16, 2, (4, 8)),  # fewer videos than slots
+        (0, 1, 16, 10, (2, 8)),  # K=1
+    ],
+)
+def test_cli_and_gui_plan_the_same_k_fanout(
+    monkeypatch, tmp_path, jobs, jobs_per_gpu, cpu_budget, n_videos, expected
+):
+    from hydra_suite.trackerkit import cli
+    from hydra_suite.trackerkit.batch_fanout import FanoutResult
+
+    devices = [CudaDevice(0, "GPU-aaaa", "x"), CudaDevice(1, "GPU-bbbb", "x")]
+    _patch_devices(monkeypatch, devices, has_cuda=True)
+    _capture_warnings(monkeypatch)
+    monkeypatch.setattr(cli, "list_cuda_devices", lambda **_kw: list(devices))
+    monkeypatch.setattr(cli, "host_has_cuda", lambda: True)
+
+    seen = {}
+
+    def _fake_fanout(specs, options, *, should_stop, events=None):
+        seen["options"] = options
+        return FanoutResult(jobs=[], cancelled=False)
+
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+    monkeypatch.setattr(cli, "_print_fanout_table", lambda result: None)
+    videos = []
+    for i in range(n_videos):
+        path = tmp_path / f"v{i}.mp4"
+        path.write_bytes(b"\x00")
+        videos.append(str(path))
+    cli.run_tracking_cli(
+        videos,
+        gpus="auto",
+        jobs=jobs or None,
+        jobs_per_gpu=jobs_per_gpu,
+        cpu_budget=cpu_budget,
+    )
+    cli_opts = seen["options"]
+
+    orch = _orchestrator("auto", jobs=jobs, jobs_per_gpu=jobs_per_gpu)
+    orch._mw.config.cpu_budget = cpu_budget
+    gui_opts = orch._resolve_fanout_options(n_videos=n_videos)
+
+    def _key(opts):
+        return (
+            [g.uuid for g in opts.gpus],
+            opts.jobs,
+            opts.jobs_per_gpu,
+            opts.threads_per_job,
+        )
+
+    assert _key(cli_opts) == _key(gui_opts)
+    assert (cli_opts.jobs, cli_opts.threads_per_job) == expected

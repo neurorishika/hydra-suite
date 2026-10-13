@@ -51,8 +51,10 @@ environment activation. `pack`, `verify` and `shared-root` are always local.
 The full subcommand list: `pack`, `verify`, `shared-root`, `push`,
 `preflight`, `run`, `calibrate`, `status`, `pull`. Run `trackerkit job
 <subcommand> --help` for the exact flags — `pack` deliberately has no
-`--gpus`/`--jobs`/`--threads-per-job` (those describe the **compute box**,
-not the experiment, and belong to `run`), and `run`/`calibrate` deliberately
+`--gpus`/`--jobs`/`--threads-per-job`/`--cpu-budget` (those describe the
+**compute box**, not the experiment, and belong to `run`, which forwards them
+to `trackerkit track` on the box; `--cpu-budget` also reaches the calibration
+step of `run --calibrate`, and `calibrate` accepts it directly), and `run`/`calibrate` deliberately
 reject `--sahi-profile`/`--inference-autotune-manual` (those are fixed at
 pack time and always forwarded automatically, because the calibration
 lookup key depends on them matching exactly).

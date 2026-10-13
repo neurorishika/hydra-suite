@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+from hydra_suite.runtime.cpu_budget import apriltag_thread_count
+
 logger = logging.getLogger(__name__)
 APRILTAG_FORK_REPO = "https://github.com/Social-Evolution-and-Behavior/apriltag"
 APRILTAG_FORK_COMMIT = "c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c"
@@ -101,7 +103,7 @@ class AprilTagConfig:
         """Build from the MAT tracking-parameters dictionary."""
         return cls(
             family=str(params.get("APRILTAG_FAMILY", "tag36h11")),
-            threads=int(params.get("APRILTAG_THREADS", 4)),
+            threads=apriltag_thread_count(params),
             max_hamming=int(params.get("APRILTAG_MAX_HAMMING", 1)),
             decimate=float(params.get("APRILTAG_DECIMATE", 1.0)),
             blur=float(params.get("APRILTAG_BLUR", 0.8)),

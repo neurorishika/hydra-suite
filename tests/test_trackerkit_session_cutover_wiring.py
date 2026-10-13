@@ -72,11 +72,19 @@ def test_run_session_worker_builds_worker_over_service(qapp, tmp_path, monkeypat
             self.warning_signal = _Sig()
 
         def start(self):
+            built["cap_before_start"] = "cpu_cap" in built
             self.finished_signal.emit(
                 SessionResult(True, str(0), None, [], None, ["ok"], None)
             )
 
     monkeypatch.setattr(tracking_module, "SessionWorker", _Worker)
+    # The GUI CPU cap is applied right before the worker starts; never touch
+    # the real process-global thread state here.
+    monkeypatch.setattr(
+        tracking_module,
+        "set_process_cpu_cap",
+        lambda n: built.setdefault("cpu_cap", n),
+    )
     monkeypatch.setattr(
         orch,
         "_finalize_tracking_session_ui",
@@ -94,6 +102,7 @@ def test_run_session_worker_builds_worker_over_service(qapp, tmp_path, monkeypat
     assert built["paths"]["detection_cache_path"] == mw.current_detection_cache_path
     assert built["params"] == {"FPS": 30.0}
     assert getattr(mw, "_finalized", False) is True
+    assert built["cap_before_start"] is True
 
 
 class _FakeControl:

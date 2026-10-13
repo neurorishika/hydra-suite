@@ -77,13 +77,16 @@ trackerkit track --video-list batch.txt --gpus auto          # one child per GPU
 trackerkit track --video-list batch.txt --gpus 0-3           # four GPUs
 trackerkit track --video-list batch.txt --gpus 0,2,GPU-8f1a  # ordinals or UUID prefixes
 trackerkit track --video-list batch.txt --jobs 3             # three children sharing the current device (CPU / Apple Silicon)
-trackerkit track --video-list batch.txt --gpus 0-3 --jobs-per-gpu 2 --threads-per-job 8  # two children per GPU
+trackerkit track --video-list batch.txt --gpus 0-3 --jobs-per-gpu 2  # two children per GPU, CPU budget split 8 ways
 ```
 
 Each video becomes a child process `trackerkit track <video> --config <effective.json>`
 pinned with `CUDA_VISIBLE_DEVICES=<uuid>`, so every child (and the SLEAP
-service it starts) sees exactly one GPU. Output is identical to the sequential
-run. Rules:
+service it starts) sees exactly one GPU. Tracking output (the CSVs) was
+byte-identical to the sequential run in our tests, including with a CPU cap
+(`--jobs 2 --cpu-budget 4`); threaded numeric kernels may in principle round
+differently under a CPU cap (see [CPU budget](#cpu-budget), which also covers
+rendered videos). Rules:
 
 - Fan-out engages only when `--gpus` is given or `--jobs > 1`.
 - `--gpus auto` is best effort: on a host with no CUDA at all it simply runs
@@ -110,9 +113,9 @@ run. Rules:
   shows which videos completed.
 - Ctrl-C asks every child to stop cleanly, then terminates stragglers.
 - Per-child logs: `<video dir>/<stem>_logs/<stem>_fanout_<timestamp>.log`.
-- `--threads-per-job N` (opt-in) caps OMP/MKL/OpenBLAS/Numba threads per child.
-  Leave it off unless the host is oversubscribed; it can change floating-point
-  reduction order in threaded kernels.
+- Every child gets a CPU thread cap (`budget // jobs` threads), so N children
+  never oversubscribe the machine. See [CPU budget](#cpu-budget) below;
+  `--threads-per-job N` sets the per-child count explicitly.
 
 ### More than one job per GPU
 
@@ -124,9 +127,10 @@ the sweet spot** there. Use it when the GPUs are underused and each has room
 for a second job's models in memory; it does nothing for CPU-bound
 (background-subtraction) runs.
 
-Every child sizes its OpenMP/BLAS/torch thread pools from the full core
-count, so K > 1 multiplies CPU pressure. Without `--threads-per-job` the
-fan-out logs one warning suggesting `--threads-per-job ≈ cpu_count / (GPUs × K)`.
+K > 1 multiplies CPU pressure, so the [CPU budget](#cpu-budget) is split
+across every concurrent child (GPUs × K slots): each gets `budget // children`
+threads, and if the budget cannot give each child its minimum, fewer run at a
+time (with a warning). `--threads-per-job N` overrides the split.
 Thread caps can change floating-point reduction order, so compare against a
 sequential run under the same caps when checking byte-identity.
 
@@ -146,16 +150,81 @@ Two related habits on a shared box:
 - Single-process runs (no fan-out) always use `cuda:0`, which may be the busiest
   GPU. Pick a device with
   `export CUDA_VISIBLE_DEVICES=$(nvidia-smi --query-gpu=uuid --format=csv,noheader -i 4)`.
-- Consider `--threads-per-job` when the machine has many cores: without it each
-  child sizes its thread pools from the *total* core count, so N children
-  oversubscribe the CPU and starve other users. It is opt-in because it can
-  change floating-point reduction order.
+- Give hydra a share of the CPU, not the whole box: `--cpu-budget 32` (or
+  `export HYDRA_CPU_BUDGET=32` in your shell profile) splits 32 threads
+  across the parallel children, and caps each thread pool of a single run at
+  32. The cap is per pool, not a hard core limit; see
+  [CPU budget](#cpu-budget).
 - Requirements in each child: `conda` on `PATH` for SLEAP pose, and the same
   `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` as the parent (inherited automatically).
 
 The GUI exposes the same feature under **Batch › Run videos in parallel (processes per GPU)**;
 the spinbox next to it is `--jobs-per-gpu` and **Longest first** is
 `--longest-first` (the GUI has no thread-cap control).
+
+### CPU budget
+
+Each tracking process sizes its thread pools (PyTorch, OpenMP/BLAS, Numba,
+OpenCV's FFmpeg video decoder, ONNX Runtime, PyAV video decode/encode) from
+the machine's core count. N parallel children would each do that, multiplying
+the thread count by N. The CPU budget stops this.
+
+```bash
+trackerkit track --video-list batch.txt --gpus 0-7 --cpu-budget 32   # 8 jobs x 4 threads
+trackerkit track --video-list batch.txt --jobs 16                     # clamped to fit the usable cores
+trackerkit track one.mp4 --cpu-budget 8                               # cap a single run
+export HYDRA_CPU_BUDGET=32                                             # same as --cpu-budget, for every run
+```
+
+- **The budget** is the total number of cores hydra may use across all of its
+  parallel jobs. It comes from `--cpu-budget N`, else the `HYDRA_CPU_BUDGET`
+  environment variable, else every usable core (the CPU affinity mask and any
+  container/cgroup CPU quota are respected). A budget larger than the usable
+  cores is clamped down to them with a warning. An invalid `HYDRA_CPU_BUDGET`
+  (`abc`, `0`) is ignored with a warning; `--cpu-budget` must be at least 1.
+- **Parallel runs** always use the budget, even with no flag: each child gets
+  `budget // jobs` threads. If there are fewer videos than slots, the active
+  children share the whole budget (2 videos on 8 GPUs with a budget of 32 get 16
+  threads each).
+- **The job clamp:** when the budget cannot give every requested job its
+  minimum (1 thread per GPU job, 2 per CPU-only job), fewer jobs run at a time
+  and a warning says so, e.g. `Requested 16 parallel job(s) but the CPU budget
+  is 12 core(s) (12 usable); running 6 at a time.`
+- **`--threads-per-job N`** is the override: every child gets at most N
+  threads and the job clamp is turned off. If `jobs x N` exceeds the budget you
+  get a warning, but the run goes ahead (it may oversubscribe).
+- **A single run** (no `--gpus`, `--jobs` 1) is capped only when you ask for it,
+  with `--cpu-budget` or `HYDRA_CPU_BUDGET`. Without either, nothing changes.
+  The same applies to `trackerkit calibrate` (it accepts `--cpu-budget` too),
+  and the GUI applies its CPU budget to everything it runs (tracking,
+  calibration, parameter helpers, previews) as soon as it starts.
+- **The cap is per thread pool, not per process.** A capped process sizes each
+  of its pools (video decoder, ONNX Runtime, PyTorch, BLAS/Numba, video
+  encoder) to at most N threads, but those pools can run at the same time, so
+  a child capped at N may briefly have several times N runnable threads
+  (an estimate from the number of pools, not a measurement). The budget stops the N-fold
+  multiplication across parallel children; it is not an exact core limit.
+- **`HYDRA_CPU_THREADS`** is the per-process cap a parallel run hands each
+  child. If it is already set where you launch a run (exported in the shell,
+  or a run nested inside another), it is a ceiling: the run's budget becomes
+  the smaller of it and `--cpu-budget` (a single run included), and
+  `HYDRA_CPU_BUDGET` does not raise it.
+- **Pose with SLEAP:** the SLEAP sidecar process inherits the same per-job cap
+  but is a separate process, so a pose job may use up to about twice its share.
+- **`HYDRA_CPU_BUDGET` is local only.** It is read from the environment of the
+  process that plans the run. `trackerkit job run user@box:...` runs over ssh,
+  where your local shell's variables are not set; pass `--cpu-budget N` to
+  `job run` instead (it is forwarded to `trackerkit track` on the box, along
+  with `--gpus`, `--jobs` and `--threads-per-job`, and to the calibration
+  step of `job run --calibrate`).
+
+**What a cap changes in the outputs.** Tracking CSVs do not depend on the
+encoder's thread count, so they are unaffected by a cap on video encoding.
+Rendered annotated or oriented videos can differ byte-for-byte from an
+uncapped run, because libx264's output depends on how many threads encode it;
+they look the same. Tracking CSVs were byte-identical with and without a cap
+in our tests; threaded numeric kernels (BLAS, OpenMP) may in principle reorder
+floating-point reductions under a different thread count.
 
 ## Applying a tuned inference profile
 
@@ -177,6 +246,7 @@ at its configured value even when a profile exists for it.
 trackerkit calibrate --video video.mp4                          # uses video_config.json beside the video
 trackerkit calibrate --video video.mp4 --config my.json         # explicit config
 trackerkit calibrate --video video.mp4 --budget-seconds 1800    # wall-clock cap on the search
+trackerkit calibrate --video video.mp4 --cpu-budget 8           # cap its CPU thread pools, like track
 ```
 
 `calibrate` measures this box's own inference throughput against the given

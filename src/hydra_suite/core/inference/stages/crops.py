@@ -180,13 +180,16 @@ _warp_pool_size = 0
 
 
 def _crop_warp_threads() -> int:
+    from hydra_suite.runtime.cpu_budget import capped, current_cpu_cap
+
+    cap = current_cpu_cap()
     try:
         v = os.environ.get("HYDRA_CROP_WARP_THREADS")
         if v is not None:
-            return max(1, int(v))
+            return capped(max(1, int(v)), cap)
     except Exception:
         pass
-    return max(1, min(8, os.cpu_count() or 1))
+    return capped(max(1, min(8, os.cpu_count() or 1)), cap)
 
 
 def _get_warp_pool(n_workers: int) -> ThreadPoolExecutor | None:

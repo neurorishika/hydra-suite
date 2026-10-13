@@ -351,15 +351,20 @@ class SetupPanel(QWidget):
         self._batch_parallel_has_cuda = bool(cuda_devices)
         h_chk_par = QHBoxLayout()
         h_chk_par.setContentsMargins(0, 0, 0, 0)
+        # Kept for the CPU-plan label, which must not re-run nvidia-smi on
+        # every spin tick (the run itself re-detects at start).
+        self.batch_parallel_cuda_devices = list(cuda_devices)
         self.chk_batch_parallel = QCheckBox(
             "Run videos in parallel (processes per GPU)"
         )
         self.chk_batch_parallel.setToolTip(
             "Each video runs as its own headless child process pinned to one\n"
-            "GPU (CUDA_VISIBLE_DEVICES). Tracking CSVs are byte-identical to\n"
-            "sequential batch tracking, and each video's annotated overlay is\n"
-            "written beside that video. Final-media and individual-dataset\n"
-            "export are skipped. No live preview while running."
+            "GPU (CUDA_VISIBLE_DEVICES). Tracking CSVs were byte-identical to\n"
+            "sequential batch tracking in our tests; threaded numeric kernels may\n"
+            "in principle round differently under a CPU cap. Each video's\n"
+            "annotated overlay is written beside that video.\n"
+            "Each child gets an equal share of the CPU budget. Final-media and\n"
+            "individual-dataset export are skipped. No live preview while running."
         )
         self.chk_batch_parallel.setChecked(
             bool(self._main_window.config.batch_parallel)
@@ -449,6 +454,13 @@ class SetupPanel(QWidget):
         self.edit_batch_parallel_gpus.setVisible(has_cuda)
         self.container_batch_parallel.setVisible(self.chk_batch_parallel.isChecked())
         v_container.addWidget(self.container_batch_parallel)
+        # CPU split across the parallel jobs; text set by the tracking
+        # orchestrator (refresh_cpu_plan_label).
+        self.lbl_batch_parallel_cpu_plan = QLabel("")
+        self.lbl_batch_parallel_cpu_plan.setWordWrap(True)
+        self.lbl_batch_parallel_cpu_plan.setStyleSheet("color: gray; font-size: 10px;")
+        self.lbl_batch_parallel_cpu_plan.setVisible(self.chk_batch_parallel.isChecked())
+        v_container.addWidget(self.lbl_batch_parallel_cpu_plan)
 
         vl_batch.addWidget(self.container_batch)
         self.container_batch.setVisible(False)  # Default hidden
@@ -748,6 +760,26 @@ class SetupPanel(QWidget):
         _tier_layout.setSpacing(2)
         _tier_layout.addWidget(self.combo_runtime_tier)
         _tier_layout.addWidget(self.lbl_runtime_fallback)
+        from hydra_suite.runtime.cpu_budget import usable_cores
+
+        self.spin_cpu_budget = QSpinBox()
+        self.spin_cpu_budget.setRange(0, usable_cores())
+        self.spin_cpu_budget.setSpecialValueText("Auto")
+        self.spin_cpu_budget.setValue(int(self._main_window.config.cpu_budget or 0))
+        self.spin_cpu_budget.setToolTip(
+            "CPU cores TrackerKit may use. Auto = all usable cores split across\n"
+            "parallel batch jobs; a single run is left uncapped (unless\n"
+            "HYDRA_CPU_BUDGET is set). Set a number to share this machine\n"
+            "with other work."
+        )
+        self.spin_cpu_budget.valueChanged.connect(
+            self._main_window._on_cpu_budget_changed
+        )
+        _cpu_row = QHBoxLayout()
+        _cpu_row.setContentsMargins(0, 0, 0, 0)
+        _cpu_row.addWidget(QLabel("CPU cores:"))
+        _cpu_row.addWidget(self.spin_cpu_budget)
+        _tier_layout.addLayout(_cpu_row)
         tier_card = self._create_performance_control_card(
             "Compute tier",
             _tier_container,

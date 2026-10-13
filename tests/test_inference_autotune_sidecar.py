@@ -591,3 +591,79 @@ def test_an_out_of_range_build_allowance_is_rejected(tmp_path, allowance):
             end_frame=99,
             artifact_build_allowance_seconds=allowance,
         )
+
+
+def _capture_launch_environment(tmp_path, monkeypatch):
+    from hydra_suite.core.inference.autotune import sidecar
+
+    monkeypatch.setattr(sidecar, "get_data_dir", lambda: tmp_path / "data")
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def fake_launch(command, limits, **kwargs):
+        seen["environment"] = kwargs.get("environment", "ABSENT")
+        raise _Stop()
+
+    monkeypatch.setattr(sidecar, "build_limited_launch", fake_launch)
+    observation, probe = _resources()
+    executor = ContainedTrialExecutor(
+        SidecarTrialSpec(
+            video_path=tmp_path / "video.mp4",
+            params={},
+            observation=observation,
+            resource_probe=probe,
+            start_frame=0,
+            end_frame=20,
+        )
+    )
+    try:
+        executor._run_once(
+            _settings(),
+            phase="stage",
+            field_name=None,
+            block_index=0,
+            should_cancel=lambda: False,
+        )
+    except _Stop:
+        pass
+    return seen
+
+
+def test_uncapped_trial_launch_environment_is_unchanged(tmp_path, monkeypatch):
+    """Plain path: no cap -> build_limited_launch copies os.environ itself."""
+    from hydra_suite.core.inference.autotune import sidecar
+
+    monkeypatch.setattr(sidecar, "current_cpu_cap", lambda: None)
+    seen = _capture_launch_environment(tmp_path, monkeypatch)
+    assert seen["environment"] is None
+
+
+def test_capped_trial_launch_hands_the_cap_to_the_child(tmp_path, monkeypatch):
+    from hydra_suite.core.inference.autotune import sidecar
+
+    monkeypatch.setattr(sidecar, "current_cpu_cap", lambda: 3)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "12")
+    seen = _capture_launch_environment(tmp_path, monkeypatch)
+    env = seen["environment"]
+    assert env["HYDRA_CPU_THREADS"] == "3" and "HYDRA_CPU_BUDGET" not in env
+    assert env["OMP_NUM_THREADS"] == "3"
+
+
+@pytest.mark.parametrize("inherited, expected", [("3", [3, "bind"]), (None, [])])
+def test_trial_child_applies_the_inherited_cap(monkeypatch, inherited, expected):
+    from hydra_suite.core.inference.autotune import sidecar_child
+
+    calls = []
+    monkeypatch.setattr(sidecar_child, "set_process_cpu_cap", calls.append)
+    monkeypatch.setattr(
+        sidecar_child, "bind_thread_cpu_cap", lambda: calls.append("bind")
+    )
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    # An uncapped parent's HYDRA_CPU_BUDGET must not cap the child by itself.
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "5")
+    if inherited is not None:
+        monkeypatch.setenv("HYDRA_CPU_THREADS", inherited)
+    sidecar_child._apply_inherited_cpu_cap()
+    assert calls == expected

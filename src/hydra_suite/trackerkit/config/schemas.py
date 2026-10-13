@@ -32,6 +32,8 @@ class TrackerConfig:
     batch_parallel_gpus: str = "auto"
     batch_parallel_jobs_per_gpu: int = 1  # concurrent children per GPU
     batch_parallel_longest_first: bool = False  # launch longest videos first
+    # --- CPU budget (session state; NEVER emitted into the engine config) ---
+    cpu_budget: int = 0  # 0 = auto (all usable cores for fan-out; uncapped run)
 
     # --- ROI ---
     roi_shapes: list = field(default_factory=list)
@@ -87,6 +89,7 @@ class TrackerConfig:
             "batch_parallel_gpus": str(self.batch_parallel_gpus),
             "batch_parallel_jobs_per_gpu": int(self.batch_parallel_jobs_per_gpu),
             "batch_parallel_longest_first": bool(self.batch_parallel_longest_first),
+            "cpu_budget": int(self.cpu_budget),
             "roi_shapes": list(self.roi_shapes),
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
@@ -139,6 +142,7 @@ class TrackerConfig:
             batch_parallel_longest_first=bool(
                 data.get("batch_parallel_longest_first", False)
             ),
+            cpu_budget=max(0, int(data.get("cpu_budget", 0) or 0)),
             roi_shapes=list(data.get("roi_shapes", [])),
             roi_current_mode=data.get("roi_current_mode", "circle"),
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),

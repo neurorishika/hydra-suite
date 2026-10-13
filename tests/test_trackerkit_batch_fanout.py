@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from hydra_suite.runtime.cpu_budget import (
+    ENV_CPU_BUDGET,
+    ENV_CPU_THREADS,
+    THREAD_ENV_VARS,
+)
 from hydra_suite.runtime.cuda_devices import CudaDevice
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
@@ -110,7 +115,7 @@ def test_parse_progress_and_summary_lines():
     assert parse_summary_line("t - n - INFO - other") is None
 
 
-def test_build_child_env_pins_gpu_and_unbuffered_and_caps_only_when_unset():
+def test_build_child_env_pins_gpu_and_unbuffered_and_caps_with_min():
     gpu = CudaDevice(index=3, uuid="GPU-1234", name="x")
     env = build_child_env(
         {"PATH": "/bin", "OMP_NUM_THREADS": "7"}, gpu=gpu, threads_per_job=4
@@ -118,7 +123,7 @@ def test_build_child_env_pins_gpu_and_unbuffered_and_caps_only_when_unset():
     assert env["CUDA_VISIBLE_DEVICES"] == "GPU-1234"
     assert env["PYTHONUNBUFFERED"] == "1"
     assert env["KMP_DUPLICATE_LIB_OK"] == "TRUE"
-    assert env["OMP_NUM_THREADS"] == "7"  # parent's value wins
+    assert env["OMP_NUM_THREADS"] == "4"  # min(parent's 7, threads_per_job)
     assert env["NUMBA_NUM_THREADS"] == "4"
     assert env["MKL_NUM_THREADS"] == "4"
     assert env["OPENBLAS_NUM_THREADS"] == "4"
@@ -682,14 +687,16 @@ def _expected_command(spec_video: str, run_dir: Path, index: int) -> list[str]:
     ]
 
 
+# The thread-cap env a capped child gets is the CPU-budget branch's
+# ``capped_child_env``: HYDRA_CPU_THREADS + every THREAD_ENV_VARS entry (and
+# HYDRA_CPU_BUDGET stripped). Uncapped children are unchanged.
+_CAPPED_THREAD_VARS = (ENV_CPU_THREADS, *THREAD_ENV_VARS)
 _CAP_VARS = (
     "CUDA_VISIBLE_DEVICES",
     "PYTHONUNBUFFERED",
     "KMP_DUPLICATE_LIB_OK",
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "NUMBA_NUM_THREADS",
+    ENV_CPU_BUDGET,
+    *_CAPPED_THREAD_VARS,
 )
 
 
@@ -729,7 +736,7 @@ def test_k1_children_are_launched_exactly_as_before(
         if gpu is not None:
             expected["CUDA_VISIBLE_DEVICES"] = gpu
         if expected_threads is not None:
-            for var in _CAP_VARS[3:]:
+            for var in _CAPPED_THREAD_VARS:
                 expected[var] = expected_threads
         assert delta == expected
 
@@ -994,3 +1001,200 @@ def test_oversubscription_suggestion_uses_the_real_slot_count(
     )
     (warning,) = _oversubscription_warnings(caplog)
     assert "--threads-per-job 10" in warning.getMessage()
+
+
+from hydra_suite.trackerkit.batch_fanout import (  # noqa: E402
+    FanoutOptions,
+    plan_fanout_cpu,
+    resolve_slot_count,
+)
+
+
+def test_child_env_caps_with_min_and_new_vars():
+    env = build_child_env(
+        {"OMP_NUM_THREADS": "64", "MKL_NUM_THREADS": "1", "HYDRA_CPU_BUDGET": "48"},
+        gpu=None,
+        threads_per_job=4,
+    )
+    assert env["OMP_NUM_THREADS"] == "4"
+    assert env["MKL_NUM_THREADS"] == "1"
+    for var in (
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "OPENCV_FFMPEG_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMBA_NUM_THREADS",
+    ):
+        assert env[var] == "4"
+    assert env["HYDRA_CPU_THREADS"] == "4"
+    assert "HYDRA_CPU_BUDGET" not in env
+
+
+def test_child_env_garbage_existing_values_treated_as_unset():
+    env = build_child_env(
+        {
+            "OMP_NUM_THREADS": "abc",
+            "MKL_NUM_THREADS": "0",
+            "OPENBLAS_NUM_THREADS": "-3",
+        },
+        gpu=None,
+        threads_per_job=4,
+    )
+    assert {
+        env[v] for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+    } == {"4"}
+
+
+def test_child_env_without_threads_is_unchanged_except_existing_rules():
+    env = build_child_env({"OMP_NUM_THREADS": "7"}, gpu=None, threads_per_job=None)
+    assert env["OMP_NUM_THREADS"] == "7" and "HYDRA_CPU_THREADS" not in env
+
+
+def _gpus(n):
+    return [CudaDevice(index=i, uuid=f"GPU-{i}", name="x") for i in range(n)]
+
+
+def test_resolve_slot_count_matches_scheduler():
+    assert resolve_slot_count(FanoutOptions(gpus=_gpus(4), jobs=None)) == 4
+    assert resolve_slot_count(FanoutOptions(gpus=_gpus(4), jobs=9)) == 4
+    assert resolve_slot_count(FanoutOptions(gpus=[], jobs=3)) == 3
+    assert resolve_slot_count(FanoutOptions(gpus=[], jobs=None)) == 1
+
+
+def test_plan_fanout_cpu_clamps_cpu_jobs_and_fills_threads():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=[], jobs=16), n_videos=20, cpu_budget=None, env={}, usable=12
+    )
+    assert (opts.jobs, opts.threads_per_job, plan.clamped) == (6, 2, True)
+
+
+def test_plan_fanout_cpu_few_videos_many_gpus():
+    opts, _ = plan_fanout_cpu(
+        FanoutOptions(gpus=_gpus(8), jobs=None),
+        n_videos=2,
+        cpu_budget=None,
+        env={},
+        usable=32,
+    )
+    assert (opts.jobs, opts.threads_per_job) == (8, 16)
+
+
+def test_plan_fanout_cpu_explicit_threads_override():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=[], jobs=16, threads_per_job=3),
+        n_videos=20,
+        cpu_budget=None,
+        env={},
+        usable=12,
+    )
+    assert (opts.jobs, opts.threads_per_job, plan.clamped) == (16, 3, False)
+
+
+def test_plan_fanout_cpu_reads_process_env_when_env_none(monkeypatch):
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "6")
+    # No env= and no cpu_budget: the budget can only come from os.environ.
+    opts, _ = plan_fanout_cpu(
+        FanoutOptions(gpus=[], jobs=2), n_videos=4, cpu_budget=None, usable=12
+    )
+    assert opts.threads_per_job == 3
+
+
+# --- Merge integration: CPU plan x --jobs-per-gpu (R1/R2) ----------------------
+
+
+def test_resolve_slot_count_counts_jobs_per_gpu():
+    """resolve_slot_count delegates to build_gpu_slots, so K is counted."""
+    assert resolve_slot_count(FanoutOptions(gpus=_gpus(2), jobs_per_gpu=2)) == 4
+    assert resolve_slot_count(FanoutOptions(gpus=_gpus(2), jobs=3, jobs_per_gpu=2)) == 3
+    assert (
+        resolve_slot_count(FanoutOptions(gpus=_gpus(2), jobs=99, jobs_per_gpu=2)) == 4
+    )
+    for jobs in (None, 1, 2, 99):
+        opts = FanoutOptions(gpus=_gpus(3), jobs=jobs, jobs_per_gpu=1)
+        assert resolve_slot_count(opts) == len(
+            build_gpu_slots(opts.gpus, jobs=jobs, jobs_per_gpu=1)
+        )
+
+
+def test_plan_fanout_cpu_k2_splits_the_budget_across_every_slot():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=_gpus(2), jobs_per_gpu=2),
+        n_videos=10,
+        cpu_budget=16,
+        env={},
+        usable=64,
+    )
+    assert (opts.jobs, opts.threads_per_job, opts.jobs_per_gpu) == (4, 4, 2)
+    assert not plan.clamped
+    # Few videos: threads divide by the children that will actually run.
+    opts, _ = plan_fanout_cpu(
+        FanoutOptions(gpus=_gpus(2), jobs_per_gpu=2),
+        n_videos=2,
+        cpu_budget=16,
+        env={},
+        usable=64,
+    )
+    assert (opts.jobs, opts.threads_per_job) == (4, 8)
+
+
+def test_plan_fanout_cpu_k2_over_budget_clamps_jobs_and_warns():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=_gpus(2), jobs_per_gpu=2),
+        n_videos=10,
+        cpu_budget=3,
+        env={},
+        usable=64,
+    )
+    assert plan.clamped and opts.jobs == 3 and opts.threads_per_job == 1
+    assert any("running 3 at a time" in w for w in plan.warnings)
+    # The clamped count still spreads over every GPU before doubling up.
+    assert build_gpu_slots(opts.gpus, jobs=opts.jobs, jobs_per_gpu=2) == [
+        opts.gpus[0],
+        opts.gpus[1],
+        opts.gpus[0],
+    ]
+
+
+def test_plan_fanout_cpu_k2_explicit_threads_keeps_branch_semantics():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=_gpus(2), jobs_per_gpu=2, threads_per_job=8),
+        n_videos=10,
+        cpu_budget=16,
+        env={},
+        usable=64,
+    )
+    assert (opts.jobs, opts.threads_per_job) == (4, 8) and not plan.clamped
+    assert any("explicit --threads-per-job" in w for w in plan.warnings)
+
+
+def test_planned_k2_fanout_does_not_repeat_the_adhoc_oversubscription_warning(
+    tmp_path, caplog
+):
+    """The CPU plan sets threads_per_job, which supersedes main's K>1 warning."""
+    opts, _ = plan_fanout_cpu(
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs_per_gpu=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+        n_videos=1,
+        cpu_budget=8,
+        env={},
+        usable=64,
+    )
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    assert run_batch_fanout([_spec(tmp_path, "a")], opts).success
+    assert not _oversubscription_warnings(caplog)
+
+
+def test_describe_cpu_plan_mentions_jobs_per_gpu():
+    from hydra_suite.runtime.cpu_budget import CpuPlan, resolve_cpu_budget
+    from hydra_suite.trackerkit.batch_fanout import describe_cpu_plan
+
+    budget = resolve_cpu_budget(16, env={}, usable=64)
+    text = describe_cpu_plan(CpuPlan(4, 4, False), budget, 4, n_gpus=2)
+    assert "4 job(s) x 4 thread(s)" in text and "2 per GPU on 2 GPU(s)" in text
+    assert "per GPU" not in describe_cpu_plan(CpuPlan(2, 8, False), budget, 2, n_gpus=2)

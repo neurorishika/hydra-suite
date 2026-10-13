@@ -27,6 +27,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, Sequence, TextIO
 
+from hydra_suite.runtime.cpu_budget import (
+    CpuBudget,
+    CpuPlan,
+    capped_child_env,
+    plan_cpu,
+    resolve_cpu_budget,
+)
 from hydra_suite.runtime.cuda_devices import CudaDevice, resolve_gpu_selectors
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
 from hydra_suite.utils.video_artifacts import (
@@ -74,12 +81,6 @@ _PROGRESS_RE = re.compile(
     r"\[(?:track forward|track backward|post)\] (\d{1,3})% ?(.*)$"
 )
 _SUMMARY_RE = re.compile(r"Tracker CLI completed: (.*)$")
-_THREAD_CAP_VARS = (
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "NUMBA_NUM_THREADS",
-)
 
 
 @dataclass
@@ -383,9 +384,63 @@ def build_child_env(
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     if threads_per_job is not None and int(threads_per_job) > 0:
-        for var in _THREAD_CAP_VARS:
-            env.setdefault(var, str(int(threads_per_job)))
+        # The child sizes itself from its own cap, never the box-wide budget.
+        env = capped_child_env(env, int(threads_per_job))
     return env
+
+
+def resolve_slot_count(options: FanoutOptions) -> int:
+    """Concurrent child slots the scheduler opens for ``options``.
+
+    Delegates to :func:`build_gpu_slots` (the single slot authority), so
+    ``jobs_per_gpu`` is counted: unspecified jobs -> GPUs x K, an explicit
+    jobs is clamped to it; without GPUs, ``jobs`` unpinned slots.
+    """
+    return len(
+        build_gpu_slots(
+            options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
+        )
+    )
+
+
+def plan_fanout_cpu(
+    options: FanoutOptions,
+    *,
+    n_videos: int,
+    cpu_budget: Optional[int],
+    env: Optional[Mapping[str, str]] = None,
+    usable: Optional[int] = None,
+) -> tuple[FanoutOptions, CpuPlan]:
+    """Fit the slot count into the CPU budget and size each child's threads."""
+    budget = resolve_cpu_budget(cpu_budget, env=env, usable=usable)
+    plan = plan_cpu(
+        jobs=resolve_slot_count(options),
+        n_videos=n_videos,
+        budget=budget,
+        gpu_bound=bool(options.gpus),
+        threads_per_job=options.threads_per_job,
+    )
+    return replace(options, jobs=plan.jobs, threads_per_job=plan.threads_per_job), plan
+
+
+def describe_cpu_plan(
+    plan: CpuPlan, budget: CpuBudget, requested_jobs: int, *, n_gpus: int = 0
+) -> str:
+    """One-line human summary of a fan-out CPU plan (for the GUI label).
+
+    With ``n_gpus`` and more jobs than GPUs (``jobs_per_gpu`` > 1 after the
+    clamp), it says how many children share each GPU.
+    """
+    text = (
+        f"{plan.jobs} job(s) x {plan.threads_per_job} thread(s) "
+        f"of {budget.cores} core(s)"
+    )
+    if n_gpus and plan.jobs > int(n_gpus):
+        per_gpu = -(-int(plan.jobs) // int(n_gpus))
+        text += f" (up to {per_gpu} per GPU on {int(n_gpus)} GPU(s))"
+    if plan.clamped:
+        text += f" — reduced from {int(requested_jobs)} to fit the CPU budget"
+    return text
 
 
 def default_child_command(

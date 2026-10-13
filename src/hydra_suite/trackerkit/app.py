@@ -244,8 +244,22 @@ Examples:
         type=int,
         default=None,
         help=(
-            "Opt-in CPU thread cap per child (sets OMP/MKL/OPENBLAS/NUMBA "
-            "*_NUM_THREADS when not already set). Off by default."
+            "Explicit CPU threads per parallel child. Overrides the automatic "
+            "N // jobs split and disables the job clamp (may oversubscribe)."
+        ),
+    )
+    track_parser.add_argument(
+        "--cpu-budget",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Total CPU cores hydra may use. Parallel runs (--gpus / --jobs > 1) "
+            "always use a budget: this flag, else HYDRA_CPU_BUDGET, else every "
+            "usable core; jobs are reduced to fit and each child gets "
+            "N // jobs threads. A single run is uncapped unless this flag or "
+            "HYDRA_CPU_BUDGET is given, in which case it caps that run's "
+            "thread pools."
         ),
     )
 
@@ -297,11 +311,24 @@ Examples:
             "resulting profile -- it is part of the profile key."
         ),
     )
+    calibrate_parser.add_argument(
+        "--cpu-budget",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap this calibration's CPU thread pools at N cores, like "
+            "`track --cpu-budget` on a single run (else HYDRA_CPU_BUDGET; "
+            "uncapped when neither is given)."
+        ),
+    )
     # Deliberately NO --gpus / --jobs: concurrent calibration on one box
     # measures contention, not throughput, and would silently produce a
     # confidently wrong profile. Neither flag is registered on this
     # subparser, so passing either is an "unrecognized arguments" SystemExit
     # from argparse itself -- a loud rejection, not a silent ignore.
+    # (--cpu-budget is different: it caps this one process, it does not
+    # parallelise anything.)
 
     job_parser = subparsers.add_parser(
         "job",
@@ -342,8 +369,8 @@ Examples:
     pack_shared_group = job_pack.add_mutually_exclusive_group()
     pack_shared_group.add_argument("--no-shared", action="store_true")
     pack_shared_group.add_argument("--shared-only", action="store_true")
-    # Deliberately NO --gpus / --jobs / --threads-per-job: they describe the
-    # COMPUTE BOX, not the experiment, and belong to `job run`. Not
+    # Deliberately NO --gpus / --jobs / --threads-per-job / --cpu-budget: they
+    # describe the COMPUTE BOX, not the experiment, and belong to `job run`. Not
     # registering them makes passing one an "unrecognized arguments"
     # SystemExit from argparse itself -- a loud rejection, not a silent
     # ignore. Same reasoning as the calibrate subparser above.
@@ -411,6 +438,7 @@ Examples:
     job_run.add_argument("--gpus", type=str, default=None)
     job_run.add_argument("--jobs", type=int, default=None)
     job_run.add_argument("--threads-per-job", type=int, default=None)
+    job_run.add_argument("--cpu-budget", type=int, default=None, metavar="N")
     job_run.add_argument("--detach", action="store_true")
     job_run.add_argument("--calibrate", action="store_true")
     job_run.add_argument("--allow-tier-fallback", action="store_true")
@@ -436,6 +464,7 @@ Examples:
         "--inference-autotune-manual", action="append", default=[], metavar="FIELD"
     )
     job_calibrate.add_argument("--remote-bootstrap", type=str, default="")
+    job_calibrate.add_argument("--cpu-budget", type=int, default=None, metavar="N")
     job_calibrate.add_argument(
         "--budget-seconds", type=float, default=DEFAULT_CALIBRATION_BUDGET_SECONDS
     )
@@ -505,8 +534,30 @@ def parse_arguments(argv: list[str] | None = None) -> object:
             or int(getattr(args, "jobs", None) or 1) > 1
         ):
             track_parser.error("--longest-first needs --gpus or --jobs > 1")
+        cpu_budget = getattr(args, "cpu_budget", None)
+        if cpu_budget is not None and int(cpu_budget) < 1:
+            track_parser.error("--cpu-budget must be >= 1")
+
+    if args.command == "job":
+        # `job run` forwards these to `track` (and --cpu-budget to the
+        # calibrate leg) on the compute box; reject a bad value here rather
+        # than after preflight (or over ssh).
+        job_command = getattr(args, "job_command", None)
+        for attr, flag in (
+            ("jobs", "--jobs"),
+            ("threads_per_job", "--threads-per-job"),
+            ("cpu_budget", "--cpu-budget"),
+        ):
+            value = getattr(args, attr, None)
+            if value is not None and int(value) < 1:
+                _subparser_choices(subcommands["job"])[job_command].error(
+                    f"{flag} must be >= 1"
+                )
 
     if args.command == "calibrate":
+        cpu_budget = getattr(args, "cpu_budget", None)
+        if cpu_budget is not None and int(cpu_budget) < 1:
+            calibrate_parser.error("--cpu-budget must be >= 1")
         budget = getattr(args, "budget_seconds", None)
         if budget is not None and not (
             MINIMUM_CALIBRATION_BUDGET_SECONDS
@@ -657,6 +708,7 @@ def main(argv: list[str] | None = None) -> object:
                 jobs_per_gpu=int(getattr(args, "jobs_per_gpu", 1)),
                 longest_first=bool(getattr(args, "longest_first", False)),
                 threads_per_job=getattr(args, "threads_per_job", None),
+                cpu_budget=getattr(args, "cpu_budget", None),
                 log_level=str(args.log_level),
                 apply_tuned_inference=getattr(args, "apply_tuned_inference", None),
                 inference_autotune_manual=getattr(
@@ -685,6 +737,7 @@ def main(argv: list[str] | None = None) -> object:
                 inference_autotune_manual=getattr(
                     args, "inference_autotune_manual", []
                 ),
+                cpu_budget=getattr(args, "cpu_budget", None),
             )
         except DetectionLimitError as e:
             logger.error("Tracker calibration failed: %s", e)

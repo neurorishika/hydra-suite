@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -124,7 +125,14 @@ class CalibrationDialog(BaseDialog):
     calibration never calls ``session.calibrate``'s persistence path to
     completion, so it leaves the project's configured settings untouched --
     this dialog never writes to ``config`` itself.
+
+    ``calibration_thread_finished`` relays the worker's ``QThread.finished``
+    (emitted after ``run()`` returns, on every path) so the orchestrator can
+    act once the search thread is truly gone -- even after a cancelled worker
+    outlived this dialog's ``reject()``.
     """
+
+    calibration_thread_finished = Signal()
 
     def __init__(
         self,
@@ -222,6 +230,7 @@ class CalibrationDialog(BaseDialog):
         self._worker.status.connect(self.lbl_status.setText)
         self._worker.completed.connect(self._on_completed)
         self._worker.error.connect(self._on_error)
+        self._worker.finished.connect(self.calibration_thread_finished.emit)
         self._worker.start()
 
     def is_calibration_running(self) -> bool:
