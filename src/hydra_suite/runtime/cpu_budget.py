@@ -7,8 +7,11 @@ docs/superpowers/specs/2026-10-12-cpu-oversubscription-design.md.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
+import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Optional
@@ -195,3 +198,115 @@ def resolve_process_cap(
     ) is None:
         return None
     return resolve_cpu_budget(cli_budget, env=env, usable=usable).cores
+
+
+# --------------------------------------------------------------------------
+# Process-level cap (applied) + per-thread binder
+# --------------------------------------------------------------------------
+
+_logger = logging.getLogger(__name__)
+_cap_lock = threading.Lock()
+_cap: Optional[int] = None
+_originals: Optional[dict] = None  # recorded on the first non-None set
+_tp_limiter = None  # threadpoolctl limiter held while capped
+_thread_state = threading.local()  # per-thread numba count before binding
+
+
+def capped(value: int, cap: Optional[int]) -> int:
+    """``value`` limited by ``cap`` (unchanged when cap is None)."""
+    return value if cap is None else max(1, min(int(value), int(cap)))
+
+
+def current_cpu_cap() -> Optional[int]:
+    """The active process-wide CPU thread cap, or None when uncapped."""
+    return _cap
+
+
+def _env_min(original: Optional[str], n: int) -> str:
+    parsed = _positive_int(original)
+    return str(n if parsed is None else min(parsed, n))
+
+
+def set_process_cpu_cap(n: Optional[int]) -> None:
+    """Set (or lift with None) the process-wide CPU thread cap. Idempotent.
+
+    Caps the thread env vars (``min(existing, n)``, never raised), native
+    BLAS/OpenMP pools via threadpoolctl (C4: OpenMP limits are per calling
+    thread) and torch's process-global intra-op pool. A None when no cap was
+    ever set touches nothing (plain-path invariant). Each call is computed
+    from the ORIGINAL state, so re-capping 2 -> 6 gives 6.
+    """
+    global _cap, _originals, _tp_limiter
+    with _cap_lock:
+        if n is None:
+            if _originals is None:
+                return
+            for var, value in _originals["env"].items():
+                if value is None:
+                    os.environ.pop(var, None)
+                else:
+                    os.environ[var] = value
+            if _tp_limiter is not None:
+                _tp_limiter.restore_original_limits()
+                _tp_limiter = None
+            torch_mod = sys.modules.get("torch")
+            if torch_mod is not None and _originals["torch"] is not None:
+                torch_mod.set_num_threads(_originals["torch"])
+            _originals = None
+            _cap = None
+            _logger.info("CPU thread cap lifted")
+            return
+        n = max(1, int(n))
+        if _originals is None:
+            torch_mod = sys.modules.get("torch")
+            _originals = {
+                "env": {v: os.environ.get(v) for v in THREAD_ENV_VARS},
+                "torch": (
+                    torch_mod.get_num_threads() if torch_mod is not None else None
+                ),
+            }
+        for var, value in _originals["env"].items():
+            os.environ[var] = _env_min(value, n)
+        if _tp_limiter is not None:
+            _tp_limiter.restore_original_limits()
+            _tp_limiter = None
+        try:
+            from threadpoolctl import threadpool_limits
+
+            _tp_limiter = threadpool_limits(limits=n)
+        except Exception:  # threadpoolctl missing/unsupported lib: env applies
+            _logger.debug("threadpoolctl limit failed", exc_info=True)
+        torch_mod = sys.modules.get("torch")
+        if torch_mod is not None:
+            base = _originals["torch"] or torch_mod.get_num_threads()
+            torch_mod.set_num_threads(max(1, min(base, n)))
+        _cap = n
+    _logger.info("CPU thread cap set to %d", n)
+
+
+def bind_thread_cpu_cap() -> None:
+    """Apply the cap to thread-local pools (numba) on the calling thread.
+
+    numba's thread count is thread-local, so every thread that may run a
+    ``parallel=True`` kernel must call this first. A cheap no-op when the
+    process is uncapped and this thread was never bound. A thread bound under
+    a cap that has since been lifted is returned to its own original count.
+    """
+    cap = _cap
+    original = getattr(_thread_state, "numba_original", None)
+    if cap is None and original is None:
+        return
+    numba_mod = sys.modules.get("numba")
+    if numba_mod is None:
+        return
+    try:
+        if cap is None:
+            numba_mod.set_num_threads(original)
+            _thread_state.numba_original = None
+            return
+        if original is None:
+            original = numba_mod.get_num_threads()
+            _thread_state.numba_original = original
+        numba_mod.set_num_threads(max(1, min(original, cap)))
+    except Exception:
+        _logger.debug("numba thread cap failed", exc_info=True)

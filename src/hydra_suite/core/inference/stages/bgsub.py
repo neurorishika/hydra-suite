@@ -19,6 +19,7 @@ import numpy as np
 
 from hydra_suite.core.background.measure import BackgroundMeasurer, corners_from_ellipse
 from hydra_suite.core.background.model import BackgroundModel
+from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
 from hydra_suite.utils.image_processing import apply_image_adjustments
 
 from ..config import BgSubConfig
@@ -311,6 +312,9 @@ def run_bgsub_batch(
     disagreement would make the detection cache a lie. INTER_AREA matches
     worker.py::_resize_tracking_frame's policy for non-YOLO methods.
     """
+    # The bgsub numba kernel is parallel=True and numba's pool size is
+    # thread-local: cap it on whichever thread runs this (no-op if uncapped).
+    bind_thread_cpu_cap()
     resize_f = float(config.params.get("RESIZE_FACTOR", 1.0) or 1.0)
     if resize_f < 1.0:
         frames = [

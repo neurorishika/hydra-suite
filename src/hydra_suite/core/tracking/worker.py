@@ -61,6 +61,7 @@ from hydra_suite.core.tracking.features.tag_features import (
 )
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
+from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
 from hydra_suite.utils.arena_overlay_style import (
     BOUNDARY_COLOR_BGR,
     boundary_line_width_px,
@@ -848,6 +849,8 @@ class TrackingEngineCore:
 
     def run_tracking(self: object) -> object:  # noqa: C901
         """Execute tracking pipeline for the configured video and parameters."""
+        # numba pools are thread-local; cap this engine thread (no-op uncapped).
+        bind_thread_cpu_cap()
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
         self._stop_requested = False

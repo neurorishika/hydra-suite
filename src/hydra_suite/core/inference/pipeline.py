@@ -49,6 +49,7 @@ from typing import Any, Callable, Iterable, Iterator
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import ClippingStats
+from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import bind_target, span
 
@@ -905,6 +906,7 @@ class Pipeline:
                         continue
 
         def decoder() -> None:
+            bind_thread_cpu_cap()  # numba pools are thread-local
             try:
                 for window in self._stream_windows(frame_source, w):
                     if stop.is_set() or (should_stop is not None and should_stop()):
@@ -923,6 +925,7 @@ class Pipeline:
                 publish_sentinel(decode_q, detector_done)
 
         def detector() -> None:
+            bind_thread_cpu_cap()  # numba pools are thread-local
             try:
                 while not stop.is_set():
                     window = decode_q.get()
@@ -1067,6 +1070,7 @@ class Pipeline:
                         continue
 
         def producer() -> None:
+            bind_thread_cpu_cap()  # numba pools are thread-local
             try:
                 for window in self._stream_windows(frame_source, w):
                     if stop.is_set() or (should_stop is not None and should_stop()):
