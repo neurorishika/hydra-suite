@@ -51,7 +51,12 @@ def _isolate_cpu_budget():
     Deliberately does NOT request ``monkeypatch``: an autouse fixture that
     does pulls monkeypatch's setup ahead of later autouse fixtures, so its
     undo runs AFTER their teardown -- e.g. the Qt top-level-widget sweep
-    below would then see a test's still-patched ``QApplication``.
+    below would then see a test's still-patched ``QApplication``. As a
+    consequence the cap backstop below runs AFTER the test's monkeypatch undo:
+    a test that monkeypatches a thread env var AND calls the real
+    ``set_process_cpu_cap(n)`` without lifting it would have the patched value
+    restored permanently (the cap recorded it as the "original"). Such tests
+    must lift the cap themselves (or cap only inside a subprocess).
     """
     saved = {
         var: os.environ.pop(var)

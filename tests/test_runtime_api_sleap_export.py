@@ -421,7 +421,9 @@ def test_create_pose_backend_uses_direct_exported_backend_for_sleap_onnx(
             peak_vals = np.ones((count, 1), dtype=np.float32)
             return [peaks, peak_vals]
 
-    sys.modules["onnxruntime"] = types.SimpleNamespace(InferenceSession=_FakeSession)
+    # Restored on exit by _patched_modules (a bare sys.modules assignment
+    # leaked the fake into later tests, e.g. test_vitpose_export's ORT gates).
+    stubs["onnxruntime"] = types.SimpleNamespace(InferenceSession=_FakeSession)
 
     cfg = mod.PoseRuntimeConfig(
         backend_family="sleap",

@@ -314,3 +314,14 @@ def test_parallel_tooltip_byte_identity_claim_is_qualified():
         assert "in our tests" in src[idx : idx + 120]
     assert "round differently under a CPU cap" in src
     assert "equal share of the CPU budget" in src
+
+
+def test_cli_doc_byte_identity_claims_are_qualified():
+    doc = Path(__file__).resolve().parents[1] / "docs/user-guide/trackerkit-cli.md"
+    text = " ".join(doc.read_text(encoding="utf-8").split())
+    hits = [i for i in range(len(text)) if text.startswith("byte-identical", i)]
+    assert hits, "the CLI doc should state the measured fan-out parity"
+    # Same rule as the tooltip: byte-identity is reported as measured.
+    for idx in hits:
+        assert "in our tests" in text[idx : idx + 120], text[idx : idx + 120]
+    assert "may in principle" in text

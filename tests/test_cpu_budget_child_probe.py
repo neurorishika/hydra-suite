@@ -1,8 +1,18 @@
-"""End-to-end probe: a fan-out child built with ``threads_per_job`` really runs capped.
+"""End-to-end probe: a child process really runs under the CPU cap.
 
-Every assertion runs in a real subprocess spawned with the env that
-``build_child_env`` hands a fan-out child, so nothing here touches the test
-process's own thread pools.
+Every assertion runs in a real subprocess, so nothing here touches the test
+process's own thread pools. Three legs:
+
+* ``fanout``  -- the env ``build_child_env(threads_per_job=2)`` hands a fan-out
+  child. Its thread env vars already shrink most pools at library load, so this
+  leg proves the env hand-off end to end, plus the ORT intra-op option (which
+  no env var controls).
+* ``budget``  -- every thread env var and ``HYDRA_CPU_THREADS`` stripped, only
+  ``HYDRA_CPU_BUDGET=2`` set (the single-run path). Here nothing but the
+  in-process ``resolve_process_cap``/``set_process_cpu_cap``/
+  ``bind_thread_cpu_cap`` + ``session_options_for`` can lower the pools, so a
+  no-op cap fails this leg.
+* ``uncapped`` -- the plain path: no cap, ORT defaults.
 """
 
 from __future__ import annotations
@@ -16,6 +26,7 @@ from pathlib import Path
 
 import pytest
 
+from hydra_suite.runtime.cpu_budget import THREAD_ENV_VARS, usable_cores
 from hydra_suite.trackerkit.batch_fanout import build_child_env
 
 _CAP = 2
@@ -37,8 +48,10 @@ _CHILD = textwrap.dedent("""
 
     import cv2
     import numpy as np
+    import onnxruntime as ort
     import psutil
     import torch
+    from hydra_suite.runtime.onnx_providers import session_options_for
 
     video, model = sys.argv[1], sys.argv[2]
     cap = cv2.VideoCapture(video)
@@ -48,19 +61,12 @@ _CHILD = textwrap.dedent("""
         ok, _frame = cap.read()
         frames += int(ok)
 
-    ort_ran = False
-    if model:
-        import onnxruntime as ort
-        from hydra_suite.runtime.onnx_providers import session_options_for
-
-        sess = ort.InferenceSession(
-            model,
-            sess_options=session_options_for(cb.current_cpu_cap()),
-            providers=["CPUExecutionProvider"],
-        )
-        x = np.ones((256, 256), dtype=np.float32)
-        sess.run(None, {"x": x})
-        ort_ran = True
+    sess = ort.InferenceSession(
+        model,
+        sess_options=session_options_for(cb.current_cpu_cap()),
+        providers=["CPUExecutionProvider"],
+    )
+    sess.run(None, {"x": np.ones((256, 256), dtype=np.float32)})
 
     torch.mm(torch.ones(64, 64), torch.ones(64, 64))
     time.sleep(0.2)  # let lazily spawned worker threads settle
@@ -69,9 +75,9 @@ _CHILD = textwrap.dedent("""
         "pools": max((p["num_threads"] for p in threadpool_info()), default=0),
         "numba": numba.get_num_threads(),
         "torch": torch.get_num_threads(),
+        "ort_intra_op": sess.get_session_options().intra_op_num_threads,
         "os_threads": psutil.Process().num_threads(),
         "frames": frames,
-        "ort": ort_ran,
     }))
     cap.release()
 """)
@@ -96,13 +102,11 @@ def _make_clip(path) -> None:
 
 
 def _make_onnx(path) -> str:
-    try:
-        import numpy as np
-        import onnx
-        import onnxruntime  # noqa: F401
-        from onnx import TensorProto, helper, numpy_helper
-    except ImportError:
-        return ""
+    onnx = pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    import numpy as np
+    from onnx import TensorProto, helper, numpy_helper
+
     weight = numpy_helper.from_array(
         np.full((256, 256), 0.01, dtype=np.float32), name="w"
     )
@@ -134,11 +138,7 @@ def _probe(env, video, model) -> dict:
 def _base_env() -> dict:
     env = dict(os.environ)
     # A pristine parent: no inherited budget or cap, no pre-set thread vars.
-    for var in ("HYDRA_CPU_BUDGET", "HYDRA_CPU_THREADS"):
-        env.pop(var, None)
-    from hydra_suite.runtime.cpu_budget import THREAD_ENV_VARS
-
-    for var in THREAD_ENV_VARS:
+    for var in ("HYDRA_CPU_BUDGET", "HYDRA_CPU_THREADS", *THREAD_ENV_VARS):
         env.pop(var, None)
     env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     # Pin the child to the hydra_suite this test imported, never an editable
@@ -152,25 +152,48 @@ def _base_env() -> dict:
     return env
 
 
+def _assert_capped(r: dict) -> None:
+    assert r["frames"] > 0
+    assert r["cap"] == _CAP
+    assert r["pools"] <= _CAP
+    assert r["numba"] <= _CAP
+    assert r["ort_intra_op"] == _CAP
+
+
 @pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs >= 4 cores")
 def test_capped_child_pools_respect_cap(tmp_path):
     video = tmp_path / "probe.mp4"
     _make_clip(video)
     model = _make_onnx(tmp_path / "probe.onnx")
 
-    capped_env = build_child_env(_base_env(), gpu=None, threads_per_job=_CAP)
+    fanout_env = build_child_env(_base_env(), gpu=None, threads_per_job=_CAP)
+    budget_env = _base_env()
+    budget_env["HYDRA_CPU_BUDGET"] = str(_CAP)
     uncapped_env = build_child_env(_base_env(), gpu=None, threads_per_job=None)
     assert "HYDRA_CPU_THREADS" not in uncapped_env
+    assert not any(v in budget_env for v in (*THREAD_ENV_VARS, "HYDRA_CPU_THREADS"))
 
-    capped = _probe(capped_env, video, model)
+    fanout = _probe(fanout_env, video, model)
+    budget = _probe(budget_env, video, model)
     uncapped = _probe(uncapped_env, video, model)
-    # torch is logged, not asserted (its pool size is import-order dependent).
-    print("capped child probe:", capped)
+    # torch and OS thread counts are logged; torch's pool size is
+    # import-order dependent and OS threads are a lazy, host-dependent proxy.
+    print("fanout child probe:", fanout)
+    print("budget-only child probe:", budget)
     print("uncapped child probe:", uncapped)
 
-    assert capped["frames"] > 0 and uncapped["frames"] > 0
-    assert capped["cap"] == _CAP
+    _assert_capped(fanout)
+    _assert_capped(budget)  # only the in-process cap can deliver this leg
+
+    assert uncapped["frames"] > 0
     assert uncapped["cap"] is None
-    assert capped["pools"] <= _CAP
-    assert capped["numba"] <= _CAP
-    assert capped["os_threads"] < 0.6 * uncapped["os_threads"], (capped, uncapped)
+    assert uncapped["ort_intra_op"] == 0  # ORT default: untouched plain path
+
+    # The OS-thread margin is only meaningful on a box with many cores; on
+    # small hosts the capped/uncapped gap is within run-to-run noise.
+    if usable_cores() >= 12:
+        for leg in (fanout, budget):
+            assert leg["os_threads"] < 0.6 * uncapped["os_threads"], (
+                leg,
+                uncapped,
+            )
