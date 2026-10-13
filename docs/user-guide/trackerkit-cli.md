@@ -76,8 +76,9 @@ trackerkit track --video-list batch.txt --jobs 3             # three children sh
 Each video becomes a child process `trackerkit track <video> --config <effective.json>`
 pinned with `CUDA_VISIBLE_DEVICES=<uuid>`, so every child (and the SLEAP
 service it starts) sees exactly one GPU. Tracking output (the CSVs) is
-identical to the sequential run; see [CPU budget](#cpu-budget) for the one
-caveat about rendered videos. Rules:
+identical to the sequential run up to floating-point rounding in threaded
+numeric kernels (see [CPU budget](#cpu-budget), which also covers rendered
+videos). Rules:
 
 - Fan-out engages only when `--gpus` is given or `--jobs > 1`.
 - `--gpus auto` is best effort: on a host with no CUDA at all it simply runs
@@ -124,9 +125,9 @@ The GUI exposes the same feature under **Batch › Run videos in parallel (one p
 ### CPU budget
 
 Each tracking process sizes its thread pools (PyTorch, OpenMP/BLAS, Numba,
-OpenCV, ONNX Runtime, video decode/encode) from the machine's core count. N
-parallel children would each do that, multiplying the thread count by N. The
-CPU budget stops this.
+OpenCV's FFmpeg video decoder, ONNX Runtime, PyAV video decode/encode) from
+the machine's core count. N parallel children would each do that, multiplying
+the thread count by N. The CPU budget stops this.
 
 ```bash
 trackerkit track --video-list batch.txt --gpus 0-7 --cpu-budget 32   # 8 jobs x 4 threads
@@ -149,11 +150,15 @@ export HYDRA_CPU_BUDGET=32                                             # same as
   minimum (1 thread per GPU job, 2 per CPU-only job), fewer jobs run at a time
   and a warning says so, e.g. `Requested 16 parallel job(s) but the CPU budget
   is 12 core(s) (12 usable); running 6 at a time.`
-- **`--threads-per-job N`** is the override: every child gets exactly N
+- **`--threads-per-job N`** is the override: every child gets at most N
   threads and the job clamp is turned off. If `jobs x N` exceeds the budget you
   get a warning, but the run goes ahead (it may oversubscribe).
 - **A single run** (no `--gpus`, `--jobs` 1) is capped only when you ask for it,
   with `--cpu-budget` or `HYDRA_CPU_BUDGET`. Without either, nothing changes.
+- **`HYDRA_CPU_THREADS`** is the per-process cap a parallel run hands each
+  child. If it is already set where you launch a parallel run (exported in the
+  shell, or a run nested inside another), it is a ceiling: the whole run's
+  budget becomes the smaller of it and `--cpu-budget`.
 - **Pose with SLEAP:** the SLEAP sidecar process inherits the same per-job cap
   but is a separate process, so a pose job may use up to about twice its share.
 - **`HYDRA_CPU_BUDGET` is local only.** It is read from the environment of the

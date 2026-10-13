@@ -16,7 +16,6 @@ from hydra_suite.runtime.cpu_budget import (
     bind_thread_cpu_cap,
     positive_int,
     resolve_cpu_budget,
-    resolve_process_cap,
     set_process_cpu_cap,
 )
 from hydra_suite.runtime.cuda_devices import list_cuda_devices, parse_gpu_selectors
@@ -50,29 +49,44 @@ def fanout_requested(gpus: str | None, jobs: int | None) -> bool:
     return bool(str(gpus or "").strip()) or int(jobs or 1) > 1
 
 
+def _inherited_cpu_threads() -> Optional[int]:
+    """A valid ``HYDRA_CPU_THREADS`` from this process's env, else None.
+
+    A non-blank invalid value is ignored with a warning (never a crash).
+    """
+    raw = os.environ.get(ENV_CPU_THREADS)
+    value = positive_int(raw)
+    if value is None and raw is not None and raw.strip() != "":
+        logger.warning(
+            "CPU budget: ignoring invalid %s=%r (need an integer >= 1).",
+            ENV_CPU_THREADS,
+            raw,
+        )
+    return value
+
+
 def _single_run_cpu_cap(cpu_budget: Optional[int]) -> Optional[int]:
     """The thread cap for an in-process (non-fan-out) run, or None.
 
-    ``resolve_process_cap`` applies the precedence (HYDRA_CPU_THREADS >
-    --cpu-budget > HYDRA_CPU_BUDGET) but drops the budget's warnings, so they
-    are logged here: an invalid ``HYDRA_CPU_BUDGET`` or a budget above the
+    Same precedence as ``resolve_process_cap`` (HYDRA_CPU_THREADS >
+    --cpu-budget > HYDRA_CPU_BUDGET), resolved once here so the budget's
+    warnings are logged: an invalid ``HYDRA_CPU_BUDGET`` or a budget above the
     usable cores must be visible, not silently ignored or clamped. A fan-out
     child (HYDRA_CPU_THREADS set) skips them -- the parent already logged the
     plan, and the inherited budget does not apply to the child.
     """
-    raw_threads = os.environ.get(ENV_CPU_THREADS)
-    if positive_int(raw_threads) is None:
-        if raw_threads is not None and raw_threads.strip() != "":
-            logger.warning(
-                "CPU budget: ignoring invalid %s=%r (need an integer >= 1).",
-                ENV_CPU_THREADS,
-                raw_threads,
-            )
-        raw_budget = os.environ.get(ENV_CPU_BUDGET)
-        if cpu_budget is not None or (raw_budget or "").strip():
-            for warning in resolve_cpu_budget(cpu_budget).warnings:
-                logger.warning("CPU budget: %s", warning)
-    return resolve_process_cap(cpu_budget)
+    inherited = _inherited_cpu_threads()
+    if inherited is not None:
+        return inherited
+    raw_budget = os.environ.get(ENV_CPU_BUDGET)
+    if cpu_budget is None and not (raw_budget or "").strip():
+        return None  # no budget source: uncapped (plain-path invariant)
+    budget = resolve_cpu_budget(cpu_budget)
+    for warning in budget.warnings:
+        logger.warning("CPU budget: %s", warning)
+    # "auto" means every source was absent or invalid: stay uncapped, exactly
+    # as resolve_process_cap would.
+    return None if budget.source == "auto" else budget.cores
 
 
 def run_tracking_cli(
@@ -144,6 +158,18 @@ def run_tracking_cli(
     # budget // jobs threads via HYDRA_CPU_THREADS, and the slot count is
     # clamped to what the budget can feed (unless --threads-per-job is
     # explicit).
+    inherited = _inherited_cpu_threads()
+    if inherited is not None:
+        # This process already runs under a thread cap (a shell export or an
+        # outer fan-out): the children together must stay inside it, so it is
+        # a ceiling on the budget, never something they multiply.
+        cpu_budget = inherited if cpu_budget is None else min(cpu_budget, inherited)
+        logger.info(
+            "CPU budget: %s=%d bounds this fan-out; budget is %d core(s).",
+            ENV_CPU_THREADS,
+            inherited,
+            cpu_budget,
+        )
     options, cpu_plan = plan_fanout_cpu(
         FanoutOptions(
             gpus=devices,

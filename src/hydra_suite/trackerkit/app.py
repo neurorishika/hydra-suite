@@ -233,10 +233,12 @@ Examples:
         default=None,
         metavar="N",
         help=(
-            "Total CPU cores hydra may use across all parallel jobs (default: "
-            "HYDRA_CPU_BUDGET, else every usable core). Parallel jobs are reduced "
-            "to fit and each child gets N // jobs threads. On a single run it caps "
-            "that run's thread pools."
+            "Total CPU cores hydra may use. Parallel runs (--gpus / --jobs > 1) "
+            "always use a budget: this flag, else HYDRA_CPU_BUDGET, else every "
+            "usable core; jobs are reduced to fit and each child gets "
+            "N // jobs threads. A single run is uncapped unless this flag or "
+            "HYDRA_CPU_BUDGET is given, in which case it caps that run's "
+            "thread pools."
         ),
     )
 
@@ -496,7 +498,9 @@ def parse_arguments(argv: list[str] | None = None) -> object:
         # a bad value here rather than after preflight (or over ssh).
         cpu_budget = getattr(args, "cpu_budget", None)
         if cpu_budget is not None and int(cpu_budget) < 1:
-            parser.error("--cpu-budget must be >= 1")
+            _subparser_choices(subcommands["job"])["run"].error(
+                "--cpu-budget must be >= 1"
+            )
 
     if args.command == "calibrate":
         budget = getattr(args, "budget_seconds", None)

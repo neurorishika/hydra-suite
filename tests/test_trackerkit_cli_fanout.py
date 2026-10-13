@@ -404,3 +404,78 @@ def test_main_forwards_cpu_budget(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         app.main(["track", v[0], "--cpu-budget", "5"])
     assert seen["cpu_budget"] == 5
+
+
+def test_fanout_inherited_cpu_threads_is_a_ceiling(monkeypatch, tmp_path, caplog):
+    """A shell (or outer fan-out) HYDRA_CPU_THREADS=3 bounds the whole fan-out.
+
+    budget = 3, 2 CPU-only jobs at the 2-thread floor -> 1 job x 3 threads,
+    not 2 x 6 from the 12 usable cores.
+    """
+    captured = {}
+    monkeypatch.setattr(
+        cli, "_run_fanout", lambda specs, options: captured.setdefault("o", options)
+    )
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 12)
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "3")
+    _stub_plan(monkeypatch)
+    with caplog.at_level("INFO", logger=cli.logger.name):
+        cli.run_tracking_cli(_videos(tmp_path, 4), jobs=2)
+    assert (captured["o"].jobs, captured["o"].threads_per_job) == (1, 3)
+    assert any("HYDRA_CPU_THREADS" in r.getMessage() for r in caplog.records)
+
+
+def test_fanout_inherited_cpu_threads_lowers_a_larger_flag(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        cli, "_run_fanout", lambda specs, options: captured.setdefault("o", options)
+    )
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "4")
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 4), jobs=2, cpu_budget=16)
+    assert (captured["o"].jobs, captured["o"].threads_per_job) == (2, 2)
+
+
+def test_fanout_invalid_inherited_cpu_threads_warns(monkeypatch, tmp_path, caplog):
+    captured = {}
+    monkeypatch.setattr(
+        cli, "_run_fanout", lambda specs, options: captured.setdefault("o", options)
+    )
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "abc")
+    _stub_plan(monkeypatch)
+    with caplog.at_level("WARNING", logger=cli.logger.name):
+        cli.run_tracking_cli(_videos(tmp_path, 4), jobs=2, cpu_budget=8)
+    assert (captured["o"].jobs, captured["o"].threads_per_job) == (2, 4)
+    assert any(
+        r.levelname == "WARNING" and "HYDRA_CPU_THREADS" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_plain_run_resolves_budget_once(monkeypatch, tmp_path):
+    import hydra_suite.runtime.cpu_budget as cpu_budget_mod
+
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    n = []
+    real = cli.resolve_cpu_budget
+    monkeypatch.setattr(
+        cli, "resolve_cpu_budget", lambda *a, **k: n.append(1) or real(*a, **k)
+    )
+
+    def _no_second_resolve(*a, **k):
+        pytest.fail("budget path must not re-resolve")
+
+    for target in (cli, cpu_budget_mod):
+        monkeypatch.setattr(
+            target, "resolve_process_cap", _no_second_resolve, raising=False
+        )
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 1), cpu_budget=8)
+    assert calls == [8, "bind"] and n == [1]
+
+
+def test_job_run_cpu_budget_error_names_the_run_subcommand(capsys):
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "run", "/tmp/j", "--cpu-budget", "0"])
+    assert "job run" in capsys.readouterr().err
