@@ -1,4 +1,4 @@
-.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-sam3-clip setup-sam3-train setup-sleap doctor install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
+.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-sam3-clip setup-sam3-train setup-sleap doctor install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest pytest-serial test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
@@ -109,7 +109,11 @@ test:
 	@echo "✅ All tests passed!"
 
 pytest:
-	@echo "🧪 Running pytest..."
+	@echo "🧪 Running pytest (one process per test file, $${PYTEST_JOBS:-auto} jobs)..."
+	$(PYTHON_BIN) tools/run_tests_per_file.py $(PYTEST_ARGS)
+
+pytest-serial:
+	@echo "🧪 Running pytest in a single process..."
 	$(PYTEST)
 
 test-cov:
@@ -447,7 +451,8 @@ help:
 	@echo "  make env-remove[-mps|-cuda] - Remove conda environment"
 	@echo ""
 	@echo "🧪 TESTING"
-	@echo "  make pytest          - Run all tests"
+	@echo "  make pytest          - Run all tests (one process per file, parallel)"
+	@echo "  make pytest-serial   - Run all tests in a single pytest process"
 	@echo "  make test-cov        - Run tests with coverage report (terminal)"
 	@echo "  make test-cov-html   - Run tests with HTML coverage (htmlcov/index.html)"
 	@echo "  make clean           - Remove Python cache files"
