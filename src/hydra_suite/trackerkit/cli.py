@@ -4,17 +4,29 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import signal
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
+from hydra_suite.runtime.cpu_budget import (
+    ENV_CPU_BUDGET,
+    ENV_CPU_THREADS,
+    bind_thread_cpu_cap,
+    positive_int,
+    resolve_cpu_budget,
+    resolve_process_cap,
+    set_process_cpu_cap,
+)
 from hydra_suite.runtime.cuda_devices import list_cuda_devices, parse_gpu_selectors
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
     FanoutResult,
     decide_gpu_slots,
     host_has_cuda,
+    plan_fanout_cpu,
+    resolve_slot_count,
     run_batch_fanout,
 )
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec, plan_batch_jobs
@@ -38,6 +50,31 @@ def fanout_requested(gpus: str | None, jobs: int | None) -> bool:
     return bool(str(gpus or "").strip()) or int(jobs or 1) > 1
 
 
+def _single_run_cpu_cap(cpu_budget: Optional[int]) -> Optional[int]:
+    """The thread cap for an in-process (non-fan-out) run, or None.
+
+    ``resolve_process_cap`` applies the precedence (HYDRA_CPU_THREADS >
+    --cpu-budget > HYDRA_CPU_BUDGET) but drops the budget's warnings, so they
+    are logged here: an invalid ``HYDRA_CPU_BUDGET`` or a budget above the
+    usable cores must be visible, not silently ignored or clamped. A fan-out
+    child (HYDRA_CPU_THREADS set) skips them -- the parent already logged the
+    plan, and the inherited budget does not apply to the child.
+    """
+    raw_threads = os.environ.get(ENV_CPU_THREADS)
+    if positive_int(raw_threads) is None:
+        if raw_threads is not None and raw_threads.strip() != "":
+            logger.warning(
+                "CPU budget: ignoring invalid %s=%r (need an integer >= 1).",
+                ENV_CPU_THREADS,
+                raw_threads,
+            )
+        raw_budget = os.environ.get(ENV_CPU_BUDGET)
+        if cpu_budget is not None or (raw_budget or "").strip():
+            for warning in resolve_cpu_budget(cpu_budget).warnings:
+                logger.warning("CPU budget: %s", warning)
+    return resolve_process_cap(cpu_budget)
+
+
 def run_tracking_cli(
     video_paths: Sequence[str],
     *,
@@ -51,6 +88,7 @@ def run_tracking_cli(
     log_level: str = "INFO",
     apply_tuned_inference: bool | None = None,
     inference_autotune_manual: Sequence[str] | None = None,
+    cpu_budget: int | None = None,
 ) -> int:
     """Run one or more TrackerKit sessions from the CLI (direct Qt-free path)."""
 
@@ -76,6 +114,15 @@ def run_tracking_cli(
     if not specs:
         raise ValueError("No videos were resolved for tracking.")
     if not fanout_requested(gpus, jobs):
+        # Opt-in single-run cap (--cpu-budget / HYDRA_CPU_BUDGET), or the
+        # per-child cap a fan-out parent hands down via HYDRA_CPU_THREADS.
+        # Applied before _run_sequential, which is where every session (and
+        # its inference / AprilTag config) is built. No budget source -> None
+        # -> nothing is touched (plain-path invariant).
+        cap = _single_run_cpu_cap(cpu_budget)
+        if cap is not None:
+            set_process_cpu_cap(cap)
+            bind_thread_cpu_cap()
         return _run_sequential(specs)
     devices = (
         decide_gpu_slots(
@@ -93,11 +140,26 @@ def run_tracking_cli(
         effective_jobs = max(1, int(jobs or 1))
         if devices:
             effective_jobs = min(effective_jobs, len(devices))
-    options = FanoutOptions(
-        gpus=devices,
-        jobs=effective_jobs,
-        threads_per_job=threads_per_job,
-        log_level=log_level,
+    # The parent itself stays uncapped (it only schedules); each child gets
+    # budget // jobs threads via HYDRA_CPU_THREADS, and the slot count is
+    # clamped to what the budget can feed (unless --threads-per-job is
+    # explicit).
+    options, cpu_plan = plan_fanout_cpu(
+        FanoutOptions(
+            gpus=devices,
+            jobs=effective_jobs,
+            threads_per_job=threads_per_job,
+            log_level=log_level,
+        ),
+        n_videos=len(specs),
+        cpu_budget=cpu_budget,
+    )
+    for warning in cpu_plan.warnings:
+        logger.warning("CPU budget: %s", warning)
+    logger.info(
+        "Fan-out: %d concurrent job(s) x %d CPU thread(s)",
+        resolve_slot_count(options),
+        options.threads_per_job,
     )
     return _run_fanout(specs, options)
 
@@ -230,7 +292,7 @@ def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
         logger.info(
             "Tracker CLI fan-out: %d videos, %d slot(s)%s",
             len(specs),
-            len(options.gpus) if options.gpus else options.jobs,
+            resolve_slot_count(options),
             f" on GPUs {[g.index for g in options.gpus]}" if options.gpus else "",
         )
         result = run_batch_fanout(

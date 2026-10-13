@@ -734,7 +734,9 @@ def test_plan_fanout_cpu_explicit_threads_override():
 def test_plan_fanout_cpu_reads_process_env_when_env_none(monkeypatch):
     monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
     monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "6")
+    # No env= and no cpu_budget: the budget can only come from os.environ.
     opts, _ = plan_fanout_cpu(
-        FanoutOptions(gpus=[], jobs=2), n_videos=4, cpu_budget=8, usable=64
+        FanoutOptions(gpus=[], jobs=2), n_videos=4, cpu_budget=None, usable=12
     )
-    assert opts.threads_per_job == 4
+    assert opts.threads_per_job == 3

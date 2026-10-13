@@ -8,6 +8,14 @@ from hydra_suite.trackerkit.app import parse_arguments
 from hydra_suite.trackerkit.batch_fanout import FanoutJobResult, FanoutResult
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_cpu_budget(monkeypatch):
+    """No ambient CPU budget leaks in (C7); a fixed, generous core count."""
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 64)
+
+
 def _videos(tmp_path, n=2):
     out = []
     for i in range(n):
@@ -243,3 +251,156 @@ def test_restore_skips_a_none_previous_handler(monkeypatch):
         for sig, handler in saved.items():
             if handler is not None:
                 real_signal(sig, handler)
+
+
+# --------------------------------------------------------------------------
+# CPU budget (Task 5)
+# --------------------------------------------------------------------------
+
+
+def _stub_plan(monkeypatch):
+    monkeypatch.setattr(
+        cli, "plan_batch_jobs", lambda vids, **kw: [object()] * len(vids)
+    )
+
+
+def _stub_cap(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "set_process_cpu_cap", lambda n: calls.append(n))
+    monkeypatch.setattr(cli, "bind_thread_cpu_cap", lambda: calls.append("bind"))
+    return calls
+
+
+def test_cli_fanout_options_carry_cpu_plan(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        cli, "_run_fanout", lambda specs, options: captured.setdefault("o", options)
+    )
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 12)
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 20), jobs=16)
+    assert (captured["o"].jobs, captured["o"].threads_per_job) == (6, 2)
+
+
+def test_cli_fanout_uses_cpu_budget_flag(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        cli, "_run_fanout", lambda specs, options: captured.setdefault("o", options)
+    )
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 4), jobs=2, cpu_budget=8)
+    assert (captured["o"].jobs, captured["o"].threads_per_job) == (2, 4)
+
+
+def test_cli_fanout_parent_is_never_capped(monkeypatch, tmp_path):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_fanout", lambda specs, options: 0)
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 4), jobs=2, cpu_budget=8)
+    assert calls == []
+
+
+def test_cli_fanout_logs_clamp_warning(monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(cli, "_run_fanout", lambda specs, options: 0)
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 12)
+    _stub_plan(monkeypatch)
+    with caplog.at_level("WARNING", logger=cli.logger.name):
+        cli.run_tracking_cli(_videos(tmp_path, 20), jobs=16)
+    assert any("running 6 at a time" in r.getMessage() for r in caplog.records)
+
+
+def test_cli_plain_run_uncapped_without_budget(monkeypatch, tmp_path):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 1))
+    assert calls == []
+
+
+def test_cli_plain_run_capped_by_flag(monkeypatch, tmp_path):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: calls.append("run") or 0)
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 1), cpu_budget=8)
+    # The cap (and this thread's binding) precede the sequential run, which
+    # is where every inference/AprilTag config gets built.
+    assert calls == [8, "bind", "run"]
+
+
+def test_cli_plain_run_capped_by_env_budget(monkeypatch, tmp_path):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "6")
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 1))
+    assert calls == [6, "bind"]
+
+
+def test_cli_plain_run_capped_by_child_env(monkeypatch, tmp_path):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "3")
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "40")
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 1), cpu_budget=8)
+    assert calls == [3, "bind"]
+
+
+def test_cli_plain_run_warns_on_invalid_env_budget(monkeypatch, tmp_path, caplog):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "abc")
+    _stub_plan(monkeypatch)
+    with caplog.at_level("WARNING", logger=cli.logger.name):
+        cli.run_tracking_cli(_videos(tmp_path, 1))
+    assert calls == []
+    assert any("HYDRA_CPU_BUDGET" in r.getMessage() for r in caplog.records)
+
+
+def test_cli_plain_run_warns_when_budget_exceeds_usable(monkeypatch, tmp_path, caplog):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 4)
+    _stub_plan(monkeypatch)
+    with caplog.at_level("WARNING", logger=cli.logger.name):
+        cli.run_tracking_cli(_videos(tmp_path, 1), cpu_budget=99)
+    assert calls == [4, "bind"]
+    assert any("exceeds" in r.getMessage() for r in caplog.records)
+
+
+def test_fanout_log_line_reports_slot_count(monkeypatch, tmp_path, caplog):
+    """Explicit --jobs below the GPU count: the log names the real slot count."""
+    from hydra_suite.trackerkit.batch_fanout import FanoutOptions
+
+    monkeypatch.setattr(
+        cli, "run_batch_fanout", lambda s, o, **k: _ok_result(s, tmp_path)
+    )
+    opts = FanoutOptions(gpus=_three_gpus(), jobs=2)
+    with caplog.at_level("INFO", logger=cli.logger.name):
+        cli._run_fanout([], opts)
+    assert any("2 slot(s)" in r.getMessage() for r in caplog.records)
+
+
+def test_cpu_budget_must_be_positive(tmp_path):
+    v = _videos(tmp_path, 1)
+    with pytest.raises(SystemExit):
+        parse_arguments(["track", v[0], "--cpu-budget", "0"])
+    with pytest.raises(SystemExit):
+        parse_arguments(["track", v[0], "--cpu-budget", "-2"])
+    assert parse_arguments(["track", v[0], "--cpu-budget", "4"]).cpu_budget == 4
+    assert parse_arguments(["track", v[0]]).cpu_budget is None
+
+
+def test_main_forwards_cpu_budget(monkeypatch, tmp_path):
+    from hydra_suite.trackerkit import app
+
+    v = _videos(tmp_path, 1)
+    seen = {}
+    monkeypatch.setattr(app, "check_dependencies", lambda: True)
+    monkeypatch.setattr(app, "setup_logging", lambda **kw: None)
+    monkeypatch.setattr(
+        app, "run_tracking_cli", lambda vids, **kw: seen.update(kw) or 0
+    )
+    with pytest.raises(SystemExit):
+        app.main(["track", v[0], "--cpu-budget", "5"])
+    assert seen["cpu_budget"] == 5

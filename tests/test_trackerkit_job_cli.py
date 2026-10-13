@@ -30,7 +30,9 @@ def test_job_pack_rejects_neither():
         parse_arguments(["job", "pack", "/tmp/j"])
 
 
-@pytest.mark.parametrize("flag", ["--gpus", "--jobs", "--threads-per-job"])
+@pytest.mark.parametrize(
+    "flag", ["--gpus", "--jobs", "--threads-per-job", "--cpu-budget"]
+)
 def test_job_pack_rejects_compute_box_flags(flag):
     """They describe the compute box, not the experiment (calibrate precedent)."""
     with pytest.raises(SystemExit):
@@ -48,6 +50,8 @@ def test_job_run_accepts_compute_box_flags():
     args = parse_arguments(["job", "run", "/tmp/j", "--gpus", "auto", "--jobs", "2"])
     assert args.gpus == "auto"
     assert args.jobs == 2
+    args = parse_arguments(["job", "run", "/tmp/j", "--cpu-budget", "8"])
+    assert args.cpu_budget == 8
 
 
 def test_job_pack_rejects_conflicting_shared_modes():
@@ -374,3 +378,109 @@ def test_shared_root_remove_unknown_alias_names_the_known_ones(tmp_path, monkeyp
     with pytest.raises(TrackingJobError) as excinfo:
         job_cli._cmd_shared_root(ns)
     assert "ghost" in str(excinfo.value) and "keep" in str(excinfo.value)
+
+
+_FANOUT_ARGV = ["--gpus", "0,1", "--jobs", "2", "--threads-per-job", "3"]
+_FANOUT_ARGV += ["--cpu-budget", "8"]
+
+
+def _write_min_job(job_dir):
+    from hydra_suite.data.tracking_job.manifest import JobManifest, JobVideo
+
+    job_dir.mkdir()
+    JobManifest(
+        job_id="abc",
+        created_at="2026-01-01T00:00:00Z",
+        created_on={},
+        keystone={"video": "videos/a.mp4"},
+        videos=[
+            JobVideo(
+                job_path="videos/a.mp4",
+                origin_path="/tmp/a.mp4",
+                size_bytes=1,
+                config_job_path="videos/a_config.json",
+                config_provenance="explicit",
+            )
+        ],
+        models=[],
+    ).write(job_dir / "hydra_job.json")
+
+
+def test_fanout_flags_skip_unset_values():
+    from hydra_suite.trackerkit import job_cli
+
+    assert job_cli._fanout_flags(parse_arguments(["job", "run", "/tmp/j"])) == []
+    args = parse_arguments(["job", "run", "/tmp/j", *_FANOUT_ARGV])
+    assert job_cli._fanout_flags(args) == _FANOUT_ARGV
+
+
+def test_job_run_local_forwards_fanout_flags(monkeypatch, tmp_path):
+    from hydra_suite.data.tracking_job.preflight import PreflightResult
+    from hydra_suite.trackerkit import job_cli
+
+    job_dir = tmp_path / "job3"
+    _write_min_job(job_dir)
+    monkeypatch.setattr(
+        job_cli, "preflight_job", lambda *a, **k: PreflightResult(True, [])
+    )
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        import subprocess as _subprocess
+
+        return _subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(job_cli.subprocess, "run", fake_run)
+    job_cli._cmd_run(parse_arguments(["job", "run", str(job_dir), *_FANOUT_ARGV]))
+    assert captured["argv"][0] == "./run.sh"
+    assert captured["argv"][-len(_FANOUT_ARGV) :] == _FANOUT_ARGV
+
+
+def test_job_run_local_detach_forwards_fanout_flags(monkeypatch, tmp_path):
+    from hydra_suite.data.tracking_job.preflight import PreflightResult
+    from hydra_suite.trackerkit import job_cli
+
+    job_dir = tmp_path / "job4"
+    _write_min_job(job_dir)
+    monkeypatch.setattr(
+        job_cli, "preflight_job", lambda *a, **k: PreflightResult(True, [])
+    )
+    captured = {}
+    monkeypatch.setattr(
+        job_cli.subprocess,
+        "Popen",
+        lambda argv, **kw: captured.setdefault("argv", argv),
+    )
+    job_cli._cmd_run(
+        parse_arguments(["job", "run", str(job_dir), "--detach", *_FANOUT_ARGV])
+    )
+    assert captured["argv"][-len(_FANOUT_ARGV) :] == _FANOUT_ARGV
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_job_run_remote_forwards_fanout_flags(monkeypatch, detach):
+    import shlex
+
+    from hydra_suite.trackerkit import job_cli
+
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        import subprocess as _subprocess
+
+        return _subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(job_cli.subprocess, "run", fake_run)
+    extra = ["--detach"] if detach else []
+    job_cli._cmd_run(
+        parse_arguments(["job", "run", "host:/remote/j", *extra, *_FANOUT_ARGV])
+    )
+    remote_cmd = captured["argv"][-1]
+    assert f"./run.sh {shlex.join(_FANOUT_ARGV)}" in remote_cmd
+
+
+def test_job_run_rejects_non_positive_cpu_budget():
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "run", "/tmp/j", "--cpu-budget", "0"])

@@ -90,7 +90,8 @@ class CpuBudget:
     warnings: tuple[str, ...] = field(default=())
 
 
-def _positive_int(value) -> Optional[int]:
+def positive_int(value) -> Optional[int]:
+    """``value`` as an int >= 1, or None (non-int, blank, zero, negative)."""
     try:
         n = int(str(value).strip())
     except (TypeError, ValueError):
@@ -111,7 +112,7 @@ def resolve_cpu_budget(
     cores, source = usable, "auto"
     flag = None
     if requested:
-        flag = _positive_int(requested)
+        flag = positive_int(requested)
         if flag is None:
             warnings.append(
                 f"Ignoring invalid CPU budget {requested!r} (need an integer >= 1)."
@@ -121,7 +122,7 @@ def resolve_cpu_budget(
     else:
         raw = env.get(ENV_CPU_BUDGET)
         if raw is not None and raw.strip() != "":
-            parsed = _positive_int(raw)
+            parsed = positive_int(raw)
             if parsed is None:
                 warnings.append(
                     f"Ignoring invalid {ENV_CPU_BUDGET}={raw!r} (need an integer >= 1)."
@@ -190,10 +191,10 @@ def resolve_process_cap(
     HYDRA_CPU_THREADS (fan-out child) > --cpu-budget > HYDRA_CPU_BUDGET.
     """
     env = os.environ if env is None else env
-    child = _positive_int(env.get(ENV_CPU_THREADS))
+    child = positive_int(env.get(ENV_CPU_THREADS))
     if child is not None:
         return child
-    if (not cli_budget or _positive_int(cli_budget) is None) and _positive_int(
+    if (not cli_budget or positive_int(cli_budget) is None) and positive_int(
         env.get(ENV_CPU_BUDGET)
     ) is None:
         return None
@@ -231,7 +232,7 @@ def apriltag_thread_count(params) -> int:
 
 
 def _env_min(original: Optional[str], n: int) -> str:
-    parsed = _positive_int(original)
+    parsed = positive_int(original)
     return str(n if parsed is None else min(parsed, n))
 
 

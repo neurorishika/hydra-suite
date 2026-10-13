@@ -31,8 +31,8 @@ from hydra_suite.runtime.cpu_budget import (
     ENV_CPU_THREADS,
     THREAD_ENV_VARS,
     CpuPlan,
-    _positive_int,
     plan_cpu,
+    positive_int,
     resolve_cpu_budget,
 )
 from hydra_suite.runtime.cuda_devices import CudaDevice, resolve_gpu_selectors
@@ -303,7 +303,7 @@ def build_child_env(
         env.pop(ENV_CPU_BUDGET, None)
         env[ENV_CPU_THREADS] = str(n)
         for var in THREAD_ENV_VARS:
-            existing = _positive_int(env.get(var))
+            existing = positive_int(env.get(var))
             env[var] = str(min(existing, n) if existing is not None else n)
     return env
 
