@@ -390,7 +390,13 @@ def test_probe_backend_uses_child_result_without_encoding_in_parent(monkeypatch)
         return _completed(0, "nvenc\n")
 
     assert ve._probe_backend(runner=runner) == "nvenc"
-    assert seen["cmd"][:3] == [sys.executable, "-m", "hydra_suite.utils.video_encoder"]
+    # -P: the caller's working directory (a data folder) must not shadow imports.
+    assert seen["cmd"][:4] == [
+        sys.executable,
+        "-P",
+        "-m",
+        "hydra_suite.utils.video_encoder",
+    ]
     assert seen["timeout"] and seen["timeout"] > 0
 
 

@@ -169,7 +169,7 @@ def _probe_backend(*, runner=subprocess.run) -> str:
         return "opencv"
     try:
         proc = runner(
-            [sys.executable, "-m", __name__, "--probe-backend"],
+            [sys.executable, "-P", "-m", __name__, "--probe-backend"],
             capture_output=True,
             text=True,
             timeout=_PROBE_TIMEOUT_S,
