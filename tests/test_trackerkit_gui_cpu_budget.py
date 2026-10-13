@@ -303,7 +303,7 @@ def test_refresh_cpu_plan_label_sets_text(monkeypatch):
     assert label.text.startswith("3 job(s) x 2 thread(s) of 8 core(s)")
 
 
-def test_parallel_tooltip_no_longer_claims_byte_identity():
+def test_parallel_tooltip_byte_identity_claim_is_qualified():
     src = Path(
         __import__(
             "hydra_suite.trackerkit.gui.panels.setup_panel", fromlist=["x"]
