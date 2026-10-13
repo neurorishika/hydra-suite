@@ -176,8 +176,10 @@ class _ChunkedHandleMixin:
         self._write_started = False
         self._buffer_bytes = 0
         self._last_buffered_frame: int | None = None
-        if self.write_mode not in {"auto", "fresh", "resume"}:
-            raise ValueError("write_mode must be 'auto', 'fresh', or 'resume'")
+        if self.write_mode not in {"auto", "fresh", "resume", "overwrite"}:
+            raise ValueError(
+                "write_mode must be 'auto', 'fresh', 'resume', or 'overwrite'"
+            )
         if int(self.max_buffer_bytes) < 1:
             raise ValueError("max_buffer_bytes must be >= 1")
 
@@ -234,6 +236,11 @@ class _ChunkedHandleMixin:
         if self.write_mode == "resume" and self._store.contains_frame(int(frame_idx)):
             return False
         if self._write_started:
+            return True
+        if self.write_mode == "overwrite":
+            # Extend the active generation, recomputing frames it holds: a
+            # later chunk wins over an earlier one for the same frame.
+            self._write_started = True
             return True
         if self.write_mode == "fresh" or (
             self.write_mode == "auto"

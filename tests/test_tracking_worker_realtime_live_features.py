@@ -261,6 +261,9 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
     from hydra_suite.core.inference.result import FrameResult, OBBResult
 
     class _FakeInferenceRunner:
+        def configure_realtime_pass(self, **_kwargs):
+            pass
+
         def __init__(self, *_args, **_kwargs):
             self.clipping_stats = types.SimpleNamespace(summary=lambda: "")
 

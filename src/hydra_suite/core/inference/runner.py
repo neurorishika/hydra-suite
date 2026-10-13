@@ -219,6 +219,16 @@ class _CacheSet:
         self.pending_promotion = False
         if root is None:
             return
+        # A failure after ``publish_cache_set`` replaced the manifest (link
+        # publication, a directory fsync, an interrupt) leaves this revision
+        # ACTIVE: deleting it would point cache_set.json at nothing.
+        if self.cache_dir is not None:
+            try:
+                active = load_cache_set(self.cache_dir)
+            except Exception:
+                active = None
+            if active is not None and active.revision_id == self.revision_id:
+                return
         shutil.rmtree(root, ignore_errors=True)
         try:
             root.parent.rmdir()
@@ -574,15 +584,18 @@ def choose_write_mode(
     window: "tuple[int, int] | None",
     recompute_window: bool,
 ) -> str:
-    """``"fresh"`` (new generation) or ``"resume"`` (extend the active one).
+    """``"fresh"`` (new generation), ``"resume"`` or ``"overwrite"``.
 
     ``caches`` is the read-only probe of the active generation. Resume keeps
-    every reusable member's frames and adds the pass's; a re-keyed member is
-    rebuilt over the pass alone. That is only sound while detection stays
-    reusable: per-animal keys do not fold in the detector's identity, so
-    resuming over a re-keyed detection would keep per-animal rows pointing at
-    superseded detections. Fresh is also chosen when the pass recomputes a
-    ``window`` holding all of detection's frames, which then loses nothing.
+    every reusable member's frames and adds the pass's; overwrite (the pass
+    recomputes its ``window``) also extends the active generation but
+    rewrites the frames it already holds, so frames outside the window keep
+    their rows. A re-keyed member is rebuilt over the pass alone. Both are
+    only sound while detection stays reusable: per-animal keys do not fold in
+    the detector's identity, so extending over a re-keyed detection would keep
+    per-animal rows pointing at superseded detections. Fresh is also chosen
+    when the recomputed ``window`` holds all of detection's frames, which then
+    loses nothing (and leaves no superseded chunks behind).
     """
 
     # A key-valid member failing its checksum cannot be healed by resume
@@ -593,12 +606,14 @@ def choose_write_mode(
             return "fresh"
     if not _active_detection_reusable(caches):
         return "fresh"
-    if recompute_window and window is not None:
+    if not recompute_window:
+        return "resume"
+    if window is not None:
         start, end = (int(v) for v in window)
         coverage = _merge_ranges(caches.detection.coverage_ranges())
         if _ranges_within(coverage, ((start, end),)):
             return "fresh"
-    return "resume"
+    return "overwrite"
 
 
 @dataclass(frozen=True)
@@ -809,7 +824,7 @@ def _open_caches(
         set_manifest_valid = (
             active_matches or not (cache_dir / CACHE_SET_FILENAME).exists()
         )
-    elif write_mode == "resume" and active_matches:
+    elif write_mode in ("resume", "overwrite") and active_matches:
         generation_id = active.generation_id
         revision_id = uuid.uuid4().hex
         source_root = (cache_dir / next(iter(active.members.values()))).parent
@@ -1327,6 +1342,9 @@ class InferenceRunner:
         self._caches_writable = False
         # Read-only view of the detections a resumed realtime pass keeps.
         self._kept_detections: _CacheSet | None = None
+        # Realtime pass scope (see configure_realtime_pass).
+        self._realtime_window: tuple[int, int] | None = None
+        self._realtime_reuse = True
         # Identity Phase 3, Task 4: when set, both run_realtime and
         # run_batch_pass write an IdentityEvidence sidecar during the
         # inference pass, ahead of tracking (Task 5 flips the tracker to read
@@ -1435,6 +1453,23 @@ class InferenceRunner:
             return []
         return caches.missing_frames(start_frame, end_frame, max_report)
 
+    def configure_realtime_pass(
+        self, *, window: "tuple[int, int] | None", reuse_detections: bool
+    ) -> None:
+        """Declare the frame window and cache-reuse choice of a realtime pass.
+
+        With reuse, frames the cache already holds keep their cached
+        detections (fed to the tracker and the per-animal stages); without
+        it, the pass recomputes and overwrites them. Must be called before
+        the first :meth:`run_realtime`.
+        """
+        if self._caches is not None:
+            raise RuntimeError("configure_realtime_pass after the pass started")
+        self._realtime_window = (
+            None if window is None else (int(window[0]), int(window[1]))
+        )
+        self._realtime_reuse = bool(reuse_detections)
+
     def run_realtime(
         self,
         frame: np.ndarray,
@@ -1456,7 +1491,9 @@ class InferenceRunner:
                 )
                 try:
                     write_mode = choose_write_mode(
-                        probe, window=None, recompute_window=False
+                        probe,
+                        window=self._realtime_window,
+                        recompute_window=not self._realtime_reuse,
                     )
                 except BaseException:
                     probe.close()
@@ -1478,6 +1515,15 @@ class InferenceRunner:
             caches = self._caches if self._caches_writable else None
 
             with span(N.RT_OBB, units=1):
+                # Resume keeps the active detection rows; a frame they hold
+                # uses its cached row (fed to the tracker and the per-animal
+                # stages) instead of the live detector output.
+                kept = self._kept_detections
+                kept_obb = (
+                    kept.detection.read_frame(frame_idx)
+                    if kept is not None and kept.detection is not None
+                    else None
+                )
                 if self.config.detection_source == "bgsub":
                     if self._models.bgsub is None:
                         raise RuntimeError(
@@ -1496,8 +1542,16 @@ class InferenceRunner:
                         self.config.bgsub,
                         self.runtime,
                         roi_mask=roi_mask,
-                        limit_stats=self.detection_limit_stats,
+                        limit_stats=(
+                            self.detection_limit_stats if kept_obb is None else None
+                        ),
                     )
+                    # The background model is stateful: it still sees the
+                    # frame, but a kept row replaces its output.
+                    if kept_obb is not None:
+                        raw_obb = kept_obb
+                elif kept_obb is not None:
+                    raw_obb = kept_obb
                 else:
                     # roi_mask is frame-space (the caller passes the mask matching this
                     # exact frame's geometry); it enables ROI tile gating on the sliced
@@ -1517,14 +1571,6 @@ class InferenceRunner:
                     else:
                         raw_obb = raw
                     raw_obb = self._rank_and_bound(raw_obb, frame_idx)
-                kept = self._kept_detections
-                kept_obb = (
-                    kept.detection.read_frame(frame_idx)
-                    if kept is not None and kept.detection is not None
-                    else None
-                )
-                if kept_obb is not None:
-                    raw_obb = kept_obb
                 # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
                 # CPU OBB path generate them at frame 0) so cached ids are unique per
                 # frame.
@@ -2281,7 +2327,7 @@ class InferenceRunner:
                 write_mode = choose_write_mode(
                     probe,
                     window=(start_frame, end_frame),
-                    recompute_window=reuse_plan is None,
+                    recompute_window=not reuse_detection_cache,
                 )
                 with span(N.OPEN_CACHES):
                     caches = _open_caches(
@@ -2452,6 +2498,20 @@ class InferenceRunner:
         _require_within_written_superset(
             self._cache_filter_config, raw_obb, roi, det_indices, frame_idx
         )
+        if len(det_indices):
+            # Per-animal coverage may be a subset of detection's: a frame a
+            # member never covered must not read back as "no result".
+            lacking = [
+                Path(handle.path).name
+                for handle in self._caches.per_animal_handles()
+                if not handle.contains_frame(frame_idx)
+            ]
+            if lacking:
+                raise DownstreamCacheError(
+                    f"frame {frame_idx}: per-animal caches {lacking} do not "
+                    "cover this frame -- check covers_frame_range for the "
+                    "replayed range before loading frames."
+                )
         try:
             ht_result = _load_headtail_for_indices(
                 self._caches.headtail, frame_idx, det_indices, filtered_obb

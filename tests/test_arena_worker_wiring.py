@@ -224,6 +224,9 @@ class _FakeBgsubRunner:
     Call 3 (frame 2): no detections -- reaches the "no detection this frame"
     bulk-NaN-row CSV branch (the third `csv_writer_thread.enqueue` site)."""
 
+    def configure_realtime_pass(self, **_kwargs):
+        pass
+
     DETECTION_XY_RESIZED = (40.0, 25.0)
 
     def __init__(self, *_a, **_k):
@@ -470,6 +473,9 @@ class _StopAfterDensity(RuntimeError):
 class _CachedOBBRunner:
     """Valid, covering caches -> the forward pass takes the cached-replay
     branch, which is the one that computes the confidence density map."""
+
+    def configure_realtime_pass(self, **_kwargs):
+        pass
 
     def __init__(self, *_a, **_k):
         self.clipping_stats = _ClippingStatsStub()
@@ -936,6 +942,9 @@ class _FakeYoloRunner:
     """Serves both `inference_runner` (yolo_obb) and `bgsub_runner`
     (background_subtraction, via `.load_frame` only) call surfaces used by
     worker.py's cached-replay and realtime-YOLO dispatch branches."""
+
+    def configure_realtime_pass(self, **_kwargs):
+        pass
 
     def __init__(self, *_a, **_k):
         self.clipping_stats = _ClippingStatsStub()
