@@ -1333,15 +1333,21 @@ class TrackingOrchestrator:
         A fan-out is the load-bearing case: the parent runs uncapped and
         ``build_child_env`` takes ``min()`` with ``os.environ``, so a cap set
         mid-batch would shrink every child spawned afterwards. A running
-        tracking/session worker or calibration search would have its torch and
-        BLAS pools resized under it. Such runs re-apply at their own start (or,
+        tracking/session worker, cache builder, post-processing/export worker
+        or calibration search would have its torch and BLAS pools resized (or
+        its cap lifted) under it. Such runs re-apply at their own start (or,
         for a fan-out, when its thread finishes).
         """
         if self._tracking_is_active() or self._calibration_is_active():
             return True
-        session = getattr(self._mw, "session_worker", None)
-        is_running = getattr(session, "isRunning", None)
-        return bool(is_running is not None and is_running())
+        has_active = getattr(self._mw, "_has_active_tracking_workers", None)
+        if has_active is not None and has_active():
+            return True  # includes the cache builder and every export worker
+        for attr in ("session_worker", "_cache_builder_worker"):
+            is_running = getattr(getattr(self._mw, attr, None), "isRunning", None)
+            if is_running is not None and is_running():
+                return True
+        return False
 
     def apply_cpu_budget_now(self) -> None:
         """Eagerly apply the CPU budget to this process (I1).

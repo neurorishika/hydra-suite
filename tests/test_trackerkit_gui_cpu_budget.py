@@ -389,7 +389,13 @@ def test_apply_cpu_budget_now_applies_when_idle(orchestrator, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "attr", ["batch_fanout_worker", "tracking_worker", "session_worker"]
+    "attr",
+    [
+        "batch_fanout_worker",
+        "tracking_worker",
+        "session_worker",
+        "_cache_builder_worker",
+    ],
 )
 def test_apply_cpu_budget_now_is_deferred_while_a_run_is_active(
     orchestrator, monkeypatch, attr
@@ -473,3 +479,20 @@ def test_cli_doc_byte_identity_claims_are_qualified():
     for idx in hits:
         assert "in our tests" in text[idx : idx + 120], text[idx : idx + 120]
     assert "may in principle" in text
+
+
+def test_apply_cpu_budget_now_defers_on_any_active_main_window_worker(
+    orchestrator, monkeypatch
+):
+    """MainWindow's own active-worker check (cache builder, export, merge,
+    post-process, csv writer ...) also defers a budget change."""
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    orchestrator._mw.config.cpu_budget = 5
+    active = [True]
+    orchestrator._mw._has_active_tracking_workers = lambda: active[0]
+    orchestrator.apply_cpu_budget_now()
+    assert calls == []
+    active[0] = False
+    orchestrator.apply_cpu_budget_now()
+    assert calls == [5]
