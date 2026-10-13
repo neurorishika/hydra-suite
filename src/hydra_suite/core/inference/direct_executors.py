@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import struct
 from collections import OrderedDict
 from pathlib import Path
@@ -26,6 +27,9 @@ import numpy as np
 # set small instead of turning a long SAHI run into an unbounded shape cache.
 _MAX_REUSABLE_BATCH_BUFFERS = 4
 _MAX_REUSABLE_OUTPUT_BUFFERS = 4
+
+logger = logging.getLogger(__name__)
+_split_warned = False
 
 
 def _trt_profile_max_batch(engine, input_name: str) -> int | None:
@@ -447,6 +451,16 @@ class _BaseDirectOBBExecutor:
         # split anything larger rather than let setInputShape reject it.
         profile_max = getattr(self, "_profile_max_batch", None)
         if not static_batch and profile_max and len(frames) > profile_max:
+            global _split_warned
+            if not _split_warned:
+                _split_warned = True
+                logger.warning(
+                    "Batch of %d exceeds the TensorRT engine's profile maximum "
+                    "(%d); splitting it. The engine was sized for a smaller "
+                    "chunk than this run submits, which costs extra launches.",
+                    len(frames),
+                    profile_max,
+                )
             split_results: list = []
             for i in range(0, len(frames), profile_max):
                 split_results.extend(
@@ -843,7 +857,8 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         self._cuda_stream.wait_event(self._sync_event)
         if prior_consumer is not None:
             self._cuda_stream.wait_event(prior_consumer)
-        self.context.execute_async_v3(self._cuda_stream.cuda_stream)
+        if self.context.execute_async_v3(self._cuda_stream.cuda_stream) is False:
+            raise RuntimeError("TensorRT failed to enqueue inference")
         # Let PyTorch's allocator retain external-stream storage if a bounded
         # dynamic-shape cache evicts a completed slot later.
         x.record_stream(self._cuda_stream)
@@ -1441,7 +1456,8 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
         self._cuda_stream.wait_event(self._sync_event)
         if prior_consumer is not None:
             self._cuda_stream.wait_event(prior_consumer)
-        self.context.execute_async_v3(self._cuda_stream.cuda_stream)
+        if self.context.execute_async_v3(self._cuda_stream.cuda_stream) is False:
+            raise RuntimeError("TensorRT failed to enqueue inference")
         x.record_stream(self._cuda_stream)
         det_out.record_stream(self._cuda_stream)
         proto_out.record_stream(self._cuda_stream)

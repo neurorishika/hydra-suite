@@ -105,3 +105,15 @@ def test_accepted_input_shape_binds():
     context = _Context(True)
     _set_trt_input_shape(context, "images", (2, 3, 1024, 1024), 2)
     assert context.shapes == [(2, 3, 1024, 1024)]
+
+
+def test_pose_runner_rejected_input_shape_raises():
+    from hydra_suite.core.individual.pose.runtime.tensorrt_engine import (
+        TensorRTEngineRunner,
+    )
+
+    runner = object.__new__(TensorRTEngineRunner)
+    runner._context = _Context(False)
+    runner.input_name = "input"
+    with pytest.raises(RuntimeError, match=r"rejected input shape \(9, 3, 64, 64\)"):
+        runner.run(np.zeros((9, 3, 64, 64), np.float32))
