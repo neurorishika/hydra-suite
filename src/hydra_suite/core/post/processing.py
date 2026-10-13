@@ -17,6 +17,9 @@ import pandas as pd
 from scipy.interpolate import CubicSpline, UnivariateSpline, interp1d
 
 from hydra_suite.core.individual.identity import columns as C
+from hydra_suite.core.post.heading_fix import (  # noqa: F401  (re-exported)
+    HeadingFixSettings,
+)
 from hydra_suite.utils.heading_flips import (  # noqa: F401  (re-exported for callers/tests)
     _circ_diff,
     _find_next_valid,
@@ -3907,8 +3910,7 @@ def interpolate_trajectories(
     heading_flip_max_burst: int = 5,
     directed_heading_posthoc: bool = False,
     fill_all_interior: bool = False,
-    heading_body_size_px: float | None = None,
-    heading_frame_rate: float | None = None,
+    heading_fix: HeadingFixSettings | None = None,
 ) -> object:
     """
     Interpolate missing values in trajectories using various methods.
@@ -3929,11 +3931,10 @@ def interpolate_trajectories(
             still filled (no cap on interior gap length) and, at the end,
             leading/trailing position-less rows are dropped via
             ``trim_positionless_ends`` since they cannot be interpolated.
-        heading_body_size_px: Body length in the trajectories' pixel units.
-            When given, the directed heading fix also uses clear motion as
-            evidence and exempts track joins (see ``_fix_heading_globally``).
-        heading_frame_rate: Frames per second, scaling the heading fix's
-            reversal angle and motion window.
+        heading_fix: Body size (in the trajectories' pixel units), frame rate
+            and tuning for the directed heading fix; see
+            :class:`HeadingFixSettings`. Without it the fix runs on per-frame
+            fallbacks with no motion term.
             Default False preserves today's exact behavior byte-for-byte —
             existing callers of this function are out of scope for this
             change and must not be affected.
@@ -3995,8 +3996,7 @@ def interpolate_trajectories(
                         traj_data["Theta"].values,
                         traj_data["X"].values,
                         traj_data["Y"].values,
-                        heading_body_size_px,
-                        heading_frame_rate,
+                        heading_fix,
                     )
                 else:
                     traj_data["Theta"] = _fix_heading_flips(
@@ -4067,8 +4067,7 @@ def interpolate_trajectories(
                 traj_data["Theta"].values,
                 traj_data["X"].values,
                 traj_data["Y"].values,
-                heading_body_size_px,
-                heading_frame_rate,
+                heading_fix,
             )
         else:
             traj_data["Theta"] = _fix_heading_flips(
@@ -4653,83 +4652,20 @@ def _interpolate_column(frames, values, method="linear", max_gap=10):
     return result
 
 
-# Per-frame cost (radians of equivalent turning) of reporting the opposite of a
-# frame's own directed heading. The smoothness term pays ~pi at each end of a
-# flipped run, so a run is overridden only while it is shorter than about
-# 2*pi / _HEADING_OBS_COST frames (~12): short spurious flips are corrected,
-# sustained head-tail/pose evidence is kept.
-_HEADING_OBS_COST = 0.5
-# Per-frame cost of a heading pointing against clear motion. Below the
-# observation cost, so motion alone never overrules sustained head calls (ants
-# can walk backwards while dragging brood), but it extends the correctable run
-# length to about 2*pi / (_HEADING_OBS_COST - _HEADING_MOTION_COST) frames.
-_HEADING_MOTION_COST = 0.3
-# Motion counts as evidence once the animal covers this many body sizes over a
-# +-_HEADING_MOTION_HALF_WINDOW_S window (at least one frame each side).
-_HEADING_MOTION_MIN_BODY_FRAC = 0.25
-_HEADING_MOTION_HALF_WINDOW_S = 0.08
-_HEADING_MOTION_HALF_WINDOW_DEFAULT = 2  # frames, when the frame rate is unknown
-# An animal cannot reverse its heading between two adjacent frames: a change
-# above the reversal angle costs an extra _HEADING_REVERSAL_COST, so a reversed
-# run of up to ~(2*pi + 2*cost) / _HEADING_OBS_COST frames (~52) is folded into
-# its surroundings even when its own head calls are consistent (head-tail and
-# pose both falter on curled, grooming or wall-climbing ants). The angle is
-# 120 degrees, raised to _HEADING_MAX_TURN_RAD_S / fps at low frame rates where
-# a real one-frame turn can exceed it; the rule is off once that reaches pi.
-# "Adjacent" tolerates up to _HEADING_REVERSAL_MAX_GAP missing frames, where
-# head calls are least reliable. Exempt when the position jumps by more than a
-# body size in one frame: a track join onto another animal, not a turn. (Half a
-# body size is ordinary fast running on 10 fps footage: the 90th-percentile
-# step on Libby X1_d1 is 26 px for a 47 px body.)
-_HEADING_REVERSAL_MIN_RAD = 2.0 * np.pi / 3.0
-_HEADING_MAX_TURN_RAD_S = 4.0 * np.pi
-_HEADING_REVERSAL_COST = 10.0
-_HEADING_REVERSAL_MAX_GAP = 2
-_HEADING_JOIN_BODY_FRAC = 1.0
-
-
-def heading_body_size_px(params, resize_factor: float = 1.0) -> float | None:
-    """Body size in trajectory pixels for the heading fix.
-
-    ``REFERENCE_BODY_SIZE`` is in source-video pixels; trajectories before the
-    final rescale live in the resized frame, hence ``resize_factor``.
-    """
-    try:
-        size = float((params or {}).get("REFERENCE_BODY_SIZE") or 0.0)
-    except (TypeError, ValueError):
-        return None
-    if size <= 0:
-        return None
-    return size * float(resize_factor or 1.0)
-
-
-def heading_fps(params) -> float | None:
-    """Frame rate for the heading fix, or None when unknown."""
-    try:
-        fps = float((params or {}).get("FPS") or 0.0)
-    except (TypeError, ValueError):
-        return None
-    return fps if fps > 0 else None
-
-
 def _motion_directions(
     x: np.ndarray | None,
     y: np.ndarray | None,
-    body_size_px: float | None,
+    settings: HeadingFixSettings,
     n: int,
-    fps: float | None = None,
 ) -> np.ndarray:
     """Per-frame direction of travel, NaN where the animal is not clearly moving."""
     out = np.full(n, np.nan)
-    if x is None or y is None or not body_size_px or body_size_px <= 0:
+    body = settings.body_size_px
+    if x is None or y is None or not body:
         return out
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
-    k = (
-        max(1, int(round(_HEADING_MOTION_HALF_WINDOW_S * fps)))
-        if fps
-        else _HEADING_MOTION_HALF_WINDOW_DEFAULT
-    )
+    k = settings.motion_half_window
     if n <= 2 * k:
         return out
     dx = np.full(n, np.nan)
@@ -4737,7 +4673,7 @@ def _motion_directions(
     dx[k : n - k] = x[2 * k :] - x[: n - 2 * k]
     dy[k : n - k] = y[2 * k :] - y[: n - 2 * k]
     with np.errstate(invalid="ignore"):
-        moving = np.hypot(dx, dy) >= _HEADING_MOTION_MIN_BODY_FRAC * float(body_size_px)
+        moving = np.hypot(dx, dy) >= settings.MOTION_MIN_BODY_FRAC * float(body)
     out[moving] = np.arctan2(dy[moving], dx[moving])
     return out
 
@@ -4746,8 +4682,7 @@ def _fix_heading_globally(
     theta: np.ndarray,
     x: np.ndarray | None = None,
     y: np.ndarray | None = None,
-    body_size_px: float | None = None,
-    fps: float | None = None,
+    settings: HeadingFixSettings | None = None,
 ) -> np.ndarray:
     """Resolve 180-degree heading ambiguities along one trajectory.
 
@@ -4755,19 +4690,19 @@ def _fix_heading_globally(
     two-state Viterbi minimises
 
     * smoothness: the circular heading change between consecutive valid
-      frames, plus ``_HEADING_REVERSAL_COST`` when adjacent frames differ by
-      more than the reversal angle without a position jump, so the result has
-      no spurious frame-to-frame 180-degree flips;
-    * evidence: ``_HEADING_OBS_COST`` for every frame reported opposite to its
+      frames, plus ``settings.reversal_cost`` for an instant reversal between
+      adjacent frames that is not a track join, so the result has no spurious
+      frame-to-frame 180-degree flips;
+    * evidence: ``settings.obs_cost`` for every frame reported opposite to its
       own directed heading (the head-tail/pose call that ``theta`` carries),
-      plus ``_HEADING_MOTION_COST`` for every frame pointing against clear
-      motion (needs ``x``/``y`` and ``body_size_px``; rows are consecutive
-      frames).
+      plus ``settings.motion_cost`` for every frame pointing against clear
+      motion (needs ``x``/``y`` and a body size; rows are consecutive frames).
 
-    The evidence term is what anchors the result. The previous objective had
-    smoothness only, which costs nothing inside a flipped run, so any genuine
-    turn of more than 90 degrees let it flip everything on one side of the
-    turn. Ties keep the raw heading, so the output is deterministic.
+    The evidence term is what anchors the result: a smoothness-only objective
+    costs nothing inside a flipped run, so any genuine turn of more than 90
+    degrees could flip everything on one side of it. Ties keep the raw heading,
+    so the output is deterministic. See :class:`HeadingFixSettings` for how the
+    costs follow from durations and the frame rate.
 
     Parameters
     ----------
@@ -4776,17 +4711,16 @@ def _fix_heading_globally(
     x, y : np.ndarray, optional
         Positions aligned with ``theta``, used for the motion term and to
         exempt track joins from the reversal rule.
-    body_size_px : float, optional
-        Body size in the same pixel units as ``x``/``y``. Without it the motion
-        term is off and no pair counts as a track join.
-    fps : float, optional
-        Frame rate; scales the reversal angle and the motion window.
+    settings : HeadingFixSettings, optional
+        Body size, frame rate and tuning. Without a body size the motion term
+        is off and no step counts as a track join.
 
     Returns
     -------
     np.ndarray
         Corrected heading array (copy).
     """
+    settings = settings or HeadingFixSettings()
     two_pi = 2.0 * np.pi
     result = np.asarray(theta, dtype=np.float64).copy()
     n = len(result)
@@ -4801,38 +4735,35 @@ def _fix_heading_globally(
     vals = result[valid_idx]
     cand = np.stack([vals % two_pi, (vals + np.pi) % two_pi])  # (2, m)
     unary = np.zeros_like(cand)
-    unary[1] += _HEADING_OBS_COST
-    mot = _motion_directions(x, y, body_size_px, n, fps)[valid_idx]
+    unary[1] += settings.obs_cost
+    mot = _motion_directions(x, y, settings, n)[valid_idx]
     has_mot = ~np.isnan(mot)
     if has_mot.any():
         against = _circ(cand[:, has_mot], mot[has_mot]) > (np.pi / 2)
-        unary[:, has_mot] += _HEADING_MOTION_COST * against
+        unary[:, has_mot] += settings.motion_cost * against
 
     m = len(valid_idx)
-    reversal_rad = _HEADING_REVERSAL_MIN_RAD
-    if fps:
-        reversal_rad = max(reversal_rad, _HEADING_MAX_TURN_RAD_S / float(fps))
+    reversal_rad = settings.reversal_rad
+    reversal_cost = settings.reversal_cost
     # Pairs (j-1, j) where an instant reversal is physically impossible.
     no_reversal = np.zeros(m - 1, dtype=bool)
-    if reversal_rad < np.pi:
-        no_reversal = np.diff(valid_idx) <= 1 + _HEADING_REVERSAL_MAX_GAP
-        if x is not None and y is not None and body_size_px and body_size_px > 0:
+    if reversal_rad < np.pi and reversal_cost > 0:
+        frame_gap = np.diff(valid_idx)
+        no_reversal = frame_gap <= 1 + settings.reversal_max_gap
+        join_step = settings.join_step_px
+        if x is not None and y is not None and join_step:
             px = np.asarray(x, dtype=np.float64)[valid_idx]
             py = np.asarray(y, dtype=np.float64)[valid_idx]
-            step = np.hypot(np.diff(px), np.diff(py))
-            # A missing position cannot prove the animal stayed put.
-            no_reversal &= np.isfinite(step) & (
-                step <= _HEADING_JOIN_BODY_FRAC * float(body_size_px)
-            )
+            step = np.hypot(np.diff(px), np.diff(py)) / frame_gap
+            # A missing position cannot prove the animal stayed on track.
+            no_reversal &= np.isfinite(step) & (step <= join_step)
 
     # pair[sp][sc][j-1]: cost of state sp at frame j-1 followed by sc at j.
     pair = np.empty((2, 2, m - 1))
     for sp in (0, 1):
         for sc in (0, 1):
             d = _circ(cand[sc, 1:], cand[sp, :-1])
-            pair[sp, sc] = d + _HEADING_REVERSAL_COST * (
-                no_reversal & (d > reversal_rad)
-            )
+            pair[sp, sc] = d + reversal_cost * (no_reversal & (d > reversal_rad))
 
     parent = np.zeros((m, 2), dtype=np.int8)
     dp0, dp1 = float(unary[0, 0]), float(unary[1, 0])

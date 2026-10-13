@@ -455,9 +455,8 @@ def relink_and_export_rich_csv(
         collapse_to_majority_identity,
     )
     from hydra_suite.core.post.processing import (
+        HeadingFixSettings,
         densify_trajectory_frames,
-        heading_body_size_px,
-        heading_fps,
         interpolate_trajectories,
         relink_trajectories_with_pose_by_arena,
         trim_positionless_ends,
@@ -507,8 +506,7 @@ def relink_and_export_rich_csv(
             heading_flip_max_burst=final_heading_flip_max_burst,
             directed_heading_posthoc=final_directed_heading_posthoc,
             fill_all_interior=True,
-            heading_body_size_px=heading_body_size_px(params, 1.0),
-            heading_frame_rate=heading_fps(params),
+            heading_fix=HeadingFixSettings.from_params(params, 1.0),
         )
     else:
         # interpolate_trajectories(method="none") is a pure no-op (it

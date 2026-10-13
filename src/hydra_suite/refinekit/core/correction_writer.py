@@ -19,7 +19,10 @@ from typing import Any, List, Optional
 
 import pandas as pd
 
-from hydra_suite.core.post.processing import interpolate_trajectories
+from hydra_suite.core.post.processing import (
+    HeadingFixSettings,
+    interpolate_trajectories,
+)
 from hydra_suite.refinekit.core.track_editor_model import EditOp, OpKind
 
 logger = logging.getLogger(__name__)
@@ -238,25 +241,24 @@ class CorrectionWriter:
             )
         )
 
-        # The proofread CSV is in source pixels, so the body size needs no
-        # resize factor; without these the heading fix would treat every
-        # proofread join as an impossible instant reversal.
-        def _positive(*keys):
-            try:
-                value = float(_config_value(data, *keys) or 0.0)
-            except (TypeError, ValueError):
-                return None
-            return value if value > 0 else None
+        # The proofread CSV is in source pixels (resize factor 1). Without the
+        # body size and frame rate the heading fix would treat every proofread
+        # join as an impossible instant reversal.
+        heading_params = {
+            "REFERENCE_BODY_SIZE": _config_value(
+                data, "reference_body_size", "REFERENCE_BODY_SIZE"
+            ),
+            "FPS": _config_value(data, "fps", "FPS"),
+        }
+        for field, key in HeadingFixSettings._PARAM_KEYS.items():
+            heading_params[key] = _config_value(data, f"heading_fix_{field}", key)
 
         return {
             "method": method,
             "max_gap": max_gap,
             "heading_flip_max_burst": heading_flip_max_burst,
             "directed_heading_posthoc": directed_heading_posthoc,
-            "heading_body_size_px": _positive(
-                "reference_body_size", "REFERENCE_BODY_SIZE"
-            ),
-            "heading_frame_rate": _positive("fps", "FPS"),
+            "heading_fix": HeadingFixSettings.from_params(heading_params, 1.0),
         }
 
     def _normalize_df(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -283,8 +285,7 @@ class CorrectionWriter:
                 max_gap=settings["max_gap"],
                 heading_flip_max_burst=settings["heading_flip_max_burst"],
                 directed_heading_posthoc=settings["directed_heading_posthoc"],
-                heading_body_size_px=settings.get("heading_body_size_px"),
-                heading_frame_rate=settings.get("heading_frame_rate"),
+                heading_fix=settings.get("heading_fix"),
             )
         except Exception:
             logger.exception(

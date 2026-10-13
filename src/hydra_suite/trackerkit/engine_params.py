@@ -36,6 +36,7 @@ from hydra_suite.core.inference.model_paths import (
     resolve_model_path,
     resolve_pose_model_path,
 )
+from hydra_suite.core.post.heading_fix import HeadingFixSettings
 from hydra_suite.runtime.resolver import (
     ResolvedBackend,
     RuntimeResolver,
@@ -1502,6 +1503,12 @@ def build_engine_params(
         "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": bool(
             str(yolo_headtail_path or "").strip() or pose_extractor_enabled
         ),
+        # Optional heading-fix tuning (seconds / body sizes); unset keys keep
+        # the HeadingFixSettings defaults.
+        **{
+            key: _cfg_get(cfg, f"heading_fix_{field}", default=None)
+            for field, key in HeadingFixSettings._PARAM_KEYS.items()
+        },
         "LOST_THRESHOLD_FRAMES": lost_threshold_frames,
         "W_POSITION": float(_cfg_get(cfg, "weight_position", default=0.8)),
         "W_ORIENTATION": float(_cfg_get(cfg, "weight_orientation", default=0.3)),
