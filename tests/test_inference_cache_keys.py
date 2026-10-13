@@ -1051,3 +1051,30 @@ def test_keys_module_video_signature_is_mtime_invariant_through_the_reexport(tmp
     first = keys_mod.video_signature(str(v))
     os.utime(v, (1, 1))
     assert keys_mod.video_signature(str(v)) == first
+
+
+# ---- classifier output version ----
+
+
+def test_classifier_keys_invalidate_caches_written_before_the_iobinding_sync_fix():
+    """gpu_fast classifier caches written before the ORT stream-sync fix hold
+    corrupted head-tail/identity outputs; the keys must no longer match them."""
+    from hydra_suite.core.inference.cache.keys import (
+        _batch_term,
+        _default_batch_size,
+        canonical_geometry_key,
+    )
+
+    ht = _ht_config()
+    cnn = _cnn_config()
+    old_ht = canonical_geometry_key(_GEOM_A) + _batch_term(
+        ht.batch_size, _default_batch_size(ht)
+    )
+    old_cnn = canonical_geometry_key(_GEOM_A) + _batch_term(
+        cnn.batch_size, _default_batch_size(cnn)
+    )
+    assert headtail_cache_key(ht, _GEOM_A).config_hash != old_ht
+    assert cnn_cache_key(cnn, _GEOM_A).config_hash != old_cnn
+    # Still deterministic and still geometry-sensitive.
+    assert headtail_cache_key(ht, _GEOM_A) == headtail_cache_key(ht, _GEOM_A)
+    assert cnn_cache_key(cnn, _GEOM_A) != cnn_cache_key(cnn, _GEOM_B)

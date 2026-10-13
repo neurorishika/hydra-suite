@@ -338,10 +338,22 @@ def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     )
 
 
+# Bumped when the head-tail / identity classifier stages start producing
+# different outputs from the same model, geometry and video. "iobind-sync-v1":
+# gpu_fast classifier caches written before ONNX Runtime waited for torch's
+# crop kernels hold corrupted labels (~13% identity, ~9% reversed head-tail),
+# so they must not be reused. Detection and pose caches were unaffected.
+CLASSIFIER_OUTPUT_VERSION = "iobind-sync-v1"
+
+
+def _classifier_config_hash(config, geometry: CanonicalGeometry) -> str:
+    return _sha(
+        f"{canonical_geometry_key(geometry)}|{CLASSIFIER_OUTPUT_VERSION}"
+    ) + _batch_term(config.batch_size, _default_batch_size(config))
+
+
 def headtail_cache_key(config: HeadTailConfig, geometry: CanonicalGeometry) -> CacheKey:
-    config_hash = canonical_geometry_key(geometry) + _batch_term(
-        config.batch_size, _default_batch_size(config)
-    )
+    config_hash = _classifier_config_hash(config, geometry)
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_id=model_content_id(config.model_path),
@@ -355,8 +367,7 @@ def cnn_cache_key(config: CNNConfig, geometry: CanonicalGeometry) -> CacheKey:
         model_id=model_content_id(config.model_path),
         # calibration_temperature, scoring_mode excluded; canonical geometry
         # IS included -- it changes what pixels the classifier actually sees.
-        config_hash=canonical_geometry_key(geometry)
-        + _batch_term(config.batch_size, _default_batch_size(config)),
+        config_hash=_classifier_config_hash(config, geometry),
     )
 
 
