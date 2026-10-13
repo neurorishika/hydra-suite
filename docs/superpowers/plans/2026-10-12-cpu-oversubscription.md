@@ -29,6 +29,18 @@
 - Fewer videos than slots (2 videos, 8 GPUs, budget 32) → 16 threads each, not 4. Pinned in Task 1 + 4.
 - GUI user sets a budget, runs, then sets it back to 0 → process returns to its original thread state (restore), and a never-capped GUI run is a strict no-op. Pinned in Task 2 + 6.
 
+## Rev 2 corrections (adversarial plan review) — these OVERRIDE the task text below
+
+- **C1 numba bind location (Task 2):** the only `parallel=True` kernel (bgsub, `core/background/model.py:47`) runs on the `pipeline-obb-producer` threads (`core/inference/pipeline.py:947-957`, `1089-1093`), not the engine thread. Call `bind_thread_cpu_cap()` (a) at the top of `run_bgsub_batch` (`core/inference/stages/bgsub.py:~286`) AND (b) as the first statement of the `decoder`/`detector`/`producer` thread closures in `pipeline.py`, AND (c) at the top of `TrackingEngineCore.run_tracking` (`core/tracking/worker.py:~849`). All no-op when uncapped.
+- **C2 AprilTag helper (Task 3):** define `apriltag_thread_count(params) -> int` in `runtime/cpu_budget.py` (NOT `core/inference/config.py` — that is a hard circular import); import it from `hydra_suite.runtime.cpu_budget` at `config.py:~1405` and `apriltag.py:~104`; the test imports it from `hydra_suite.runtime.cpu_budget`.
+- **C3 GUI cap must not leak into fan-out children (Task 6):** in `start_batch_fanout`, call `set_process_cpu_cap(None)` before `worker.start()` (the parent does no heavy work); otherwise a previous single-run cap sits in `os.environ` and `build_child_env`'s `min()` shrinks every child.
+- **C4 threadpoolctl's OpenMP limit is per calling thread;** `torch.set_num_threads` (process-global) is the load-bearing torch cap. Keep it. Tests assert threadpool limits only on the thread that set them; torch may be asserted from any thread after a torch op.
+- **C5 GUI single run honours `HYDRA_CPU_BUDGET`:** `_apply_cpu_budget` = `set_process_cpu_cap(resolve_process_cap(budget if budget > 0 else None))`. Tests `monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)` and `delenv("HYDRA_CPU_THREADS")`.
+- **C6 Real GUI worker start sites (Task 6):** only `SessionWorker` (`gui/orchestrators/tracking.py:~1034/1045`, post-tracking incl. exports) and `TrackingWorker` (`tracking.py:~1596` preview-mode, `~1729` tracking). `PostProcessWorker`/`FinalMediaExportWorker`/`InterpolatedCropsWorker` are never constructed — ignore them. They cannot be live concurrently.
+- **C7 Env hygiene in tests:** every test that resolves a budget from `os.environ` must `monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)` and `delenv("HYDRA_CPU_THREADS", raising=False)`.
+- **C8 Nits:** `VideoEncoder` closes with `release()` not `close()`; `video_decoder.py`/`video_encoder.py` must import `current_cpu_cap` from `hydra_suite.runtime.cpu_budget`; in `orchestrators/tracking.py` import `set_process_cpu_cap`/`resolve_process_cap` at MODULE level so the monkeypatch target exists; `cli._run_fanout`'s log line must report `resolve_slot_count(options)` not `len(options.gpus)`; Task 7 Step 3 must copy the plain run's CSVs aside before the fan-out run (same output path); fixture clips live in the MAIN checkout (`/Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/tools/equivalence/fixtures/`), not the worktree.
+- **C9 Child probe (Task 7):** also assert the OS thread count (`psutil.Process().num_threads()`) after opening a `cv2.VideoCapture` on a fixture clip + creating an ORT CPU session is well below the same measurement in an uncapped child (e.g. capped < 0.6 × uncapped).
+
 ---
 
 ### Task 1: Budget resolution and the pure planner
@@ -612,7 +624,7 @@ def test_crop_warp_threads_respects_cap(cap, monkeypatch):
 
 
 def test_apriltag_threads_capped(cap):
-    from hydra_suite.core.inference.config import apriltag_thread_count  # helper added in Step 3
+    from hydra_suite.runtime.cpu_budget import apriltag_thread_count  # helper added in Step 3 (C2)
     cap(None)
     assert apriltag_thread_count({"APRILTAG_THREADS": 4}) == 4
     cap(2)
@@ -628,7 +640,7 @@ def test_encoder_thread_count_capped(cap, tmp_path):
     enc = VideoEncoder(str(tmp_path / "x.mp4"), width=64, height=64, fps=10, backend="pyav_software")
     enc.write(np.zeros((64, 64, 3), np.uint8))
     assert enc._stream.thread_count == 2
-    enc.close()
+    enc.release()
 ```
 
 Before writing `test_encoder_thread_count_capped`, open `utils/video_encoder.py` and match the real `VideoEncoder` constructor/`write`/`close` names and how a backend is forced; adjust the test call to match (do not change the encoder's public API).
@@ -1137,7 +1149,7 @@ from hydra_suite.runtime.cpu_budget import set_process_cpu_cap
     def _apply_cpu_budget(self) -> None:
         """Apply the GUI CPU budget to this process (0 = leave/restore uncapped)."""
         budget = int(getattr(self._mw.config, "cpu_budget", 0) or 0)
-        set_process_cpu_cap(budget if budget > 0 else None)
+        set_process_cpu_cap(resolve_process_cap(budget if budget > 0 else None))
 ```
 
 Note the spec says the GUI budget is clamped to usable cores — `QSpinBox` max already enforces it.

@@ -1,6 +1,6 @@
 # TrackerKit CPU oversubscription protection — design
 
-**Status:** approved in chat 2026-10-12; rev 2 after adversarial (Fable) review; implementation on `feat/cpu-oversubscription`.
+**Status:** approved in chat 2026-10-12; rev 3 after two adversarial (Fable) reviews (spec + plan); implementation on `feat/cpu-oversubscription`.
 
 ## Problem
 
@@ -126,15 +126,18 @@ idempotently (last setter wins, guarded by a lock):
     inherit it, and **`OPENCV_FFMPEG_THREADS` is read by OpenCV at each
     `VideoCapture` open**, so it caps every tracking decoder without touching
     the call sites (decoded frames measured byte-identical).
-  - `threadpoolctl.threadpool_limits(n)` held globally (BLAS + libomp; the
-    libomp limit also caps torch's OpenMP pool).
+  - `threadpoolctl.threadpool_limits(n)` held (BLAS; note its OpenMP limit is
+    per calling thread, so it does NOT cap torch on worker threads).
   - `torch.set_num_threads(min(original, n))` if torch is already imported
-    (never raises the count). Interop is not touched (it can only be set
+    (never raises the count). This process-global call is the load-bearing
+    torch cap. Interop is not touched (it can only be set
     before first use).
   - OpenCV compute threads are not touched (not a lever, see table).
   - Publishes `n` for `current_cpu_cap() -> int | None`.
 - `bind_thread_cpu_cap()` — called at the top of every thread that runs
-  tracking work: `numba.set_num_threads(min(numba.get_num_threads(), cap))`
+  tracking work (the engine thread, the inference pipeline's
+  decoder/detector/producer threads, and `run_bgsub_batch`, which is where
+  the numba bgsub kernel actually runs): `numba.set_num_threads(min(numba.get_num_threads(), cap))`
   (numba's setting is thread-local). No-op when no cap.
 
 The cap is **per pool**, not a per-process hard ceiling: a child runs
@@ -213,12 +216,15 @@ the GUI sets it before starting a tracking/post-processing/export worker.
   `plan_cpu` when jobs/GPUs/budget change.
 - `_resolve_fanout_options` calls `plan_cpu` and passes `threads_per_job`
   and the clamped jobs into `FanoutOptions`.
-- Single in-process GUI run: before starting a tracking, post-processing,
-  final-media-export or interpolated-crops worker, the orchestrator calls
-  `set_process_cpu_cap(cpu_budget or None)` (0 → `None`: no-op if never set,
-  restore if previously set). Each of those workers calls
-  `bind_thread_cpu_cap()` at the top of `run()`. In the CLI, post-processing
-  runs on the same thread as tracking, so one bind suffices.
+- Single in-process GUI run: before starting a `TrackingWorker` or
+  `SessionWorker` (post-tracking + exports), the orchestrator calls
+  `set_process_cpu_cap(resolve_process_cap(cpu_budget or None))` — so 0 falls
+  back to `HYDRA_CPU_BUDGET`, else `None` (no-op if never set, restore if
+  previously set). Thread-local binding happens in core (engine + pipeline
+  threads), so it covers GUI and CLI alike.
+- Before starting a GUI fan-out, the orchestrator calls
+  `set_process_cpu_cap(None)`, so a previous single-run cap left in
+  `os.environ` cannot shrink the children (`build_child_env` takes `min`).
 
 ## Out of scope
 
