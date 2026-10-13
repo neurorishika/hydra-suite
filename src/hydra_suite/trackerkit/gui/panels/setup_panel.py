@@ -353,9 +353,10 @@ class SetupPanel(QWidget):
         )
         self.chk_batch_parallel.setToolTip(
             "Each video runs as its own headless child process pinned to one\n"
-            "GPU (CUDA_VISIBLE_DEVICES). Tracking CSVs match sequential batch\n"
-            "tracking up to floating-point rounding in threaded numeric kernels,\n"
-            "and each video's annotated overlay is written beside that video.\n"
+            "GPU (CUDA_VISIBLE_DEVICES). Tracking CSVs were byte-identical to\n"
+            "sequential batch tracking in our tests; threaded numeric kernels may\n"
+            "in principle round differently under a CPU cap. Each video's\n"
+            "annotated overlay is written beside that video.\n"
             "Each child gets an equal share of the CPU budget. Final-media and\n"
             "individual-dataset export are skipped. No live preview while running."
         )

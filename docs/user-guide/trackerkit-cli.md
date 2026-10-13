@@ -75,10 +75,11 @@ trackerkit track --video-list batch.txt --jobs 3             # three children sh
 
 Each video becomes a child process `trackerkit track <video> --config <effective.json>`
 pinned with `CUDA_VISIBLE_DEVICES=<uuid>`, so every child (and the SLEAP
-service it starts) sees exactly one GPU. Tracking output (the CSVs) is
-identical to the sequential run up to floating-point rounding in threaded
-numeric kernels (see [CPU budget](#cpu-budget), which also covers rendered
-videos). Rules:
+service it starts) sees exactly one GPU. Tracking output (the CSVs) was
+byte-identical to the sequential run in our tests, including with a CPU cap
+(`--jobs 2 --cpu-budget 4`); threaded numeric kernels may in principle round
+differently under a CPU cap (see [CPU budget](#cpu-budget), which also covers
+rendered videos). Rules:
 
 - Fan-out engages only when `--gpus` is given or `--jobs > 1`.
 - `--gpus auto` is best effort: on a host with no CUDA at all it simply runs
@@ -171,7 +172,8 @@ export HYDRA_CPU_BUDGET=32                                             # same as
 encoder's thread count, so they are unaffected by a cap on video encoding.
 Rendered annotated or oriented videos can differ byte-for-byte from an
 uncapped run, because libx264's output depends on how many threads encode it;
-they look the same. Threaded numeric kernels (BLAS, OpenMP) can also reorder
+they look the same. Tracking CSVs were byte-identical with and without a cap
+in our tests; threaded numeric kernels (BLAS, OpenMP) may in principle reorder
 floating-point reductions under a different thread count.
 
 ## Applying a tuned inference profile

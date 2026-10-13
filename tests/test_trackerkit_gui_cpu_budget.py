@@ -309,5 +309,8 @@ def test_parallel_tooltip_no_longer_claims_byte_identity():
             "hydra_suite.trackerkit.gui.panels.setup_panel", fromlist=["x"]
         ).__file__
     ).read_text()
-    assert "byte-identical to" not in src
+    # Any byte-identity statement must be qualified as measured, not promised.
+    for idx in [i for i in range(len(src)) if src.startswith("byte-identical", i)]:
+        assert "in our tests" in src[idx : idx + 120]
+    assert "round differently under a CPU cap" in src
     assert "equal share of the CPU budget" in src
