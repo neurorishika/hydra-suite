@@ -77,3 +77,28 @@ def test_iobinding_waits_for_torch_stream_before_ort_reads(monkeypatch):
     backend._forward_onnx_iobinding(_Batch())
 
     assert log == ["torch_stream_synchronize", "ort_run"]
+
+
+def test_identity_evidence_sidecar_key_retires_pre_fix_cnn_evidence():
+    """The evidence sidecar is derived from the CNN cache but keyed separately;
+    a pre-fix sidecar (built from corrupted CNN outputs) must not match."""
+    from hydra_suite.core.inference.cache.keys import CLASSIFIER_OUTPUT_VERSION
+    from hydra_suite.core.inference.config import (
+        CNNConfig,
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+    )
+    from hydra_suite.core.inference.runner import _identity_evidence_base_signature
+
+    obb = OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="/m.pt"))
+    with_cnn = InferenceConfig(
+        obb=obb, cnn_phases=[CNNConfig(label="id", model_path="/c.pt")]
+    )
+    without_cnn = InferenceConfig(obb=obb)
+    assert CLASSIFIER_OUTPUT_VERSION in _identity_evidence_base_signature(
+        with_cnn, "vid", None
+    )
+    assert CLASSIFIER_OUTPUT_VERSION not in _identity_evidence_base_signature(
+        without_cnn, "vid", None
+    )
