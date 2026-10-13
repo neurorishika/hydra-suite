@@ -1292,6 +1292,13 @@ class ClassifierBackend:
             )
             for out_meta in self._model.get_outputs():
                 binding.bind_output(out_meta.name, device_type="cpu")
+            # ORT's CUDA/TensorRT EP runs on its own stream, so it does not wait
+            # for the torch kernels that wrote ``batch_c``. Without this sync a
+            # busy GPU let ORT read half-written crops: wrong identity labels and
+            # reversed head-tail calls that changed from run to run.
+            import torch
+
+            torch.cuda.current_stream(batch_c.device).synchronize()
             self._model.run_with_iobinding(binding)
             return binding.copy_outputs_to_cpu()[0]
         except Exception:
