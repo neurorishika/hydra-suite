@@ -357,3 +357,28 @@ def test_run_tracking_binds_first(monkeypatch):
     monkeypatch.setattr(worker_module, "bind_thread_cpu_cap", _raise)
     with pytest.raises(_Bound):
         worker_module.TrackingEngineCore.run_tracking(SimpleNamespace())
+
+
+def test_torch_original_read_before_env_is_capped():
+    """torch imported but never called on the controlling thread (GUI case):
+    ATen's lazy init derives its default from OMP_NUM_THREADS, so the original
+    must be read before the env is capped, else the cap becomes 'original'."""
+    baseline = _run("""
+        import json, torch
+        print(json.dumps({"n": torch.get_num_threads()}))
+    """)["n"]
+    r = _run("""
+        import json, threading, torch
+        from hydra_suite.runtime import cpu_budget as cb
+        cb.set_process_cpu_cap(2)
+        cb.set_process_cpu_cap(None)
+        seen = {}
+        def work():
+            seen["n"] = torch.get_num_threads()
+        t = threading.Thread(target=work); t.start(); t.join()
+        print(json.dumps({"recorded": cb._torch_original,
+                          "main": torch.get_num_threads(), "worker": seen["n"]}))
+    """)
+    assert r["recorded"] == baseline
+    assert r["main"] == baseline
+    assert r["worker"] == baseline

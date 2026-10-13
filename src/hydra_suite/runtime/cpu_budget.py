@@ -316,6 +316,16 @@ def set_process_cpu_cap(n: Optional[int]) -> None:
             _logger.info("CPU thread cap lifted")
             return
         n = max(1, int(n))
+        torch_mod = sys.modules.get("torch")
+        if torch_mod is not None and _torch_original is None:
+            # Read FIRST, before capping env vars or native pools: torch's
+            # first get_num_threads lazily initialises its pool from
+            # OMP_NUM_THREADS (resetting OpenMP) and reads the calling
+            # thread's OpenMP limit -- either would record the cap itself.
+            try:
+                _torch_original = int(torch_mod.get_num_threads())
+            except Exception:
+                _logger.debug("torch.get_num_threads failed", exc_info=True)
         if _env_originals is None:
             _env_originals = {
                 v: os.environ.get(v)
@@ -326,15 +336,6 @@ def set_process_cpu_cap(n: Optional[int]) -> None:
             if var == _NUMBA_ENV and numba_loaded:
                 continue  # written before numba loaded; now frozen
             os.environ[var] = _env_min(value, n)
-        torch_mod = sys.modules.get("torch")
-        if torch_mod is not None and _torch_original is None:
-            # Read BEFORE touching native pools: torch's first get_num_threads
-            # lazily initialises its pool (resetting OpenMP), and it reads the
-            # calling thread's OpenMP limit, which we are about to lower.
-            try:
-                _torch_original = int(torch_mod.get_num_threads())
-            except Exception:
-                _logger.debug("torch.get_num_threads failed", exc_info=True)
         _restore_threadpools()
         _limit_threadpools(n)
         if _torch_original is not None:
