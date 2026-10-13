@@ -28,6 +28,41 @@ _MAX_REUSABLE_BATCH_BUFFERS = 4
 _MAX_REUSABLE_OUTPUT_BUFFERS = 4
 
 
+def _trt_profile_max_batch(engine, input_name: str) -> int | None:
+    """Largest batch optimization profile 0 of a dynamic TRT engine accepts.
+
+    A dynamic engine's batch range is fixed when it is built, from a tile-chunk
+    estimate made at load time. The chunk actually submitted is estimated
+    again at run time (tile residency, request caps), and the two can
+    disagree. ``predict`` chunks to this bound so a disagreement costs a
+    split instead of a rejected ``setInputShape``. ``None`` when the engine
+    exposes no profile (static engines, old TensorRT).
+    """
+    try:
+        _min_shape, _opt_shape, max_shape = engine.get_tensor_profile_shape(
+            input_name, 0
+        )
+        batch = int(max_shape[0])
+    except Exception:
+        return None
+    return batch if batch > 0 else None
+
+
+def _set_trt_input_shape(context, input_name: str, shape: tuple, max_batch) -> None:
+    """Bind the input shape, raising if TensorRT rejects it.
+
+    ``set_input_shape`` reports failure by returning ``False`` and logging --
+    it does not raise. Ignoring that let a run execute every batch on an
+    unbound context and finish with almost no detections.
+    """
+    if context.set_input_shape(input_name, shape) is False:
+        raise RuntimeError(
+            f"TensorRT rejected input shape {shape} for {input_name!r} "
+            f"(engine profile max batch: {max_batch}). The engine's "
+            "optimization profile does not cover this batch."
+        )
+
+
 def _parse_meta_bool(value, default: bool = False) -> bool:
     """Parse a metadata boolean that may be stored as a Python string.
 
@@ -408,6 +443,21 @@ class _BaseDirectOBBExecutor:
         # frames are passed in a single run_with_iobinding() call.
         model_bs = getattr(self, "_model_batch_size", 1)
         static_batch = getattr(self, "_static_batch", False)
+        # Dynamic TRT engines accept any batch up to their profile maximum;
+        # split anything larger rather than let setInputShape reject it.
+        profile_max = getattr(self, "_profile_max_batch", None)
+        if not static_batch and profile_max and len(frames) > profile_max:
+            split_results: list = []
+            for i in range(0, len(frames), profile_max):
+                split_results.extend(
+                    self.predict(
+                        list(frames[i : i + profile_max]),
+                        conf_thres=conf_thres,
+                        classes=classes,
+                        max_det=max_det,
+                    )
+                )
+            return split_results
         if (model_bs > 1 or static_batch) and len(frames) != model_bs:
             all_results: list = []
             for i in range(0, len(frames), model_bs):
@@ -733,6 +783,11 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         # ("IExecutionContext::setInputShape: ... Static dimension mismatch").
         # Dynamic-axis engines report -1 here and should NOT be chunked.
         self._static_batch: bool = batch_dim > 0
+        self._profile_max_batch = (
+            None
+            if self._static_batch
+            else _trt_profile_max_batch(self.engine, self._input_name)
+        )
         # Use a dedicated non-default CUDA stream so TensorRT does not inject extra
         # cudaStreamSynchronize() calls that it adds when running on the default stream.
         import torch
@@ -769,7 +824,12 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         import torch
 
         x = img_tensor.float().contiguous()
-        self.context.set_input_shape(self._input_name, tuple(x.shape))
+        _set_trt_input_shape(
+            self.context,
+            self._input_name,
+            tuple(x.shape),
+            getattr(self, "_profile_max_batch", None),
+        )
         out_shape = tuple(self.context.get_tensor_shape(self._output_name))
         output, prior_consumer = self._output_buffer(out_shape, x.device)
         self.context.set_tensor_address(self._input_name, x.data_ptr())
@@ -1321,6 +1381,11 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
         batch_dim = self.engine.get_tensor_shape(self._input_name)[0]
         self._model_batch_size = int(batch_dim) if batch_dim > 0 else 1
         self._static_batch: bool = batch_dim > 0
+        self._profile_max_batch = (
+            None
+            if self._static_batch
+            else _trt_profile_max_batch(self.engine, self._input_name)
+        )
         self._end2end = False  # segment raw heads are always CBC, never end2end
 
         import torch
@@ -1349,7 +1414,12 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
         import torch
 
         x = img_tensor.float().contiguous()
-        self.context.set_input_shape(self._input_name, tuple(x.shape))
+        _set_trt_input_shape(
+            self.context,
+            self._input_name,
+            tuple(x.shape),
+            getattr(self, "_profile_max_batch", None),
+        )
         det_shape = tuple(self.context.get_tensor_shape(self._det_name))
         proto_shape = tuple(self.context.get_tensor_shape(self._proto_name))
         key = (det_shape, proto_shape)
