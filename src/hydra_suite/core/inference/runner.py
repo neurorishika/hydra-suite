@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from .stages.identity_evidence import IdentityEvidenceStage
 
 from .cache.keys import (
+    CLASSIFIER_OUTPUT_VERSION,
     apriltag_cache_key,
     bgsub_detection_cache_key,
     cnn_cache_key,
@@ -1232,6 +1233,10 @@ def _identity_evidence_base_signature(
             parts.append(f"n={int(bg.max_targets)}x{int(bg.max_contour_multiplier)}")
     elif config.obb is not None:
         parts.append(f"n={int(config.obb.max_detections)}")
+    if config.cnn_phases:
+        # The sidecar is derived from the CNN caches but keyed apart from them,
+        # so retiring those caches must retire the evidence built from them.
+        parts.append(f"classifier={CLASSIFIER_OUTPUT_VERSION}")
     return "|".join(parts)
 
 
