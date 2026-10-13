@@ -93,6 +93,12 @@ run. Rules:
   round-robin, so a `--jobs` cap below GPUs × K spreads across every GPU
   before doubling up on one. Listing a GPU twice in `--gpus` is still an
   error: `--jobs-per-gpu` is the only way to share a device.
+- Videos launch in input order. `--longest-first` launches the videos with
+  the most frames to track (the video clipped to the config's
+  `start_frame`/`end_frame`) first, so one long video does not run alone at
+  the end of the batch; videos whose length cannot be read go first. The
+  per-video table stays in input order. It changes only scheduling, never a
+  video's output.
 - A failed video stops new launches; running videos finish. Exit code is 1
   if any video failed or the run was cancelled; the per-video table still
   shows which videos completed.
@@ -142,7 +148,8 @@ Two related habits on a shared box:
   `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` as the parent (inherited automatically).
 
 The GUI exposes the same feature under **Batch › Run videos in parallel (processes per GPU)**;
-the spinbox next to it is `--jobs-per-gpu` (it has no thread-cap control).
+the spinbox next to it is `--jobs-per-gpu` and **Longest first** is
+`--longest-first` (the GUI has no thread-cap control).
 
 ## Applying a tuned inference profile
 
