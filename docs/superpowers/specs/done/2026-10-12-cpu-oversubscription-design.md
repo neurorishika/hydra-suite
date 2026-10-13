@@ -1,6 +1,6 @@
 # TrackerKit CPU oversubscription protection — design
 
-**Status:** approved in chat 2026-10-12; rev 3 after two adversarial (Fable) reviews (spec + plan); implementation on `feat/cpu-oversubscription`.
+**Status:** Shipped — merged to main (merge/cpu-oversubscription).
 
 ## Problem
 
