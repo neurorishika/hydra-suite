@@ -4677,13 +4677,15 @@ _HEADING_MOTION_HALF_WINDOW_DEFAULT = 2  # frames, when the frame rate is unknow
 # 120 degrees, raised to _HEADING_MAX_TURN_RAD_S / fps at low frame rates where
 # a real one-frame turn can exceed it; the rule is off once that reaches pi.
 # "Adjacent" tolerates up to _HEADING_REVERSAL_MAX_GAP missing frames, where
-# head calls are least reliable. Exempt when the position jumps by more than
-# half a body size: a track join onto another animal, not a turn.
+# head calls are least reliable. Exempt when the position jumps by more than a
+# body size in one frame: a track join onto another animal, not a turn. (Half a
+# body size is ordinary fast running on 10 fps footage: the 90th-percentile
+# step on Libby X1_d1 is 26 px for a 47 px body.)
 _HEADING_REVERSAL_MIN_RAD = 2.0 * np.pi / 3.0
 _HEADING_MAX_TURN_RAD_S = 4.0 * np.pi
 _HEADING_REVERSAL_COST = 10.0
 _HEADING_REVERSAL_MAX_GAP = 2
-_HEADING_JOIN_BODY_FRAC = 0.5
+_HEADING_JOIN_BODY_FRAC = 1.0
 
 
 def heading_body_size_px(params, resize_factor: float = 1.0) -> float | None:

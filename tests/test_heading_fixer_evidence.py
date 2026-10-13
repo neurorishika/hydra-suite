@@ -166,3 +166,14 @@ def test_reversal_rule_relaxes_at_low_frame_rates():
     assert not _flipped(folded, np.full(n, 1.0)).any()
     kept = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0, fps=3.0)
     assert not _flipped(kept, theta).any()
+
+
+def test_fast_running_is_not_mistaken_for_a_track_join():
+    # 30 px/frame with a 40 px body is fast running, not a jump to another
+    # animal, so an instant reversal there is still folded in.
+    n = 300
+    x = np.arange(n, dtype=float) * 30.0
+    theta = np.zeros(n)
+    theta[100:140] = PI
+    out = _fix_heading_globally(theta, x=x, y=np.zeros(n), body_size_px=40.0)
+    assert not _flipped(out, np.zeros(n)).any()
