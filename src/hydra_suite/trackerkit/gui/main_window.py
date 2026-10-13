@@ -1720,7 +1720,9 @@ class MainWindow(QMainWindow):
 
     def _on_batch_parallel_changed(self, *_args) -> None:
         """Mirror the Batch › Parallel controls into session state."""
-        panel = self._setup_panel
+        panel = getattr(self, "_setup_panel", None)
+        if panel is None:
+            return  # fired while the setup panel is still being constructed
         self.config.batch_parallel = bool(panel.chk_batch_parallel.isChecked())
         self.config.batch_parallel_jobs = int(panel.spin_batch_parallel_jobs.value())
         self.config.batch_parallel_gpus = (

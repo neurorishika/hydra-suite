@@ -246,7 +246,7 @@ def test_refresh_cpu_plan_label_sets_text(monkeypatch):
     setup = SimpleNamespace(
         lbl_batch_parallel_cpu_plan=label,
         spin_batch_parallel_jobs=SimpleNamespace(value=lambda: 3),
-        edit_batch_parallel_gpus=SimpleNamespace(isVisible=lambda: False),
+        edit_batch_parallel_gpus=SimpleNamespace(isHidden=lambda: True),
     )
     orch = TrackingOrchestrator(
         SimpleNamespace(

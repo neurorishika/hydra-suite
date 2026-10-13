@@ -1323,8 +1323,9 @@ class TrackingOrchestrator:
         """Show how the CPU budget splits across the parallel batch jobs.
 
         A display approximation (GPU-boundness is read from whether the GPU
-        selector is shown); the authoritative plan is computed at start from
-        the resolved devices.
+        selector is enabled for this host, i.e. not explicitly hidden -- not
+        ``isVisible``, which is False whenever an ancestor is collapsed); the
+        authoritative plan is computed at start from the resolved devices.
         """
         from hydra_suite.runtime.cpu_budget import plan_cpu, resolve_cpu_budget
         from hydra_suite.trackerkit.batch_fanout import describe_cpu_plan
@@ -1342,7 +1343,7 @@ class TrackingOrchestrator:
             jobs=jobs,
             n_videos=n_videos,
             budget=budget,
-            gpu_bound=bool(panel.edit_batch_parallel_gpus.isVisible()),
+            gpu_bound=not panel.edit_batch_parallel_gpus.isHidden(),
         )
         label.setText(describe_cpu_plan(plan, budget, jobs))
 
