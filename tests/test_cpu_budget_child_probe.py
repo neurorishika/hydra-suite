@@ -9,7 +9,7 @@ process's own thread pools. Three legs:
   no env var controls).
 * ``budget``  -- every thread env var and ``HYDRA_CPU_THREADS`` stripped, only
   ``HYDRA_CPU_BUDGET=2`` set (the single-run path). Here nothing but the
-  in-process ``resolve_process_cap``/``set_process_cpu_cap``/
+  in-process ``single_run_cpu_cap``/``set_process_cpu_cap``/
   ``bind_thread_cpu_cap`` + ``session_options_for`` can lower the pools, so a
   no-op cap fails this leg.
 * ``uncapped`` -- the plain path: no cap, ORT defaults.
@@ -43,7 +43,7 @@ _CHILD = textwrap.dedent("""
     from threadpoolctl import threadpool_info
     from hydra_suite.runtime import cpu_budget as cb
 
-    cb.set_process_cpu_cap(cb.resolve_process_cap(None))
+    cb.set_process_cpu_cap(cb.single_run_cpu_cap(None))
     cb.bind_thread_cpu_cap()
 
     import cv2

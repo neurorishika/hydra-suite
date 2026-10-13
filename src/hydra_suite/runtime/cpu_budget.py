@@ -180,27 +180,6 @@ def plan_cpu(
     return CpuPlan(effective, tpj, clamped, tuple(warnings))
 
 
-def resolve_process_cap(
-    cli_budget: Optional[int],
-    *,
-    env: Optional[Mapping[str, str]] = None,
-    usable: Optional[int] = None,
-) -> Optional[int]:
-    """The thread cap for THIS process, or None (uncapped, byte-identical).
-
-    HYDRA_CPU_THREADS (fan-out child) > --cpu-budget > HYDRA_CPU_BUDGET.
-    """
-    env = os.environ if env is None else env
-    child = positive_int(env.get(ENV_CPU_THREADS))
-    if child is not None:
-        return child
-    if (not cli_budget or positive_int(cli_budget) is None) and positive_int(
-        env.get(ENV_CPU_BUDGET)
-    ) is None:
-        return None
-    return resolve_cpu_budget(cli_budget, env=env, usable=usable).cores
-
-
 def inherited_cpu_threads(
     *,
     env: Optional[Mapping[str, str]] = None,
@@ -227,29 +206,44 @@ def single_run_cpu_cap(
     *,
     env: Optional[Mapping[str, str]] = None,
     logger: Optional[logging.Logger] = None,
+    usable: Optional[int] = None,
 ) -> Optional[int]:
-    """The thread cap for an in-process (non-fan-out) run, or None.
+    """The thread cap for THIS process's in-process (non-fan-out) run, or None.
 
-    Same precedence as ``resolve_process_cap`` (HYDRA_CPU_THREADS >
-    budget > HYDRA_CPU_BUDGET), but the budget's warnings are logged: an
-    invalid ``HYDRA_CPU_BUDGET`` or a budget above the usable cores must be
-    visible, not silently ignored or clamped. A fan-out child
-    (HYDRA_CPU_THREADS set) skips them -- the parent already logged the plan,
-    and the inherited budget does not apply to the child.
+    The single authority for an in-process cap (CLI track/calibrate, GUI):
+
+    - ``HYDRA_CPU_THREADS`` (handed down by a fan-out parent or exported in the
+      shell) is a ceiling: a valid explicit ``cpu_budget`` can only LOWER it
+      (``min``); an absent/invalid budget leaves it as is, and
+      ``HYDRA_CPU_BUDGET`` never overrides it (the box-wide budget does not
+      apply to a child).
+    - otherwise ``cpu_budget`` > ``HYDRA_CPU_BUDGET``; with neither (or both
+      invalid) -> None, i.e. uncapped (plain-path invariant).
+
+    Warnings (an invalid ``HYDRA_CPU_BUDGET``, a budget above the usable
+    cores) are logged, not silently ignored or clamped.
     """
     env = os.environ if env is None else env
     log = logger or logging.getLogger(__name__)
     inherited = inherited_cpu_threads(env=env, logger=log)
     if inherited is not None:
+        explicit = positive_int(cpu_budget) if cpu_budget else None
+        if explicit is not None and explicit < inherited:
+            log.info(
+                "CPU budget: %s=%d is a ceiling; using the explicit budget %d.",
+                ENV_CPU_THREADS,
+                inherited,
+                explicit,
+            )
+            return explicit
         return inherited
     raw_budget = env.get(ENV_CPU_BUDGET)
     if cpu_budget is None and not (raw_budget or "").strip():
         return None  # no budget source: uncapped (plain-path invariant)
-    budget = resolve_cpu_budget(cpu_budget, env=env)
+    budget = resolve_cpu_budget(cpu_budget, env=env, usable=usable)
     for warning in budget.warnings:
         log.warning("CPU budget: %s", warning)
-    # "auto" means every source was absent or invalid: stay uncapped, exactly
-    # as resolve_process_cap would.
+    # "auto" means every source was absent or invalid: stay uncapped.
     return None if budget.source == "auto" else budget.cores
 
 

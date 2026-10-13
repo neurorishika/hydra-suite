@@ -346,6 +346,15 @@ def test_cli_plain_run_capped_by_child_env(monkeypatch, tmp_path):
     assert calls == [3, "bind"]
 
 
+def test_cli_plain_run_explicit_budget_lowers_inherited_threads(monkeypatch, tmp_path):
+    calls = _stub_cap(monkeypatch)
+    monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "16")
+    _stub_plan(monkeypatch)
+    cli.run_tracking_cli(_videos(tmp_path, 1), cpu_budget=4)
+    assert calls == [4, "bind"]
+
+
 def test_cli_plain_run_warns_on_invalid_env_budget(monkeypatch, tmp_path, caplog):
     calls = _stub_cap(monkeypatch)
     monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
@@ -466,13 +475,6 @@ def test_plain_run_resolves_budget_once(monkeypatch, tmp_path):
         lambda *a, **k: n.append(1) or real(*a, **k),
     )
 
-    def _no_second_resolve(*a, **k):
-        pytest.fail("budget path must not re-resolve")
-
-    for target in (cli, cpu_budget_mod):
-        monkeypatch.setattr(
-            target, "resolve_process_cap", _no_second_resolve, raising=False
-        )
     _stub_plan(monkeypatch)
     cli.run_tracking_cli(_videos(tmp_path, 1), cpu_budget=8)
     assert calls == [8, "bind"] and n == [1]

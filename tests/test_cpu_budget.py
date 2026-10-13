@@ -122,23 +122,36 @@ def test_plan_cpu_table(jobs, n_videos, cores, gpu_bound, tpj, expected):
     )
 
 
-def test_resolve_process_cap_precedence():
+def test_single_run_cpu_cap_precedence():
     env = {"HYDRA_CPU_THREADS": "3", "HYDRA_CPU_BUDGET": "8"}
-    assert cb.resolve_process_cap(6, env=env, usable=16) == 3
-    assert cb.resolve_process_cap(6, env={"HYDRA_CPU_BUDGET": "8"}, usable=16) == 6
-    assert cb.resolve_process_cap(None, env={"HYDRA_CPU_BUDGET": "8"}, usable=16) == 8
-    assert cb.resolve_process_cap(None, env={}, usable=16) is None
+    assert cb.single_run_cpu_cap(6, env=env, usable=16) == 3
+    assert cb.single_run_cpu_cap(6, env={"HYDRA_CPU_BUDGET": "8"}, usable=16) == 6
+    assert cb.single_run_cpu_cap(None, env={"HYDRA_CPU_BUDGET": "8"}, usable=16) == 8
+    assert cb.single_run_cpu_cap(None, env={}, usable=16) is None
     assert (
-        cb.resolve_process_cap(None, env={"HYDRA_CPU_THREADS": "junk"}, usable=16)
+        cb.single_run_cpu_cap(None, env={"HYDRA_CPU_THREADS": "junk"}, usable=16)
         is None
     )
+
+
+def test_single_run_explicit_budget_can_only_lower_inherited_threads():
+    """An explicit budget is a ceiling under HYDRA_CPU_THREADS, never ignored."""
+    inherited = {"HYDRA_CPU_THREADS": "16"}
+    assert cb.single_run_cpu_cap(4, env=inherited, usable=32) == 4
+    assert cb.single_run_cpu_cap(24, env=inherited, usable=32) == 16
+    # Invalid / absent explicit budget -> the inherited cap stands.
+    assert cb.single_run_cpu_cap(None, env=inherited, usable=32) == 16
+    assert cb.single_run_cpu_cap(-3, env=inherited, usable=32) == 16
+    # HYDRA_CPU_BUDGET never overrides the inherited per-child cap.
+    env = {"HYDRA_CPU_THREADS": "16", "HYDRA_CPU_BUDGET": "4"}
+    assert cb.single_run_cpu_cap(None, env=env, usable=32) == 16
 
 
 def test_negative_request_is_ignored_with_warning():
     b = cb.resolve_cpu_budget(-3, env={}, usable=8)
     assert (b.cores, b.source) == (8, "auto") and b.warnings
-    assert cb.resolve_process_cap(-3, env={}, usable=16) is None
-    assert cb.resolve_process_cap(-3, env={"HYDRA_CPU_BUDGET": "4"}, usable=16) == 4
+    assert cb.single_run_cpu_cap(-3, env={}, usable=16) is None
+    assert cb.single_run_cpu_cap(-3, env={"HYDRA_CPU_BUDGET": "4"}, usable=16) == 4
 
 
 def test_usable_cores_container_root_cgroup(tmp_path):
