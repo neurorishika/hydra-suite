@@ -574,3 +574,144 @@ def test_open_calibration_dialog_applies_the_budget(orchestrator, monkeypatch):
     orchestrator._params_or_report_limit = lambda _ctx: None  # stop after cap
     orchestrator.open_calibration_dialog()
     assert calls == [4]
+
+
+# --- fix wave 4: calibrate vs. background work; outliving calibration worker --
+
+
+def test_open_calibration_dialog_refuses_while_background_work_runs(
+    orchestrator, monkeypatch
+):
+    """Calibrate must not re-cap pools under a live cache builder (or measure
+    concurrently with it): refuse, like the tracking/calibration busy cases."""
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    warnings = []
+    monkeypatch.setattr(
+        tracking_mod.QMessageBox,
+        "warning",
+        lambda *a, **k: warnings.append(a[1] if len(a) > 1 else ""),
+    )
+    orchestrator._mw.config.cpu_budget = 4
+    orchestrator._mw.current_video_path = "v.mp4"
+    orchestrator._mw._cache_builder_worker = _Running(True)
+    reached = []
+    orchestrator._params_or_report_limit = lambda _ctx: reached.append(1)
+    orchestrator.open_calibration_dialog()
+    assert calls == [] and reached == [] and warnings
+
+
+def test_calibration_dialog_relays_worker_thread_finished(monkeypatch):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    import hydra_suite.trackerkit.gui.dialogs.calibration as cal_mod
+
+    QApplication.instance() or QApplication([])
+    slots = {}
+
+    class _Sig:
+        def __init__(self, name):
+            self.name = name
+
+        def connect(self, slot):
+            slots[self.name] = slot
+
+    class _FakeWorker:
+        def __init__(self, *a, **k):
+            for name in ("status", "completed", "error", "finished"):
+                setattr(self, name, _Sig(name))
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    monkeypatch.setattr(cal_mod, "CalibrationWorker", _FakeWorker)
+    dialog = cal_mod.CalibrationDialog(
+        params={},
+        config=object(),
+        video_path="/tmp/v.mp4",
+        frame_width=64,
+        frame_height=48,
+        start_frame=0,
+        end_frame=10,
+        realtime=False,
+        cache_dir=None,
+        use_cached_detections=False,
+        default_budget_seconds=60.0,
+    )
+    try:
+        fired = []
+        dialog.calibration_thread_finished.connect(lambda: fired.append(1))
+        dialog._start()
+        slots["finished"]()  # the worker's QThread.finished
+        assert fired == [1]
+    finally:
+        dialog.deleteLater()
+
+
+def test_calibration_thread_finished_reapplies_a_deferred_budget(
+    orchestrator, monkeypatch
+):
+    """A budget change made while a cancelled calibration outlives its dialog
+    is deferred, then applied when the worker thread finishes."""
+    import hydra_suite.core.inference.config as inf_config
+    import hydra_suite.trackerkit.calibrate_cli as calibrate_cli
+    import hydra_suite.trackerkit.gui.dialogs.calibration as cal_mod
+
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    running = [False]
+    relay = {}
+
+    class _Relay:
+        def connect(self, slot):
+            relay["slot"] = slot
+
+    class _FakeDialog:
+        result_payload = None
+
+        def __init__(self, **_k):
+            self.calibration_thread_finished = _Relay()
+
+        def exec(self):
+            running[0] = True  # cancelled; worker outlives the dialog
+
+        def is_calibration_running(self):
+            return running[0]
+
+    monkeypatch.setattr(cal_mod, "CalibrationDialog", _FakeDialog)
+    monkeypatch.setattr(inf_config, "build_inference_config_from_params", lambda p: 0)
+    monkeypatch.setattr(
+        calibrate_cli,
+        "derive_context_inputs",
+        lambda *a, **k: SimpleNamespace(
+            start_frame=0,
+            end_frame=1,
+            realtime=False,
+            cache_dir=None,
+            use_cached_detections=False,
+        ),
+    )
+    mw = orchestrator._mw
+    mw.config.cpu_budget = 2
+    mw.config.inference_autotune_budget_seconds = 60
+    mw.current_video_path = "v.mp4"
+    mw.btn_start = SimpleNamespace(setEnabled=lambda *_: None)
+    orchestrator._panels = SimpleNamespace(
+        setup=SimpleNamespace(
+            chk_use_cached_detections=SimpleNamespace(isChecked=lambda: False)
+        )
+    )
+    orchestrator._config = mw.config
+    orchestrator._params_or_report_limit = lambda _ctx: {}
+    orchestrator.open_calibration_dialog()
+    assert calls == [2]  # applied at calibration start
+    mw.config.cpu_budget = 6
+    orchestrator.apply_cpu_budget_now()
+    assert calls == [2]  # deferred: the worker is still running
+    running[0] = False
+    relay["slot"]()  # worker QThread.finished
+    assert calls == [2, 6]

@@ -156,6 +156,20 @@ class TrackingOrchestrator:
             )
             return
 
+        # Same busy-state convention for any other heavy background work
+        # (optimizer cache build, post-processing/export workers): measuring
+        # alongside it would be contaminated, and the start-site re-cap below
+        # would resize thread pools under it.
+        if self._background_work_active():
+            QMessageBox.warning(
+                self._mw,
+                "Background work in progress",
+                "Calibration cannot run while background work (such as "
+                "preparing optimizer replay evidence) is still running. Wait "
+                "for it to finish, then calibrate.",
+            )
+            return
+
         video_path = str(self._mw.current_video_path or "").strip()
         if not video_path:
             QMessageBox.warning(
@@ -167,7 +181,8 @@ class TrackingOrchestrator:
         # cap via HYDRA_CPU_THREADS) must measure under the current budget,
         # including one changed while a deferring worker ran. Before the
         # inference config is built: AprilTag threads are fixed there. Safe:
-        # no track or calibration is active (checked above).
+        # no track, calibration or other background worker is active (all
+        # refused above), so no live pool is resized.
         self._apply_cpu_budget()
 
         from hydra_suite.core.inference.config import build_inference_config_from_params
@@ -211,6 +226,9 @@ class TrackingOrchestrator:
         # dialog (reject() waits only 5s), and _calibration_is_active must
         # still see it so start_full keeps refusing.
         self._calibration_dialog = dialog
+        # A CPU-budget change made while such a worker outlives the dialog is
+        # deferred; re-apply it once the search thread has really finished.
+        dialog.calibration_thread_finished.connect(self._on_calibration_thread_finished)
         self._mw.btn_start.setEnabled(False)
         try:
             dialog.exec()
@@ -1347,6 +1365,11 @@ class TrackingOrchestrator:
         """
         if self._tracking_is_active() or self._calibration_is_active():
             return True
+        return self._background_work_active()
+
+    def _background_work_active(self) -> bool:
+        """True while any other heavy GUI worker runs (cache builder,
+        post-processing/export workers, session worker, csv writer)."""
         has_active = getattr(self._mw, "_has_active_tracking_workers", None)
         if has_active is not None and has_active():
             return True  # includes the cache builder and every export worker
@@ -1620,6 +1643,14 @@ class TrackingOrchestrator:
                 f"{ok}/{len(result.jobs)} videos succeeded.\n"
                 "Per-video logs are in each video's <stem>_logs/ folder.",
             )
+
+    def _on_calibration_thread_finished(self) -> None:
+        """The calibration worker's QThread.finished (relayed by the dialog).
+
+        ``_calibration_is_active`` reads the worker's ``isRunning()``, which is
+        already False here, so a deferred budget change applies now.
+        """
+        self.apply_cpu_budget_now()
 
     def on_cache_builder_thread_finished(self) -> None:
         """QThread.finished of the optimizer replay-evidence cache builder.
