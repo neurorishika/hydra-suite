@@ -1497,7 +1497,7 @@ class TrackingEngineCore:
                     logger.error(
                         "Cached tracking replay requires a cache covering "
                         "frames %d-%d, but it is incomplete (missing e.g. %s). "
-                        "Please re-run forward tracking over the full range.",
+                        "Please re-run forward tracking over this range.",
                         start_frame,
                         end_frame,
                         _missing,

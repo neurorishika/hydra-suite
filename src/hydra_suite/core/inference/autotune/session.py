@@ -80,7 +80,14 @@ def derive_artifact_batch_size(
     return max(sizes, default=preflight.baseline.detection_batch_size)
 
 
-def _cache_set_fully_reusable(config, cache_dir, video_path: str, params: dict) -> bool:
+def _cache_set_fully_reusable(
+    config,
+    cache_dir,
+    video_path: str,
+    params: dict,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
+) -> bool:
     """Whether a run reusing ``cache_dir`` would REALLY replay every stage.
 
     ``prior_counts`` alone cannot answer this: ``sample_detection_workload``
@@ -119,7 +126,16 @@ def _cache_set_fully_reusable(config, cache_dir, video_path: str, params: dict) 
             params.get("ROI_MASK", None),
             read_only=True,
         )
-        return bool(cache_set_is_fully_reusable(caches))
+        if not cache_set_is_fully_reusable(caches):
+            return False
+        # Per-animal members may cover only part of detection's frames; the
+        # run replays only if every member holds the requested window.
+        if start_frame is None or end_frame is None or int(end_frame) < 0:
+            return caches.detection is not None and all(
+                handle.coverage_ranges() == caches.detection.coverage_ranges()
+                for handle in caches.all_handles()
+            )
+        return caches.covers_frame_range(int(start_frame), int(end_frame))
     except Exception:
         logger.debug("Cache-reuse probe failed; treating the run as tunable")
         return False
@@ -198,7 +214,9 @@ def build_autotune_context(
     if (
         use_cached_detections
         and prior_counts
-        and _cache_set_fully_reusable(config, cache_dir, video_path, params)
+        and _cache_set_fully_reusable(
+            config, cache_dir, video_path, params, start_frame, end_frame
+        )
     ):
         execution_mode = "cache_replay"
     run_context = TrackingRunContext(
