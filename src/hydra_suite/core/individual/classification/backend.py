@@ -844,9 +844,11 @@ class ClassifierBackend:
             probe_trt_session_in_child,
         )
         from hydra_suite.runtime.artifact_lock import artifact_build_lock
+        from hydra_suite.runtime.cpu_budget import current_cpu_cap
         from hydra_suite.runtime.onnx_providers import (
             execution_providers_for,
             has_tensorrt_provider,
+            session_options_for,
             tensorrt_ep_lock_target,
         )
 
@@ -890,9 +892,17 @@ class ClassifierBackend:
                             "TensorRT engine build failed in an isolated probe "
                             f"process (exit {probe.returncode}): {probe.detail}"
                         )
-                    self._model = ort.InferenceSession(str(peer), providers=providers)
+                    self._model = ort.InferenceSession(
+                        str(peer),
+                        providers=providers,
+                        sess_options=session_options_for(current_cpu_cap()),
+                    )
             else:
-                self._model = ort.InferenceSession(str(peer), providers=providers)
+                self._model = ort.InferenceSession(
+                    str(peer),
+                    providers=providers,
+                    sess_options=session_options_for(current_cpu_cap()),
+                )
         except Exception as gpu_exc:
             if is_gpu_requested and _looks_like_cuda_alloc_failure(gpu_exc):
                 logger.warning(
@@ -902,7 +912,9 @@ class ClassifierBackend:
                     gpu_exc,
                 )
                 self._model = ort.InferenceSession(
-                    str(peer), providers=["CPUExecutionProvider"]
+                    str(peer),
+                    providers=["CPUExecutionProvider"],
+                    sess_options=session_options_for(current_cpu_cap()),
                 )
                 is_gpu_requested = False
             else:
@@ -933,9 +945,15 @@ class ClassifierBackend:
         import onnxruntime as ort
 
         from hydra_suite.paths import get_data_dir
+        from hydra_suite.runtime.cpu_budget import current_cpu_cap
+        from hydra_suite.runtime.onnx_providers import session_options_for
 
         # Probe input metadata with a cheap CPU-only session — no GPU work.
-        probe = ort.InferenceSession(str(peer_path), providers=["CPUExecutionProvider"])
+        probe = ort.InferenceSession(
+            str(peer_path),
+            providers=["CPUExecutionProvider"],
+            sess_options=session_options_for(current_cpu_cap()),
+        )
         inp = probe.get_inputs()[0]
         inp_name = inp.name
         h, w = self._metadata.input_size

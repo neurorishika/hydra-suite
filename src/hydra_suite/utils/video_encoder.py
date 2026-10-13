@@ -21,6 +21,8 @@ from typing import Optional
 
 import numpy as np
 
+from hydra_suite.runtime.cpu_budget import current_cpu_cap
+
 # ── Global state ──────────────────────────────────────────────────────────────
 
 _BACKEND_CACHE: Optional[str] = None
@@ -295,6 +297,9 @@ class VideoEncoder:
                 self._stream.width = self._width
                 self._stream.height = self._height
                 self._stream.pix_fmt = "yuv420p"
+                cap = current_cpu_cap()
+                if cap is not None and self._backend == "pyav_software":
+                    self._stream.thread_count = cap
                 if opts:
                     self._stream.options = opts
                 if self._backend in _HW_RATE_CONTROLLED:

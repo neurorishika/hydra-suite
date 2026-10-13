@@ -166,3 +166,14 @@ def execution_providers_for(
     if include_cpu_fallback or not providers:
         _append_provider(providers, "CPUExecutionProvider")
     return providers
+
+
+def session_options_for(threads: int | None):
+    """ORT SessionOptions honouring the CPU cap; None keeps ORT defaults."""
+    if threads is None:
+        return None
+    import onnxruntime as ort
+
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = max(1, int(threads))
+    return opts

@@ -158,8 +158,13 @@ def _export_metadata(path: Path) -> Dict[str, Any]:
             except ImportError:
                 import onnxruntime as ort
 
+                from hydra_suite.runtime.cpu_budget import current_cpu_cap
+                from hydra_suite.runtime.onnx_providers import session_options_for
+
                 session = ort.InferenceSession(
-                    str(path), providers=["CPUExecutionProvider"]
+                    str(path),
+                    providers=["CPUExecutionProvider"],
+                    sess_options=session_options_for(current_cpu_cap()),
                 )
                 raw = dict(session.get_modelmeta().custom_metadata_map)
             meta: Dict[str, Any] = {}

@@ -225,6 +225,11 @@ def current_cpu_cap() -> Optional[int]:
     return _cap
 
 
+def apriltag_thread_count(params) -> int:
+    """AprilTag detector threads: ``APRILTAG_THREADS`` (default 4), capped."""
+    return capped(int(params.get("APRILTAG_THREADS", 4)), current_cpu_cap())
+
+
 def _env_min(original: Optional[str], n: int) -> str:
     parsed = _positive_int(original)
     return str(n if parsed is None else min(parsed, n))

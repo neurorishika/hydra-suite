@@ -114,6 +114,9 @@ class OnnxSessionRunner:
     ) -> None:
         import onnxruntime as ort
 
+        from hydra_suite.runtime.cpu_budget import current_cpu_cap
+        from hydra_suite.runtime.onnx_providers import session_options_for
+
         providers = execution_providers_for(resolved)
         if has_tensorrt_provider(providers):
             # ORT builds its TRT engine into the shared per-machine cache dir
@@ -122,10 +125,16 @@ class OnnxSessionRunner:
             # beside the model, which may be read-only.
             with artifact_build_lock(tensorrt_ep_lock_target(model_path)):
                 self._session = ort.InferenceSession(
-                    str(model_path), providers=providers
+                    str(model_path),
+                    providers=providers,
+                    sess_options=session_options_for(current_cpu_cap()),
                 )
         else:
-            self._session = ort.InferenceSession(str(model_path), providers=providers)
+            self._session = ort.InferenceSession(
+                str(model_path),
+                providers=providers,
+                sess_options=session_options_for(current_cpu_cap()),
+            )
         self.input_name = self._session.get_inputs()[0].name
         self.output_names = [output.name for output in self._session.get_outputs()]
         self.input_hw, self.input_channels = _detect_onnx_input_spec(self._session)

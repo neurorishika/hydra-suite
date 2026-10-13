@@ -30,6 +30,8 @@ from typing import Callable, NamedTuple, Optional, Protocol, Sequence
 import cv2
 import numpy as np
 
+from hydra_suite.runtime.cpu_budget import current_cpu_cap
+
 logger = logging.getLogger(__name__)
 
 
@@ -217,6 +219,9 @@ class _PyAVReader:
             self._cc = cc
         else:
             self._stream.thread_type = "AUTO"
+            cap = current_cpu_cap()
+            if cap is not None:
+                self._stream.thread_count = cap
 
     def _close_container(self) -> None:
         if self._cc is not None:
