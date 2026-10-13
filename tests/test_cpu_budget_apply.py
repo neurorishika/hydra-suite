@@ -181,6 +181,18 @@ def test_run_bgsub_batch_binds_the_calling_thread(monkeypatch):
     assert out == [] and calls == [1]
 
 
+def test_bg_optimization_binds_the_calling_thread(monkeypatch):
+    """The bg optimizer's trials reach the numba parallel kernel on the
+    optimizer QThread, so that thread must bind before any work."""
+    from hydra_suite.core.background import optimizer
+
+    calls = []
+    monkeypatch.setattr(optimizer, "bind_thread_cpu_cap", lambda: calls.append(1))
+    monkeypatch.setattr(optimizer, "optuna", None)  # earliest return
+    optimizer.run_bg_optimization("missing.mp4", {}, {}, {}, 1, 1, "tpe")
+    assert calls == [1]
+
+
 def test_numba_env_never_desyncs_from_numba_config():
     """CRITICAL regression: numba re-reads NUMBA_* env on every compile and
     raises once its pool is launched if NUMBA_NUM_THREADS changed. Cap, bind,

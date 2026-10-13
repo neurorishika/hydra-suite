@@ -26,6 +26,8 @@ from typing import Any, Callable, Dict, List, Optional
 import cv2
 import numpy as np
 
+from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
+
 try:
     import optuna
 except ImportError:  # pragma: no cover
@@ -613,6 +615,10 @@ def run_bg_optimization(
     QThread method, but reports progress via ``progress_cb`` and honors
     ``stop_check`` instead of emitting Qt signals / reading ``self._stop_requested``.
     """
+
+    # Trials run BackgroundModel (the numba parallel bgsub kernel) on the
+    # calling thread; numba pools are thread-local, so bind the CPU cap here.
+    bind_thread_cpu_cap()
 
     def _stopped() -> bool:
         return stop_check() if stop_check is not None else False
