@@ -283,24 +283,172 @@ def test_refresh_cpu_plan_label_tolerates_missing_label(monkeypatch):
     orch.refresh_cpu_plan_label()  # no label yet: must not raise
 
 
-def test_refresh_cpu_plan_label_sets_text(monkeypatch):
-    _usable(monkeypatch, 8)
+def _label_orchestrator(monkeypatch, *, jobs, gpus="", cuda_devices=(), cpu_budget=0):
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.batch_fanout.host_has_cuda", lambda: bool(cuda_devices)
+    )
     label = SimpleNamespace(text="")
     label.setText = lambda t: setattr(label, "text", t)
     setup = SimpleNamespace(
         lbl_batch_parallel_cpu_plan=label,
-        spin_batch_parallel_jobs=SimpleNamespace(value=lambda: 3),
-        edit_batch_parallel_gpus=SimpleNamespace(isHidden=lambda: True),
+        batch_parallel_cuda_devices=list(cuda_devices),
+    )
+    config = SimpleNamespace(
+        cpu_budget=cpu_budget, batch_parallel_jobs=jobs, batch_parallel_gpus=gpus
     )
     orch = TrackingOrchestrator(
-        SimpleNamespace(
-            config=SimpleNamespace(cpu_budget=0), batch_videos=["a", "b", "c"]
-        ),
-        SimpleNamespace(),
+        SimpleNamespace(config=config, batch_videos=["a", "b", "c"]),
+        config,
         SimpleNamespace(setup=setup),
     )
+    return orch, label
+
+
+def _fake_gpus(n):
+    from hydra_suite.runtime.cuda_devices import CudaDevice
+
+    return [CudaDevice(index=i, uuid=f"GPU-{i:04d}", name="Fake") for i in range(n)]
+
+
+def test_refresh_cpu_plan_label_sets_text(monkeypatch):
+    _usable(monkeypatch, 8)
+    orch, label = _label_orchestrator(monkeypatch, jobs=3)
     orch.refresh_cpu_plan_label()
     assert label.text.startswith("3 job(s) x 2 thread(s) of 8 core(s)")
+
+
+def test_plan_label_honours_inherited_cpu_threads_ceiling(monkeypatch):
+    _usable(monkeypatch, 16)
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "4")
+    orch, label = _label_orchestrator(monkeypatch, jobs=2)
+    orch.refresh_cpu_plan_label()
+    assert label.text.startswith("2 job(s) x 2 thread(s) of 4 core(s)")
+
+
+def test_plan_label_clamps_jobs_to_the_gpu_count(monkeypatch):
+    _usable(monkeypatch, 16)
+    orch, label = _label_orchestrator(
+        monkeypatch, jobs=8, gpus="auto", cuda_devices=_fake_gpus(2)
+    )
+    orch.refresh_cpu_plan_label()
+    assert label.text.startswith("2 job(s) x 8 thread(s) of 16 core(s)")
+
+
+def test_plan_label_matches_the_runs_plan(monkeypatch):
+    """Label and run share one planner: same jobs and threads per job."""
+    _usable(monkeypatch, 12)
+    devices = _fake_gpus(3)
+    orch, label = _label_orchestrator(
+        monkeypatch, jobs=0, gpus="auto", cuda_devices=devices, cpu_budget=9
+    )
+    monkeypatch.setattr(
+        "hydra_suite.runtime.cuda_devices.list_cuda_devices", lambda **_: devices
+    )
+    orch._mw._on_batch_parallel_changed = lambda: None
+    orch.refresh_cpu_plan_label()
+    options = orch._resolve_fanout_options(n_videos=3)
+    assert label.text.startswith(
+        f"{options.jobs} job(s) x {options.threads_per_job} thread(s) of 9 core(s)"
+    )
+
+
+def test_plan_label_shows_an_invalid_gpu_selection(monkeypatch):
+    _usable(monkeypatch, 8)
+    orch, label = _label_orchestrator(
+        monkeypatch, jobs=2, gpus="7", cuda_devices=_fake_gpus(2)
+    )
+    orch.refresh_cpu_plan_label()  # must not raise on a bad selector
+    assert label.text.startswith("GPU selection:")
+
+
+# --- eager process cap (I1) -------------------------------------------------
+
+
+class _Running:
+    def __init__(self, running=True):
+        self._running = running
+
+    def isRunning(self):
+        return self._running
+
+
+def _record_caps(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tracking_mod, "set_process_cpu_cap", calls.append)
+    return calls
+
+
+def test_apply_cpu_budget_now_applies_when_idle(orchestrator, monkeypatch):
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    orchestrator._mw.config.cpu_budget = 5
+    orchestrator.apply_cpu_budget_now()
+    orchestrator._mw.config.cpu_budget = 0
+    orchestrator.apply_cpu_budget_now()  # Auto + no env -> lift (no-op if never set)
+    assert calls == [5, None]
+
+
+@pytest.mark.parametrize(
+    "attr", ["batch_fanout_worker", "tracking_worker", "session_worker"]
+)
+def test_apply_cpu_budget_now_is_deferred_while_a_run_is_active(
+    orchestrator, monkeypatch, attr
+):
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    orchestrator._mw.config.cpu_budget = 5
+    setattr(orchestrator._mw, attr, _Running(True))
+    orchestrator.apply_cpu_budget_now()
+    assert calls == []
+    setattr(orchestrator._mw, attr, _Running(False))
+    orchestrator.apply_cpu_budget_now()
+    assert calls == [5]
+
+
+def test_fanout_thread_finished_reapplies_the_budget(orchestrator, monkeypatch):
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    orchestrator._mw.config.cpu_budget = 6
+    orchestrator._mw.batch_fanout_worker = _Running(False)
+    monkeypatch.setattr(
+        orchestrator,
+        "_cleanup_thread_reference",
+        lambda attr: setattr(orchestrator._mw, attr, None),
+    )
+    orchestrator._on_batch_fanout_thread_finished()
+    assert orchestrator._mw.batch_fanout_worker is None
+    assert calls == [6]
+
+
+def _real_main_window(monkeypatch):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    QApplication.instance() or QApplication([])
+    monkeypatch.setattr(MainWindow, "_save_advanced_config", lambda self: None)
+    monkeypatch.setattr(MainWindow, "_load_advanced_config", lambda self: {})
+    return MainWindow()
+
+
+@pytest.mark.parametrize("env_budget, expected", [("3", [3]), (None, [None])])
+def test_main_window_applies_the_cpu_budget_at_startup(
+    monkeypatch, env_budget, expected
+):
+    _usable(monkeypatch, 16)
+    if env_budget is not None:
+        monkeypatch.setenv("HYDRA_CPU_BUDGET", env_budget)
+    calls = _record_caps(monkeypatch)
+    window = _real_main_window(monkeypatch)
+    try:
+        assert calls == expected
+        calls.clear()
+        window._setup_panel.spin_cpu_budget.setValue(2)
+        assert calls == [2]
+    finally:
+        window.close()
+        window.deleteLater()
 
 
 def test_parallel_tooltip_byte_identity_claim_is_qualified():

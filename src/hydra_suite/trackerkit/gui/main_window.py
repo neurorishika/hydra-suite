@@ -943,6 +943,8 @@ class MainWindow(QMainWindow):
             self._tracking_orch.open_calibration_dialog
         )
         self._tracking_orch.refresh_cpu_plan_label()
+        # Apply the CPU budget (HYDRA_CPU_* env) eagerly, before any heavy path.
+        self._tracking_orch.apply_cpu_budget_now()
         from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
         self._config_orch = ConfigOrchestrator(
@@ -1743,6 +1745,7 @@ class MainWindow(QMainWindow):
         self.config.cpu_budget = int(panel.spin_cpu_budget.value())
         if hasattr(self, "_tracking_orch"):
             self._tracking_orch.refresh_cpu_plan_label()
+            self._tracking_orch.apply_cpu_budget_now()
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""

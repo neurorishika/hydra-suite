@@ -1327,33 +1327,117 @@ class TrackingOrchestrator:
             single_run_cpu_cap(budget if budget > 0 else None, logger=logger)
         )
 
+    def _cpu_cap_change_deferred(self) -> bool:
+        """True while a run whose thread pools a re-cap would move is active.
+
+        A fan-out is the load-bearing case: the parent runs uncapped and
+        ``build_child_env`` takes ``min()`` with ``os.environ``, so a cap set
+        mid-batch would shrink every child spawned afterwards. A running
+        tracking/session worker or calibration search would have its torch and
+        BLAS pools resized under it. Such runs re-apply at their own start (or,
+        for a fan-out, when its thread finishes).
+        """
+        if self._tracking_is_active() or self._calibration_is_active():
+            return True
+        session = getattr(self._mw, "session_worker", None)
+        is_running = getattr(session, "isRunning", None)
+        return bool(is_running is not None and is_running())
+
+    def apply_cpu_budget_now(self) -> None:
+        """Eagerly apply the CPU budget to this process (I1).
+
+        Called at startup and on every CPU-budget change, so every heavy GUI
+        path (calibration, parameter-helper previews and optimizers, cache
+        builders) runs under the same cap as tracking -- not only the workers
+        whose start sites call :meth:`_apply_cpu_budget`. With budget 0 and no
+        ``HYDRA_CPU_*`` env this is ``set_process_cpu_cap(None)`` on a process
+        that was never capped: a strict no-op. Deferred while a run is active.
+        """
+        if self._cpu_cap_change_deferred():
+            logger.debug("CPU budget change deferred: a run is active.")
+            return
+        self._apply_cpu_budget()
+
+    def _plan_parallel_batch(self, devices, n_videos: int, *, quiet: bool = False):
+        """The fan-out plan for ``devices``: the run's and the label's.
+
+        Returns ``(options, plan, cpu_budget, requested_slots)``: the planned
+        ``FanoutOptions``, its ``CpuPlan``, the effective budget request (after
+        the inherited ``HYDRA_CPU_THREADS`` ceiling) and the slot count before
+        the CPU clamp. ``quiet`` skips the invalid-env warning (the label
+        refreshes on every spin tick; the run logs it).
+        """
+        from hydra_suite.runtime.cpu_budget import ENV_CPU_THREADS, positive_int
+        from hydra_suite.trackerkit.batch_fanout import (
+            FanoutOptions,
+            plan_fanout_cpu,
+            resolve_slot_count,
+        )
+
+        cfg = self._mw.config
+        requested = int(getattr(cfg, "batch_parallel_jobs", 0) or 0)
+        if devices and requested <= 0:
+            # "Unspecified": the scheduler gives one slot per selected GPU.
+            jobs = None
+        else:
+            jobs = max(1, requested or 1)
+            if devices:
+                jobs = min(jobs, len(devices))
+        cpu_budget = int(getattr(cfg, "cpu_budget", 0) or 0) or None
+        # Same as the CLI: a GUI already running under HYDRA_CPU_THREADS (a
+        # shell export or an outer fan-out) bounds what its children share.
+        inherited = (
+            positive_int(os.environ.get(ENV_CPU_THREADS))
+            if quiet
+            else inherited_cpu_threads(logger=logger)
+        )
+        if inherited is not None:
+            cpu_budget = inherited if cpu_budget is None else min(cpu_budget, inherited)
+        # threads_per_job stays None (planned): 0 would mean an explicit
+        # one-thread override.
+        base = FanoutOptions(gpus=list(devices), jobs=jobs, log_level="INFO")
+        options, plan = plan_fanout_cpu(base, n_videos=n_videos, cpu_budget=cpu_budget)
+        return options, plan, cpu_budget, resolve_slot_count(base)
+
     def refresh_cpu_plan_label(self) -> None:
         """Show how the CPU budget splits across the parallel batch jobs.
 
-        A display approximation (GPU-boundness is read from whether the GPU
-        selector is enabled for this host, i.e. not explicitly hidden -- not
-        ``isVisible``, which is False whenever an ancestor is collapsed); the
-        authoritative plan is computed at start from the resolved devices.
+        Uses the run's own planner (:meth:`_plan_parallel_batch`: inherited
+        ``HYDRA_CPU_THREADS`` ceiling, GPU-count clamp, CPU job clamp) on the
+        GPU list the setup panel detected at construction, so the label and
+        the run cannot drift. It does not re-run ``nvidia-smi`` (this fires on
+        every spin tick); the start re-detects devices.
         """
-        from hydra_suite.runtime.cpu_budget import plan_cpu, resolve_cpu_budget
-        from hydra_suite.trackerkit.batch_fanout import describe_cpu_plan
+        from hydra_suite.runtime.cpu_budget import resolve_cpu_budget
+        from hydra_suite.runtime.cuda_devices import parse_gpu_selectors
+        from hydra_suite.trackerkit.batch_fanout import (
+            decide_gpu_slots,
+            describe_cpu_plan,
+            host_has_cuda,
+        )
 
         panel = getattr(self._panels, "setup", None)
         label = getattr(panel, "lbl_batch_parallel_cpu_plan", None)
         if label is None:
             return  # panel still under construction
-        budget = resolve_cpu_budget(
-            int(getattr(self._mw.config, "cpu_budget", 0) or 0) or None
-        )
-        jobs = int(panel.spin_batch_parallel_jobs.value())
+        cached = list(getattr(panel, "batch_parallel_cuda_devices", None) or [])
+        selection = getattr(self._mw.config, "batch_parallel_gpus", "") or "auto"
+        try:
+            devices = decide_gpu_slots(
+                parse_gpu_selectors(selection),
+                cached,
+                bool(cached) or host_has_cuda(),
+            )
+        except ValueError as exc:
+            label.setText(f"GPU selection: {exc}")
+            return
         n_videos = max(1, len(getattr(self._mw, "batch_videos", None) or []))
-        plan = plan_cpu(
-            jobs=jobs,
-            n_videos=n_videos,
-            budget=budget,
-            gpu_bound=not panel.edit_batch_parallel_gpus.isHidden(),
+        _options, plan, cpu_budget, requested = self._plan_parallel_batch(
+            devices, n_videos, quiet=True
         )
-        label.setText(describe_cpu_plan(plan, budget, jobs))
+        label.setText(
+            describe_cpu_plan(plan, resolve_cpu_budget(cpu_budget), requested)
+        )
 
     def _resolve_fanout_options(self, n_videos: int = 1):
         """Build CPU-planned ``FanoutOptions`` from the Batch › Parallel state.
@@ -1366,12 +1450,7 @@ class TrackingOrchestrator:
             list_cuda_devices,
             parse_gpu_selectors,
         )
-        from hydra_suite.trackerkit.batch_fanout import (
-            FanoutOptions,
-            decide_gpu_slots,
-            host_has_cuda,
-            plan_fanout_cpu,
-        )
+        from hydra_suite.trackerkit.batch_fanout import decide_gpu_slots, host_has_cuda
 
         # The GPU line edit only mirrors into config on editingFinished, so a
         # value typed and left focused would otherwise be silently ignored.
@@ -1395,26 +1474,8 @@ class TrackingOrchestrator:
             QMessageBox.warning(self._mw, "GPU selection", str(exc))
             return None
 
-        requested = int(cfg.batch_parallel_jobs or 0)
-        if devices and requested <= 0:
-            # "Unspecified": the scheduler gives one slot per selected GPU.
-            jobs = None
-        else:
-            jobs = max(1, requested or 1)
-            if devices:
-                jobs = min(jobs, len(devices))
-        cpu_budget = int(getattr(cfg, "cpu_budget", 0) or 0) or None
-        # Same as the CLI: a GUI already running under HYDRA_CPU_THREADS (a
-        # shell export or an outer fan-out) bounds what its children share.
-        inherited = inherited_cpu_threads(logger=logger)
-        if inherited is not None:
-            cpu_budget = inherited if cpu_budget is None else min(cpu_budget, inherited)
-        # threads_per_job stays None (planned): 0 would mean an explicit
-        # one-thread override.
-        options, plan = plan_fanout_cpu(
-            FanoutOptions(gpus=devices, jobs=jobs, log_level="INFO"),
-            n_videos=n_videos,
-            cpu_budget=cpu_budget,
+        options, plan, _budget, _requested = self._plan_parallel_batch(
+            devices, n_videos
         )
         for warning in plan.warnings:
             logger.warning("CPU budget: %s", warning)
@@ -1549,6 +1610,10 @@ class TrackingOrchestrator:
 
     def _on_batch_fanout_thread_finished(self) -> None:
         self._cleanup_thread_reference("batch_fanout_worker")
+        # The fan-out lifted the process cap before it started (the parent
+        # only schedules). Its thread is now done on every path (finish,
+        # error, cancel), so restore the GUI's budget for whatever runs next.
+        self.apply_cpu_budget_now()
 
     def _restore_after_fanout(self) -> None:
         """Return the main window to idle. Idempotent: stop_tracking may race it."""

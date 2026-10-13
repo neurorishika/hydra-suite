@@ -348,6 +348,9 @@ class SetupPanel(QWidget):
         from hydra_suite.runtime.cuda_devices import list_cuda_devices
 
         cuda_devices = list_cuda_devices()
+        # Kept for the CPU-plan label, which must not re-run nvidia-smi on
+        # every spin tick (the run itself re-detects at start).
+        self.batch_parallel_cuda_devices = list(cuda_devices)
         self.chk_batch_parallel = QCheckBox(
             "Run videos in parallel (one process per GPU)"
         )
