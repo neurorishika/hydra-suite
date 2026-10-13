@@ -1075,6 +1075,9 @@ class MainWindow(QMainWindow):
             video_path, cache_path, params
         )
 
+    def _on_cache_builder_thread_finished(self) -> None:
+        self._tracking_orch.on_cache_builder_thread_finished()
+
     def _on_optimizer_cache_built(self, ok: bool, cache_path: str):
         """Called when DetectionCacheBuildWorker finishes. ``cache_path`` is the
         InferenceRunner cache directory."""

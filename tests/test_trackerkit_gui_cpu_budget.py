@@ -496,3 +496,81 @@ def test_apply_cpu_budget_now_defers_on_any_active_main_window_worker(
     active[0] = False
     orchestrator.apply_cpu_budget_now()
     assert calls == [5]
+
+
+# --- fix wave 3: cache builder exit + calibrate start ------------------------
+
+
+class _Finished(_Running):
+    def deleteLater(self):
+        pass
+
+
+def test_cache_builder_thread_finished_reapplies_a_deferred_budget(
+    orchestrator, monkeypatch
+):
+    """A budget change deferred during the optimizer cache build is applied
+    when the builder's QThread finishes (not dropped)."""
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    orchestrator._mw.config.cpu_budget = 5
+    orchestrator._mw._cache_builder_worker = _Finished(True)
+    orchestrator.apply_cpu_budget_now()
+    assert calls == []  # deferred while building
+    orchestrator._mw._cache_builder_worker = _Finished(False)  # thread done
+    orchestrator.on_cache_builder_thread_finished()
+    assert orchestrator._mw._cache_builder_worker is None
+    assert calls == [5]
+
+
+def test_optimizer_cache_builder_wires_qthread_finished(monkeypatch):
+    import hydra_suite.trackerkit.gui.workers.param_optimizer_worker as pow_mod
+    from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
+
+    connected = {}
+
+    class _Sig:
+        def __init__(self, name):
+            self.name = name
+
+        def connect(self, slot):
+            connected[self.name] = slot
+
+    class _FakeBuilder:
+        def __init__(self, *a, **k):
+            self.progress_signal = _Sig("progress")
+            self.finished_signal = _Sig("finished_signal")
+            self.finished = _Sig("finished")
+
+        def start(self):
+            connected["started"] = True
+
+    monkeypatch.setattr(pow_mod, "DetectionCacheBuildWorker", _FakeBuilder)
+    orch = ConfigOrchestrator.__new__(ConfigOrchestrator)
+    ui = SimpleNamespace(
+        setVisible=lambda *_: None, setValue=lambda *_: None, setText=lambda *_: None
+    )
+    handler = object()
+    orch._mw = SimpleNamespace(
+        on_progress_update=None,
+        _on_optimizer_cache_built=None,
+        _on_cache_builder_thread_finished=handler,
+        progress_bar=ui,
+        progress_label=ui,
+    )
+    spin = SimpleNamespace(value=lambda: 0)
+    orch._panels = SimpleNamespace(
+        setup=SimpleNamespace(spin_start_frame=spin, spin_end_frame=spin)
+    )
+    orch._build_optimizer_detection_cache("v.mp4", "/tmp/c", {})
+    assert connected["finished"] is handler and connected["started"]
+
+
+def test_open_calibration_dialog_applies_the_budget(orchestrator, monkeypatch):
+    _usable(monkeypatch, 16)
+    calls = _record_caps(monkeypatch)
+    orchestrator._mw.config.cpu_budget = 4
+    orchestrator._mw.current_video_path = "v.mp4"
+    orchestrator._params_or_report_limit = lambda _ctx: None  # stop after cap
+    orchestrator.open_calibration_dialog()
+    assert calls == [4]

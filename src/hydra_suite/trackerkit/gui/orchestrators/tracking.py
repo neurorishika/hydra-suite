@@ -163,6 +163,13 @@ class TrackingOrchestrator:
             )
             return
 
+        # The calibrating process and its sidecar trials (which inherit the
+        # cap via HYDRA_CPU_THREADS) must measure under the current budget,
+        # including one changed while a deferring worker ran. Before the
+        # inference config is built: AprilTag threads are fixed there. Safe:
+        # no track or calibration is active (checked above).
+        self._apply_cpu_budget()
+
         from hydra_suite.core.inference.config import build_inference_config_from_params
         from hydra_suite.trackerkit.calibrate_cli import derive_context_inputs
         from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
@@ -1613,6 +1620,18 @@ class TrackingOrchestrator:
                 f"{ok}/{len(result.jobs)} videos succeeded.\n"
                 "Per-video logs are in each video's <stem>_logs/ folder.",
             )
+
+    def on_cache_builder_thread_finished(self) -> None:
+        """QThread.finished of the optimizer replay-evidence cache builder.
+
+        A CPU-budget change made while it built was deferred; apply it now.
+        Hooked to QThread.finished (not ``finished_signal``, which fires
+        inside ``run()`` while ``isRunning()`` is still True and would be
+        deferred again); the reference is dropped first so the deferral
+        check sees the builder as gone.
+        """
+        self._cleanup_thread_reference("_cache_builder_worker")
+        self.apply_cpu_budget_now()
 
     def _on_batch_fanout_thread_finished(self) -> None:
         self._cleanup_thread_reference("batch_fanout_worker")
