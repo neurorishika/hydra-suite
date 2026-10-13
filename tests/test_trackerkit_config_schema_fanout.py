@@ -47,3 +47,22 @@ def test_fanout_fields_never_reach_engine_config():
 
     src = Path(mod.__file__).read_text()
     assert "batch_parallel" not in src
+
+
+def test_cpu_budget_round_trips():
+    cfg = TrackerConfig()
+    assert cfg.cpu_budget == 0
+    cfg.cpu_budget = 6
+    assert TrackerConfig.from_dict(cfg.to_dict()).cpu_budget == 6
+    assert TrackerConfig.from_dict({}).cpu_budget == 0
+
+
+def test_cpu_budget_never_reaches_engine_config():
+    """Session state like batch_parallel_*: the sidecar builder never emits it."""
+    from pathlib import Path
+
+    import hydra_suite.trackerkit.engine_params as engine_mod
+    import hydra_suite.trackerkit.gui.orchestrators.config as mod
+
+    assert "cpu_budget" not in Path(mod.__file__).read_text()
+    assert "cpu_budget" not in Path(engine_mod.__file__).read_text()

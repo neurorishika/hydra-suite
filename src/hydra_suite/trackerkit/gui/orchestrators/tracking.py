@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from hydra_suite.runtime.cpu_budget import resolve_process_cap, set_process_cpu_cap
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.dialogs.calibration import describe_calibration_outcome
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
@@ -86,6 +87,7 @@ class TrackingOrchestrator:
         self._config = config
         self._panels = panels
         self._calibration_dialog = None
+        self._last_fanout_cpu_plan = None  # CpuPlan of the last fan-out resolve
 
     def _tracking_is_active(self) -> bool:
         """True while a track (single or fanned-out batch) is running."""
@@ -1042,6 +1044,7 @@ class TrackingOrchestrator:
         worker.warning_signal.connect(self.on_tracking_warning)
         worker.error_signal.connect(self._on_session_error)
         worker.finished_signal.connect(self._on_session_finished)
+        self._apply_cpu_budget()
         worker.start()
 
     def _build_session_config(self):
@@ -1304,12 +1307,53 @@ class TrackingOrchestrator:
         checkbox = getattr(setup, "chk_batch_parallel", None)
         return checkbox is not None and bool(checkbox.isChecked())
 
-    def _resolve_fanout_options(self):
-        """Build ``FanoutOptions`` from the mirrored Batch › Parallel state.
+    def _apply_cpu_budget(self) -> None:
+        """Apply the GUI CPU budget to this process before a worker starts.
+
+        0 ("Auto") defers to ``HYDRA_CPU_THREADS``/``HYDRA_CPU_BUDGET`` and,
+        with neither set, lifts any previous cap (a strict no-op when the
+        process was never capped). Must run on the GUI thread: it is the one
+        controlling thread ``set_process_cpu_cap`` requires.
+        """
+        config = getattr(self._mw, "config", None)
+        budget = int(getattr(config, "cpu_budget", 0) or 0)
+        set_process_cpu_cap(resolve_process_cap(budget if budget > 0 else None))
+
+    def refresh_cpu_plan_label(self) -> None:
+        """Show how the CPU budget splits across the parallel batch jobs.
+
+        A display approximation (GPU-boundness is read from whether the GPU
+        selector is shown); the authoritative plan is computed at start from
+        the resolved devices.
+        """
+        from hydra_suite.runtime.cpu_budget import plan_cpu, resolve_cpu_budget
+        from hydra_suite.trackerkit.batch_fanout import describe_cpu_plan
+
+        panel = getattr(self._panels, "setup", None)
+        label = getattr(panel, "lbl_batch_parallel_cpu_plan", None)
+        if label is None:
+            return  # panel still under construction
+        budget = resolve_cpu_budget(
+            int(getattr(self._mw.config, "cpu_budget", 0) or 0) or None
+        )
+        jobs = int(panel.spin_batch_parallel_jobs.value())
+        n_videos = max(1, len(getattr(self._mw, "batch_videos", None) or []))
+        plan = plan_cpu(
+            jobs=jobs,
+            n_videos=n_videos,
+            budget=budget,
+            gpu_bound=bool(panel.edit_batch_parallel_gpus.isVisible()),
+        )
+        label.setText(describe_cpu_plan(plan, budget, jobs))
+
+    def _resolve_fanout_options(self, n_videos: int = 1):
+        """Build CPU-planned ``FanoutOptions`` from the Batch › Parallel state.
 
         Returns ``None`` when the user's GPU selector cannot be resolved (the
-        warning has already been shown).
+        warning has already been shown). The CPU plan (with its warnings) is
+        kept on ``self._last_fanout_cpu_plan`` for the status line.
         """
+        from hydra_suite.runtime.cpu_budget import ENV_CPU_THREADS, positive_int
         from hydra_suite.runtime.cuda_devices import (
             list_cuda_devices,
             parse_gpu_selectors,
@@ -1318,6 +1362,7 @@ class TrackingOrchestrator:
             FanoutOptions,
             decide_gpu_slots,
             host_has_cuda,
+            plan_fanout_cpu,
         )
 
         # The GPU line edit only mirrors into config on editingFinished, so a
@@ -1350,10 +1395,27 @@ class TrackingOrchestrator:
             jobs = max(1, requested or 1)
             if devices:
                 jobs = min(jobs, len(devices))
-        return FanoutOptions(gpus=devices, jobs=jobs, log_level="INFO")
+        cpu_budget = int(getattr(cfg, "cpu_budget", 0) or 0) or None
+        # Same as the CLI: a GUI already running under HYDRA_CPU_THREADS (a
+        # shell export or an outer fan-out) bounds what its children share.
+        inherited = positive_int(os.environ.get(ENV_CPU_THREADS))
+        if inherited is not None:
+            cpu_budget = inherited if cpu_budget is None else min(cpu_budget, inherited)
+        # threads_per_job stays None (planned): 0 would mean an explicit
+        # one-thread override.
+        options, plan = plan_fanout_cpu(
+            FanoutOptions(gpus=devices, jobs=jobs, log_level="INFO"),
+            n_videos=n_videos,
+            cpu_budget=cpu_budget,
+        )
+        for warning in plan.warnings:
+            logger.warning("CPU budget: %s", warning)
+        self._last_fanout_cpu_plan = plan
+        return options
 
     def start_batch_fanout(self) -> bool:
         """Run the whole batch as headless child processes, one per slot."""
+        from hydra_suite.trackerkit.batch_fanout import resolve_slot_count
         from hydra_suite.trackerkit.batch_plan import BatchPlanError, plan_batch_jobs
         from hydra_suite.trackerkit.gui.dialogs.batch_fanout_dialog import (
             BatchFanoutDialog,
@@ -1392,16 +1454,14 @@ class TrackingOrchestrator:
             QMessageBox.warning(self._mw, "Batch cannot start", str(exc))
             return False
 
-        options = self._resolve_fanout_options()
+        options = self._resolve_fanout_options(n_videos=len(specs))
         if options is None:
             return False
-        # Mirror run_batch_fanout's own slot arithmetic so the status line
-        # cannot claim more slots than the scheduler will actually open.
-        if options.gpus:
-            requested = len(options.gpus) if options.jobs is None else int(options.jobs)
-            slots = max(1, min(requested, len(options.gpus)))
-        else:
-            slots = max(1, int(options.jobs or 1))
+        # The scheduler's own slot arithmetic, so the status line cannot claim
+        # more slots than it will actually open.
+        slots = resolve_slot_count(options)
+        plan = getattr(self, "_last_fanout_cpu_plan", None)
+        cpu_warnings = tuple(getattr(plan, "warnings", ()) or ())
 
         # Never leave a previous run's table parented to the window forever.
         previous = getattr(self._mw, "batch_fanout_dialog", None)
@@ -1441,11 +1501,16 @@ class TrackingOrchestrator:
         self._mw.progress_label.setVisible(True)
         # Busy indicator; the per-job bars live in the dialog.
         self._mw.progress_bar.setRange(0, 0)
-        self._mw.progress_label.setText(
-            f"Parallel batch: {len(specs)} videos on {slots} slot(s)…"
-        )
+        status = f"Parallel batch: {len(specs)} videos on {slots} slot(s)…"
+        if cpu_warnings:
+            status += " CPU budget: " + " ".join(cpu_warnings)
+        self._mw.progress_label.setText(status)
         self._mw._apply_ui_state("tracking")
         dialog.show()
+        # A previous single run's cap sits in os.environ; build_child_env
+        # takes min() with it, so it would shrink every child. The parent
+        # only schedules, so it runs uncapped (no-op if never capped).
+        set_process_cpu_cap(None)
         worker.start()
         logger.info(
             "Parallel batch fan-out started: %d videos, %d slot(s)", len(specs), slots
@@ -1593,6 +1658,7 @@ class TrackingOrchestrator:
 
         self._mw._prepare_tracking_display()
         self._mw._apply_ui_state("preview")
+        self._apply_cpu_budget()
         self._mw.tracking_worker.start()
 
     def _setup_tracking_csv_writer(self, backward_mode):
@@ -1726,6 +1792,7 @@ class TrackingOrchestrator:
 
         self._mw._prepare_tracking_display()
         self._mw._apply_ui_state("tracking")
+        self._apply_cpu_budget()
         self._mw.tracking_worker.start()
 
     def _clear_session_summary_state(self) -> None:

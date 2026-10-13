@@ -942,6 +942,7 @@ class MainWindow(QMainWindow):
         self._setup_panel.calibrate_inference_requested.connect(
             self._tracking_orch.open_calibration_dialog
         )
+        self._tracking_orch.refresh_cpu_plan_label()
         from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
         self._config_orch = ConfigOrchestrator(
@@ -1726,6 +1727,20 @@ class MainWindow(QMainWindow):
             panel.edit_batch_parallel_gpus.text().strip() or "auto"
         )
         panel.container_batch_parallel.setVisible(self.config.batch_parallel)
+        label = getattr(panel, "lbl_batch_parallel_cpu_plan", None)
+        if label is not None:
+            label.setVisible(self.config.batch_parallel)
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()
+
+    def _on_cpu_budget_changed(self, *_args) -> None:
+        """Mirror the CPU-budget spinbox into session state (0 = Auto)."""
+        panel = getattr(self, "_setup_panel", None)
+        if panel is None:
+            return
+        self.config.cpu_budget = int(panel.spin_cpu_budget.value())
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""

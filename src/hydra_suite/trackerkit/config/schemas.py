@@ -30,6 +30,8 @@ class TrackerConfig:
     batch_parallel: bool = False
     batch_parallel_jobs: int = 0  # 0 = one per selected GPU (or 1 without GPUs)
     batch_parallel_gpus: str = "auto"
+    # --- CPU budget (session state; NEVER emitted into the engine config) ---
+    cpu_budget: int = 0  # 0 = auto (all usable cores for fan-out; uncapped run)
 
     # --- ROI ---
     roi_shapes: list = field(default_factory=list)
@@ -83,6 +85,7 @@ class TrackerConfig:
             "batch_parallel": bool(self.batch_parallel),
             "batch_parallel_jobs": int(self.batch_parallel_jobs),
             "batch_parallel_gpus": str(self.batch_parallel_gpus),
+            "cpu_budget": int(self.cpu_budget),
             "roi_shapes": list(self.roi_shapes),
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
@@ -129,6 +132,7 @@ class TrackerConfig:
             batch_parallel=bool(data.get("batch_parallel", False)),
             batch_parallel_jobs=int(data.get("batch_parallel_jobs", 0)),
             batch_parallel_gpus=str(data.get("batch_parallel_gpus", "auto")),
+            cpu_budget=int(data.get("cpu_budget", 0) or 0),
             roi_shapes=list(data.get("roi_shapes", [])),
             roi_current_mode=data.get("roi_current_mode", "circle"),
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),

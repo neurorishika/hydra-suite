@@ -286,6 +286,10 @@ def _patch_devices(monkeypatch, devices, has_cuda):
 
     monkeypatch.setattr(cuda_mod, "list_cuda_devices", lambda **_kw: list(devices))
     monkeypatch.setattr(fanout_mod, "host_has_cuda", lambda: has_cuda)
+    # The options are CPU-planned now; keep the plan independent of this box.
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 16)
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
 
 
 def _capture_warnings(monkeypatch):
@@ -326,7 +330,9 @@ def test_gui_pins_the_selected_devices(monkeypatch):
     _capture_warnings(monkeypatch)
     options = _orchestrator("1")._resolve_fanout_options()
     assert options is not None and options.gpus == [devices[1]]
-    assert options.jobs is None  # unspecified: one slot per selected GPU
+    # Unspecified jobs -> one slot per selected GPU, now resolved by the CPU
+    # plan into an explicit count.
+    assert options.jobs == 1
 
 
 # --- Window-close budget ----------------------------------------------------

@@ -30,6 +30,7 @@ from hydra_suite.runtime.cpu_budget import (
     ENV_CPU_BUDGET,
     ENV_CPU_THREADS,
     THREAD_ENV_VARS,
+    CpuBudget,
     CpuPlan,
     plan_cpu,
     positive_int,
@@ -336,6 +337,17 @@ def plan_fanout_cpu(
         threads_per_job=options.threads_per_job,
     )
     return replace(options, jobs=plan.jobs, threads_per_job=plan.threads_per_job), plan
+
+
+def describe_cpu_plan(plan: CpuPlan, budget: CpuBudget, requested_jobs: int) -> str:
+    """One-line human summary of a fan-out CPU plan (for the GUI label)."""
+    text = (
+        f"{plan.jobs} job(s) x {plan.threads_per_job} thread(s) "
+        f"of {budget.cores} core(s)"
+    )
+    if plan.clamped:
+        text += f" — reduced from {int(requested_jobs)} to fit the CPU budget"
+    return text
 
 
 def default_child_command(

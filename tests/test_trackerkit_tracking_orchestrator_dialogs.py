@@ -598,6 +598,7 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
 
         def start(self) -> None:
             captured["worker_started"] = True
+            captured["cap_before_start"] = "cpu_cap" in captured
 
         def isRunning(self) -> bool:
             return False
@@ -682,7 +683,18 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
         lambda *_args, **_kwargs: fake_plan,
     )
 
+    # The process CPU cap is applied on the GUI thread right before the
+    # worker starts; never touch the real process-global state here.
+    monkeypatch.setattr(
+        tracking_module,
+        "set_process_cpu_cap",
+        lambda n: captured.setdefault("cpu_cap", n),
+    )
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
     orchestrator.start_tracking_on_video(str(video_path), backward_mode=False)
+    assert captured["cap_before_start"] is True
+    assert captured["cpu_cap"] is None  # no budget anywhere: lift/no-op
 
     assert captured["csv_path"] == str(csv_path)
     assert captured["csv_started"] is True
@@ -739,6 +751,7 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
 
         def start(self) -> None:
             captured["worker_started"] = True
+            captured["cap_before_start"] = "cpu_cap" in captured
 
         def isRunning(self) -> bool:
             return False
@@ -792,7 +805,15 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
         FakeTrackingWorker,
     )
 
+    # The process CPU cap is applied on the GUI thread right before the
+    # worker starts; never touch the real process-global state here.
+    monkeypatch.setattr(
+        tracking_module,
+        "set_process_cpu_cap",
+        lambda n: captured.setdefault("cpu_cap", n),
+    )
     orchestrator.start_preview_on_video(str(video_path))
+    assert captured["cap_before_start"] is True
 
     assert captured["worker_started"] is True
     assert captured["worker_args"][0] == str(video_path)
@@ -899,6 +920,13 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
         FakeTrackingWorker,
     )
 
+    # The process CPU cap is applied on the GUI thread right before the
+    # worker starts; never touch the real process-global state here.
+    monkeypatch.setattr(
+        tracking_module,
+        "set_process_cpu_cap",
+        lambda n: captured.setdefault("cpu_cap", n),
+    )
     orchestrator.start_preview_on_video(str(video_path))
 
     # The accelerator OBB backend is downgraded to native torch for preview:
