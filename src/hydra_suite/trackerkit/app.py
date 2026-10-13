@@ -231,6 +231,15 @@ Examples:
         ),
     )
     track_parser.add_argument(
+        "--longest-first",
+        action="store_true",
+        help=(
+            "Fan-out only: launch the videos with the most frames to track "
+            "first, so one long video does not run alone at the end of the "
+            "batch. Default: input order."
+        ),
+    )
+    track_parser.add_argument(
         "--threads-per-job",
         type=int,
         default=None,
@@ -491,6 +500,11 @@ def parse_arguments(argv: list[str] | None = None) -> object:
             track_parser.error("--jobs-per-gpu must be >= 1")
         if jobs_per_gpu > 1 and not str(getattr(args, "gpus", None) or "").strip():
             track_parser.error("--jobs-per-gpu needs --gpus")
+        if getattr(args, "longest_first", False) and not (
+            str(getattr(args, "gpus", None) or "").strip()
+            or int(getattr(args, "jobs", None) or 1) > 1
+        ):
+            track_parser.error("--longest-first needs --gpus or --jobs > 1")
 
     if args.command == "calibrate":
         budget = getattr(args, "budget_seconds", None)
@@ -641,6 +655,7 @@ def main(argv: list[str] | None = None) -> object:
                 gpus=getattr(args, "gpus", None),
                 jobs=getattr(args, "jobs", None),
                 jobs_per_gpu=int(getattr(args, "jobs_per_gpu", 1)),
+                longest_first=bool(getattr(args, "longest_first", False)),
                 threads_per_job=getattr(args, "threads_per_job", None),
                 log_level=str(args.log_level),
                 apply_tuned_inference=getattr(args, "apply_tuned_inference", None),

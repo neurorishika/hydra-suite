@@ -414,6 +414,18 @@ class SetupPanel(QWidget):
             self._main_window._on_batch_parallel_changed
         )
         h_par.addWidget(self.edit_batch_parallel_gpus)
+        self.chk_batch_parallel_longest_first = QCheckBox("Longest first")
+        self.chk_batch_parallel_longest_first.setToolTip(
+            "Start the videos with the most frames first, so one long video\n"
+            "does not run alone at the end of the batch. Off = list order."
+        )
+        self.chk_batch_parallel_longest_first.setChecked(
+            bool(self._main_window.config.batch_parallel_longest_first)
+        )
+        self.chk_batch_parallel_longest_first.toggled.connect(
+            self._main_window._on_batch_parallel_changed
+        )
+        h_par.addWidget(self.chk_batch_parallel_longest_first)
         has_cuda = bool(cuda_devices)
 
         def _jobs_per_gpu_changed(k: int) -> None:

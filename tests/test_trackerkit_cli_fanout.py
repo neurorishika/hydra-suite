@@ -323,3 +323,39 @@ def test_run_tracking_cli_rejects_k_below_one(tmp_path, monkeypatch):
 def test_jobs_per_gpu_without_gpus_is_an_error(tmp_path):
     with pytest.raises(ValueError, match="--gpus"):
         cli.run_tracking_cli(_videos(tmp_path), jobs=2, jobs_per_gpu=2)
+
+
+# --- --longest-first -----------------------------------------------------------
+
+
+def test_parse_longest_first(tmp_path):
+    v = _videos(tmp_path, 1)
+    assert parse_arguments(
+        ["track", v[0], "--jobs", "2", "--longest-first"]
+    ).longest_first
+    assert parse_arguments(["track", v[0]]).longest_first is False
+
+
+def test_parse_rejects_longest_first_without_fanout(tmp_path):
+    v = _videos(tmp_path, 1)
+    with pytest.raises(SystemExit):
+        parse_arguments(["track", v[0], "--longest-first"])
+
+
+def test_longest_first_reaches_the_fanout_options(tmp_path, monkeypatch):
+    seen = {}
+
+    def _fake_fanout(specs, options, *, should_stop, events=None):
+        seen["longest_first"] = options.longest_first
+        return _ok_result(specs, tmp_path)
+
+    monkeypatch.setattr(cli, "run_batch_fanout", _fake_fanout)
+    assert cli.run_tracking_cli(_videos(tmp_path), jobs=2, longest_first=True) == 0
+    assert seen == {"longest_first": True}
+    assert cli.run_tracking_cli(_videos(tmp_path), jobs=2) == 0
+    assert seen == {"longest_first": False}
+
+
+def test_longest_first_without_fanout_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="--longest-first"):
+        cli.run_tracking_cli(_videos(tmp_path), longest_first=True)

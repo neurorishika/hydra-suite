@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,9 +20,11 @@ from hydra_suite.trackerkit.batch_fanout import (
     build_gpu_slots,
     decide_gpu_slots,
     default_child_command,
+    order_longest_first,
     parse_progress_line,
     parse_summary_line,
     run_batch_fanout,
+    video_frame_count,
 )
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
 
@@ -849,3 +852,105 @@ def test_oversubscription_suggestion_divides_cores_by_slots():
     assert suggested_threads_per_job(n_slots=10, cpu_count=128) == 12
     assert suggested_threads_per_job(n_slots=64, cpu_count=8) == 1
     assert suggested_threads_per_job(n_slots=4, cpu_count=None) == 1
+
+
+# --- Longest-first ordering ----------------------------------------------------
+
+
+def _named(tmp_path, names, **cfg):
+    specs = [_spec(tmp_path, n, **cfg) for n in names]
+    return [replace(s, index=i) for i, s in enumerate(specs, 1)]
+
+
+def _frames(table):
+    return lambda path: table[Path(path).stem]
+
+
+def test_order_longest_first_sorts_by_frames_descending_and_is_stable(tmp_path):
+    specs = _named(tmp_path, ["a", "b", "c", "d"])
+    ordered = order_longest_first(specs, _frames({"a": 10, "b": 30, "c": 10, "d": 20}))
+    assert [Path(s.video_path).stem for s in ordered] == ["b", "d", "a", "c"]
+    assert [s.index for s in ordered] == [2, 4, 1, 3]  # indices travel with specs
+
+
+def test_order_longest_first_puts_unprobeable_videos_first(tmp_path):
+    specs = _named(tmp_path, ["a", "b", "c"])
+    ordered = order_longest_first(specs, _frames({"a": 10, "b": None, "c": 50}))
+    assert [Path(s.video_path).stem for s in ordered] == ["b", "c", "a"]
+
+
+def test_order_longest_first_honours_the_configured_frame_range(tmp_path):
+    a = _spec(tmp_path, "a", start_frame=0, end_frame=99)  # 100 of 1000 frames
+    b = _spec(tmp_path, "b", start_frame=500)  # 500 of 1000 frames
+    c = _spec(tmp_path, "c", end_frame=10**9)  # clamped to the video: 300
+    specs = [replace(s, index=i) for i, s in enumerate([a, b, c], 1)]
+    ordered = order_longest_first(specs, _frames({"a": 1000, "b": 1000, "c": 300}))
+    assert [Path(s.video_path).stem for s in ordered] == ["b", "c", "a"]
+
+
+def test_order_longest_first_survives_a_probe_that_raises(tmp_path):
+    def _boom(path):
+        if Path(path).stem == "b":
+            raise RuntimeError("corrupt")
+        return 5
+
+    specs = _named(tmp_path, ["a", "b"])
+    assert [Path(s.video_path).stem for s in order_longest_first(specs, _boom)] == [
+        "b",
+        "a",
+    ]
+
+
+def test_longest_first_launches_in_length_order_and_reports_in_input_order(tmp_path):
+    rec = _Recorder()
+    specs = [_spec(tmp_path, n) for n in ("short", "long", "mid")]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=1,
+            longest_first=True,
+            video_frames=_frames({"short": 1, "long": 100, "mid": 50}),
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+        events=rec,
+    )
+    assert result.success
+    assert [Path(v).stem for v, _gpu, _log in rec.started] == ["long", "mid", "short"]
+    assert [Path(r.spec.video_path).stem for r in result.jobs] == [
+        "short",
+        "long",
+        "mid",
+    ]
+
+
+def test_default_order_is_input_order_and_never_probes(tmp_path):
+    rec = _Recorder()
+    specs = [_spec(tmp_path, n) for n in ("short", "long", "mid")]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=1,
+            video_frames=lambda _p: pytest.fail("must not probe"),
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+        events=rec,
+    )
+    assert result.success
+    assert [Path(v).stem for v, _gpu, _log in rec.started] == ["short", "long", "mid"]
+
+
+def test_video_frame_count_reads_a_real_clip_and_tolerates_garbage(tmp_path):
+    import cv2
+    import numpy as np
+
+    path = tmp_path / "clip.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (16, 16))
+    for _ in range(7):
+        writer.write(np.zeros((16, 16, 3), np.uint8))
+    writer.release()
+    assert video_frame_count(str(path)) == 7
+    bogus = tmp_path / "bogus.mp4"
+    bogus.write_bytes(b"\x00")
+    assert video_frame_count(str(bogus)) is None

@@ -90,6 +90,10 @@ class FanoutOptions:
     jobs: Optional[int] = None
     # Concurrent children per selected GPU; ignored without ``gpus``.
     jobs_per_gpu: int = 1
+    # Launch the longest videos first (see :func:`order_longest_first`);
+    # ``video_frames`` overrides the frame-count probe (tests).
+    longest_first: bool = False
+    video_frames: Optional[Callable[[str], Optional[int]]] = None
     threads_per_job: Optional[int] = None
     log_level: str = "INFO"
     run_dir: Optional[Path] = None
@@ -293,6 +297,58 @@ def build_gpu_slots(
     slots: list[Optional[CudaDevice]] = list(gpus) * k
     requested = len(slots) if jobs is None else int(jobs)
     return slots[: max(1, min(requested, len(slots)))]
+
+
+def video_frame_count(video_path: str) -> Optional[int]:
+    """The container's frame count, or ``None`` when it cannot be read."""
+    try:
+        # Lazy: cli_config pulls in cv2, and this module is otherwise cheap.
+        from hydra_suite.trackerkit.cli_config import probe_video
+
+        return probe_video(video_path).total_frames
+    except Exception:  # noqa: BLE001 - an unreadable video just has no length
+        return None
+
+
+def _frames_to_track(
+    spec: BatchJobSpec, frame_count: Callable[[str], Optional[int]]
+) -> Optional[int]:
+    """Frames the child will track: the video clipped to the config's range."""
+    try:
+        total = frame_count(spec.video_path)
+    except Exception:  # noqa: BLE001 - treat a failing probe as "unknown"
+        total = None
+    if not total or int(total) <= 0:
+        return None
+    last = int(total) - 1
+    cfg = spec.config or {}
+    try:
+        start = max(0, int(cfg.get("start_frame") or 0))
+        end = cfg.get("end_frame")
+        end = last if end is None else min(int(end), last)
+    except (TypeError, ValueError):
+        return int(total)
+    return max(0, end - start + 1)
+
+
+def order_longest_first(
+    specs: Sequence[BatchJobSpec],
+    frame_count: Callable[[str], Optional[int]] = video_frame_count,
+) -> list[BatchJobSpec]:
+    """Specs reordered so the most frames launch first (largest-job-first).
+
+    A long video started last becomes the batch's tail, with every other
+    slot idle; starting it first lets the short ones fill in around it.
+    Videos whose length cannot be read go first: they may be long, and if
+    they are unreadable the child fails fast instead of after hours of work.
+    Ties keep input order. ``index`` travels with each spec unchanged.
+    """
+    lengths = [_frames_to_track(spec, frame_count) for spec in specs]
+    order = sorted(
+        range(len(specs)),
+        key=lambda i: (lengths[i] is not None, -(lengths[i] or 0), i),
+    )
+    return [specs[i] for i in order]
 
 
 def suggested_threads_per_job(n_slots: int, cpu_count: Optional[int]) -> int:
@@ -689,6 +745,12 @@ def run_batch_fanout(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     pending = list(specs)
+    if options.longest_first:
+        pending = order_longest_first(specs, options.video_frames or video_frame_count)
+        logger.info(
+            "Fan-out: longest first -> %s",
+            ", ".join(Path(s.video_path).name for s in pending),
+        )
     running: list[_Live] = []
     finished: dict[int, FanoutJobResult] = {}
     free_slots: list[Optional[CudaDevice]] = list(slots)

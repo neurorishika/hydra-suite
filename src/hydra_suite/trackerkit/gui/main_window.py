@@ -1728,6 +1728,9 @@ class MainWindow(QMainWindow):
         self.config.batch_parallel_jobs_per_gpu = int(
             panel.spin_batch_parallel_jobs_per_gpu.value()
         )
+        self.config.batch_parallel_longest_first = bool(
+            panel.chk_batch_parallel_longest_first.isChecked()
+        )
         panel.container_batch_parallel.setVisible(self.config.batch_parallel)
         panel.spin_batch_parallel_jobs_per_gpu.setVisible(
             self.config.batch_parallel and panel._batch_parallel_has_cuda

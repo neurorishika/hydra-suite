@@ -49,6 +49,7 @@ def run_tracking_cli(
     gpus: str | None = None,
     jobs: int | None = None,
     jobs_per_gpu: int = 1,
+    longest_first: bool = False,
     threads_per_job: int | None = None,
     log_level: str = "INFO",
     apply_tuned_inference: bool | None = None,
@@ -60,6 +61,8 @@ def run_tracking_cli(
         raise ValueError(f"jobs_per_gpu must be >= 1, got {jobs_per_gpu}")
     if int(jobs_per_gpu) > 1 and not str(gpus or "").strip():
         raise ValueError("--jobs-per-gpu needs --gpus")
+    if longest_first and not fanout_requested(gpus, jobs):
+        raise ValueError("--longest-first needs fan-out (--gpus or --jobs > 1)")
     videos = [str(path).strip() for path in video_paths if str(path).strip()]
     if not videos:
         raise ValueError("At least one video path is required.")
@@ -98,6 +101,7 @@ def run_tracking_cli(
         gpus=devices,
         jobs=effective_jobs,
         jobs_per_gpu=int(jobs_per_gpu) if devices else 1,
+        longest_first=bool(longest_first),
         threads_per_job=threads_per_job,
         log_level=log_level,
     )

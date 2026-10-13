@@ -1354,7 +1354,11 @@ class TrackingOrchestrator:
                 build_gpu_slots(devices, jobs=requested or 1, jobs_per_gpu=jobs_per_gpu)
             )
         return FanoutOptions(
-            gpus=devices, jobs=jobs, jobs_per_gpu=jobs_per_gpu, log_level="INFO"
+            gpus=devices,
+            jobs=jobs,
+            jobs_per_gpu=jobs_per_gpu,
+            longest_first=bool(cfg.batch_parallel_longest_first),
+            log_level="INFO",
         )
 
     def start_batch_fanout(self) -> bool:

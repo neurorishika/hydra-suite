@@ -31,6 +31,7 @@ class TrackerConfig:
     batch_parallel_jobs: int = 0  # 0 = every GPU slot (or 1 without GPUs)
     batch_parallel_gpus: str = "auto"
     batch_parallel_jobs_per_gpu: int = 1  # concurrent children per GPU
+    batch_parallel_longest_first: bool = False  # launch longest videos first
 
     # --- ROI ---
     roi_shapes: list = field(default_factory=list)
@@ -85,6 +86,7 @@ class TrackerConfig:
             "batch_parallel_jobs": int(self.batch_parallel_jobs),
             "batch_parallel_gpus": str(self.batch_parallel_gpus),
             "batch_parallel_jobs_per_gpu": int(self.batch_parallel_jobs_per_gpu),
+            "batch_parallel_longest_first": bool(self.batch_parallel_longest_first),
             "roi_shapes": list(self.roi_shapes),
             "roi_current_mode": self.roi_current_mode,
             "roi_current_zone_type": self.roi_current_zone_type,
@@ -133,6 +135,9 @@ class TrackerConfig:
             batch_parallel_gpus=str(data.get("batch_parallel_gpus", "auto")),
             batch_parallel_jobs_per_gpu=max(
                 1, int(data.get("batch_parallel_jobs_per_gpu", 1))
+            ),
+            batch_parallel_longest_first=bool(
+                data.get("batch_parallel_longest_first", False)
             ),
             roi_shapes=list(data.get("roi_shapes", [])),
             roi_current_mode=data.get("roi_current_mode", "circle"),

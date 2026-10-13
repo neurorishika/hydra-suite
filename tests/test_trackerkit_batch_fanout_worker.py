@@ -268,7 +268,9 @@ def test_close_prompt_counts_a_running_fanout_worker():
 # --- GPU resolution on the GUI thread ---------------------------------------
 
 
-def _orchestrator(gpus: str, jobs: int = 0, jobs_per_gpu: int = 1):
+def _orchestrator(
+    gpus: str, jobs: int = 0, jobs_per_gpu: int = 1, longest_first: bool = False
+):
     from types import SimpleNamespace
 
     from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
@@ -277,6 +279,7 @@ def _orchestrator(gpus: str, jobs: int = 0, jobs_per_gpu: int = 1):
         batch_parallel_gpus=gpus,
         batch_parallel_jobs=jobs,
         batch_parallel_jobs_per_gpu=jobs_per_gpu,
+        batch_parallel_longest_first=longest_first,
     )
     main_window = SimpleNamespace(
         config=config, _on_batch_parallel_changed=lambda: None
@@ -342,6 +345,18 @@ def test_gui_jobs_per_gpu_reaches_the_options_and_clamps_jobs(monkeypatch):
     assert options.jobs_per_gpu == 2 and options.jobs == 4
     options = _orchestrator("auto", jobs_per_gpu=2)._resolve_fanout_options()
     assert options.jobs_per_gpu == 2 and options.jobs is None
+
+
+def test_gui_longest_first_reaches_the_options(monkeypatch):
+    _patch_devices(monkeypatch, [], has_cuda=False)
+    _capture_warnings(monkeypatch)
+    assert (
+        _orchestrator("auto", jobs=2)._resolve_fanout_options().longest_first is False
+    )
+    options = _orchestrator(
+        "auto", jobs=2, longest_first=True
+    )._resolve_fanout_options()
+    assert options.longest_first is True
 
 
 def test_gui_jobs_per_gpu_is_ignored_without_gpus(monkeypatch):
@@ -713,6 +728,7 @@ def test_starting_a_new_batch_resets_the_close_warned_flag(app, monkeypatch, tmp
         batch_parallel_gpus="auto",
         batch_parallel_jobs=0,
         batch_parallel_jobs_per_gpu=1,
+        batch_parallel_longest_first=False,
     )
     main_window = SimpleNamespace(
         config=config,

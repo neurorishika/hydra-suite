@@ -9,6 +9,7 @@ def test_defaults():
     assert c.batch_parallel_jobs == 0
     assert c.batch_parallel_gpus == "auto"
     assert c.batch_parallel_jobs_per_gpu == 1
+    assert c.batch_parallel_longest_first is False
 
 
 def test_round_trip():
@@ -56,3 +57,10 @@ def test_jobs_per_gpu_round_trips():
     d = c.to_dict()
     assert d["batch_parallel_jobs_per_gpu"] == 3
     assert TrackerConfig.from_dict(d).batch_parallel_jobs_per_gpu == 3
+
+
+def test_longest_first_round_trips():
+    d = TrackerConfig(batch_parallel_longest_first=True).to_dict()
+    assert d["batch_parallel_longest_first"] is True
+    assert TrackerConfig.from_dict(d).batch_parallel_longest_first is True
+    assert TrackerConfig.from_dict({}).batch_parallel_longest_first is False
