@@ -125,7 +125,6 @@ class _Runner:
             "-rfE",
             "-p",
             "no:cacheprovider",
-            f"--basetemp={self.log_dir / 'tmp' / slug}",
             *self.pytest_args,
         ]
         env = dict(os.environ)
@@ -222,7 +221,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     args.log_dir = args.log_dir.resolve()
     (args.log_dir / "logs").mkdir(parents=True, exist_ok=True)
-    (args.log_dir / "tmp").mkdir(parents=True, exist_ok=True)
 
     os.chdir(REPO_ROOT)
     files = _discover(args.targets)

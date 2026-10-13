@@ -3,7 +3,17 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
+
 from hydra_suite.core.inference.slice_meta import profile_evidence_state
+
+
+@pytest.fixture(autouse=True)
+def qapp():
+    """MainWindow needs a QApplication; don't rely on an earlier file's."""
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
 
 
 def _profile(digest):

@@ -37,7 +37,9 @@ def _python_files() -> list[Path]:
             files.extend(
                 p
                 for p in root.rglob("*.py")
-                if "__pycache__" not in p.parts and ".worktrees" not in p.parts
+                # Relative parts: the checkout itself may live in .worktrees/.
+                if "__pycache__" not in p.parts
+                and ".worktrees" not in p.relative_to(REPO_ROOT).parts
             )
     return sorted(files)
 
