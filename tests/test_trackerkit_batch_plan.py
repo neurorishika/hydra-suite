@@ -330,3 +330,62 @@ def test_child_replan_of_a_job_config_is_idempotent(tmp_path):
     m = _mk_video(inherit, "m")
     for spec in plan_batch_jobs([k, m]):
         assert _replan_as_child(inherit, spec).config == spec.config, spec.index
+
+
+# --- Borrowed configs never carry a frame range ------------------------------
+
+
+def _ranged(directory: Path, name: str, start: int, end: int) -> dict:
+    return {**_sidecar_cfg(directory, name), "start_frame": start, "end_frame": end}
+
+
+def _has_range(cfg: dict) -> bool:
+    return "start_frame" in cfg or "end_frame" in cfg
+
+
+def test_inheriting_videos_track_the_whole_video(tmp_path):
+    """The keystone's range belongs to the keystone: a video longer than it
+    used to be silently truncated to the keystone's last frame."""
+    a = _mk_video(tmp_path, "a", _ranged(tmp_path, "a", 100, 200))
+    b = _mk_video(tmp_path, "b")
+    c = _mk_video(tmp_path, "c")
+    specs = plan_batch_jobs([a, b, c])
+    assert (specs[0].config["start_frame"], specs[0].config["end_frame"]) == (100, 200)
+    assert not _has_range(specs[1].config)
+    assert not _has_range(specs[2].config)
+    # Everything else is still inherited.
+    assert specs[1].config["k"] == "a"
+
+
+def test_keystone_override_borrowers_track_the_whole_video(tmp_path):
+    a = _mk_video(tmp_path, "a", _ranged(tmp_path, "a", 100, 200))
+    b = _mk_video(tmp_path, "b", _ranged(tmp_path, "b", 5, 9))
+    specs = plan_batch_jobs([a, b], keystone_override=True)
+    assert specs[1].config["k"] == "a"
+    assert not _has_range(specs[1].config)
+
+
+def test_explicit_config_range_applies_to_the_first_video_only(tmp_path):
+    a = _mk_video(tmp_path, "a")
+    b = _mk_video(tmp_path, "b")
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text(json.dumps(_ranged(tmp_path, "keystone", 10, 20)))
+    specs = plan_batch_jobs([a, b], explicit_config_path=str(explicit))
+    assert (specs[0].config["start_frame"], specs[0].config["end_frame"]) == (10, 20)
+    assert not _has_range(specs[1].config)
+
+
+def test_a_videos_own_sidecar_keeps_its_range(tmp_path):
+    a = _mk_video(tmp_path, "a", _ranged(tmp_path, "a", 100, 200))
+    b = _mk_video(tmp_path, "b", _ranged(tmp_path, "b", 5, 9))
+    specs = plan_batch_jobs([a, b])
+    assert (specs[1].config["start_frame"], specs[1].config["end_frame"]) == (5, 9)
+
+
+def test_single_video_explicit_config_keeps_its_range(tmp_path):
+    """Also the fan-out child's re-plan of its own job config."""
+    a = _mk_video(tmp_path, "a")
+    explicit = tmp_path / "job_1_config.json"
+    explicit.write_text(json.dumps(_ranged(tmp_path, "a", 10, 20)))
+    (spec,) = plan_batch_jobs([a], explicit_config_path=str(explicit))
+    assert (spec.config["start_frame"], spec.config["end_frame"]) == (10, 20)

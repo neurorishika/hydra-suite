@@ -1154,30 +1154,7 @@ class TrackingOrchestrator:
                     self._mw.current_batch_index
                 )
 
-                # If the video has its own config, load it.  Otherwise restore the
-                # keystone config so that videos without per-video configs always
-                # use the keystone parameters, not leftover params from a previous
-                # video that did have its own config.
-                plan = resolve_video_plan(
-                    fp,
-                    keystone_config_path=_get_video_config_path(
-                        self._mw.batch_videos[0]
-                    ),
-                    keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
-                )
-                # NOTE: _setup_video_file unconditionally clears the ROI/arena
-                # state near its top (clear_roi()), so a keystone-config load
-                # must happen AFTER it, not before -- loading first would just
-                # be wiped out again by the clear inside _setup_video_file.
-                # (Confirmed via a live repro; see Fix Wave 16 and Fix Wave 17
-                # reports for the root cause and verification.)
-                self._mw._setup_video_file(
-                    fp,
-                    skip_config_load=plan.use_keystone_baseline
-                    or not plan.has_own_config,
-                )
-                if plan.use_keystone_baseline and plan.config_path:
-                    self._mw._config_orch._load_config_from_file(plan.config_path)
+                self._load_next_batch_video(fp)
 
                 # Small delay to ensure UI updates before starting next
                 logger.info(
@@ -1195,6 +1172,35 @@ class TrackingOrchestrator:
         else:
             # Ensure reset if batch mode is disabled mid-run or not used
             self._mw.current_batch_index = -1
+
+    def _load_next_batch_video(self, fp: str) -> None:
+        """Load batch video *fp* with the config that should drive it.
+
+        Its own config when it has one; otherwise the keystone's, so a video
+        without per-video config never runs on leftover params from a previous
+        video that had one. A borrowed config never restricts frames: the
+        keystone's frame range describes the keystone, so the video is reset
+        to its whole length (the planner does the same for CLI/fan-out).
+        """
+        plan = resolve_video_plan(
+            fp,
+            keystone_config_path=_get_video_config_path(self._mw.batch_videos[0]),
+            keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
+        )
+        borrowed = plan.use_keystone_baseline or not plan.has_own_config
+        # NOTE: _setup_video_file unconditionally clears the ROI/arena
+        # state near its top (clear_roi()), so a keystone-config load
+        # must happen AFTER it, not before -- loading first would just
+        # be wiped out again by the clear inside _setup_video_file.
+        # (Confirmed via a live repro; see Fix Wave 16 and Fix Wave 17
+        # reports for the root cause and verification.)
+        self._mw._setup_video_file(fp, skip_config_load=borrowed)
+        if plan.use_keystone_baseline and plan.config_path:
+            self._mw._config_orch._load_config_from_file(plan.config_path)
+        if borrowed:
+            # After the keystone load, which would otherwise restore its range;
+            # _setup_video_file alone also leaves a previous start frame behind.
+            self._mw._reset_frame_range()
 
     def start_backward_tracking(self):
         """start_backward_tracking method documentation."""
