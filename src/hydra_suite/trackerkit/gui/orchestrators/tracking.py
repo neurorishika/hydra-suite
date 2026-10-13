@@ -1316,6 +1316,7 @@ class TrackingOrchestrator:
         )
         from hydra_suite.trackerkit.batch_fanout import (
             FanoutOptions,
+            build_gpu_slots,
             decide_gpu_slots,
             host_has_cuda,
         )
@@ -1342,18 +1343,27 @@ class TrackingOrchestrator:
             QMessageBox.warning(self._mw, "GPU selection", str(exc))
             return None
 
+        # Meaningless without a device to share; the CLI refuses it there.
+        jobs_per_gpu = max(1, int(cfg.batch_parallel_jobs_per_gpu)) if devices else 1
         requested = int(cfg.batch_parallel_jobs or 0)
         if devices and requested <= 0:
-            # "Unspecified": the scheduler gives one slot per selected GPU.
+            # "Unspecified": the scheduler opens every GPU slot.
             jobs = None
         else:
-            jobs = max(1, requested or 1)
-            if devices:
-                jobs = min(jobs, len(devices))
-        return FanoutOptions(gpus=devices, jobs=jobs, log_level="INFO")
+            jobs = len(
+                build_gpu_slots(devices, jobs=requested or 1, jobs_per_gpu=jobs_per_gpu)
+            )
+        return FanoutOptions(
+            gpus=devices,
+            jobs=jobs,
+            jobs_per_gpu=jobs_per_gpu,
+            longest_first=bool(cfg.batch_parallel_longest_first),
+            log_level="INFO",
+        )
 
     def start_batch_fanout(self) -> bool:
         """Run the whole batch as headless child processes, one per slot."""
+        from hydra_suite.trackerkit.batch_fanout import build_gpu_slots
         from hydra_suite.trackerkit.batch_plan import BatchPlanError, plan_batch_jobs
         from hydra_suite.trackerkit.gui.dialogs.batch_fanout_dialog import (
             BatchFanoutDialog,
@@ -1395,13 +1405,13 @@ class TrackingOrchestrator:
         options = self._resolve_fanout_options()
         if options is None:
             return False
-        # Mirror run_batch_fanout's own slot arithmetic so the status line
-        # cannot claim more slots than the scheduler will actually open.
-        if options.gpus:
-            requested = len(options.gpus) if options.jobs is None else int(options.jobs)
-            slots = max(1, min(requested, len(options.gpus)))
-        else:
-            slots = max(1, int(options.jobs or 1))
+        # run_batch_fanout's own slot arithmetic, so the status line cannot
+        # claim more slots than the scheduler will actually open.
+        slots = len(
+            build_gpu_slots(
+                options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
+            )
+        )
 
         # Never leave a previous run's table parented to the window forever.
         previous = getattr(self._mw, "batch_fanout_dialog", None)

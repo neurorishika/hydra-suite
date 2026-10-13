@@ -71,6 +71,7 @@ trackerkit track --video-list batch.txt --gpus auto          # one child per GPU
 trackerkit track --video-list batch.txt --gpus 0-3           # four GPUs
 trackerkit track --video-list batch.txt --gpus 0,2,GPU-8f1a  # ordinals or UUID prefixes
 trackerkit track --video-list batch.txt --jobs 3             # three children sharing the current device (CPU / Apple Silicon)
+trackerkit track --video-list batch.txt --gpus 0-3 --jobs-per-gpu 2 --threads-per-job 8  # two children per GPU
 ```
 
 Each video becomes a child process `trackerkit track <video> --config <effective.json>`
@@ -84,9 +85,20 @@ run. Rules:
   report is an error, as is *any* selection on a CUDA-capable host whose
   `nvidia-smi` reports nothing -- there, running unpinned would put every child
   on `cuda:0`.
-- `--jobs` defaults to one slot per selected GPU when `--gpus` is given
-  (else 1, which stays sequential and in-process), and is clamped to the
-  number of selected GPUs.
+- `--jobs` defaults to every GPU slot (GPUs × `--jobs-per-gpu`) when `--gpus`
+  is given (else 1, which stays sequential and in-process), and is clamped to
+  that slot count.
+- `--jobs-per-gpu K` (default 1, requires `--gpus`) runs up to K children on
+  each selected GPU, all with the same `CUDA_VISIBLE_DEVICES`. Slots fill
+  round-robin, so a `--jobs` cap below GPUs × K spreads across every GPU
+  before doubling up on one. Listing a GPU twice in `--gpus` is still an
+  error: `--jobs-per-gpu` is the only way to share a device.
+- Videos launch in input order. `--longest-first` launches the videos with
+  the most frames to track (the video clipped to the config's
+  `start_frame`/`end_frame`) first, so one long video does not run alone at
+  the end of the batch; videos whose length cannot be read go first. The
+  per-video table stays in input order. It changes only scheduling, never a
+  video's output.
 - A failed video stops new launches; running videos finish. Exit code is 1
   if any video failed or the run was cancelled; the per-video table still
   shows which videos completed.
@@ -95,6 +107,22 @@ run. Rules:
 - `--threads-per-job N` (opt-in) caps OMP/MKL/OpenBLAS/Numba threads per child.
   Leave it off unless the host is oversubscribed; it can change floating-point
   reduction order in threaded kernels.
+
+### More than one job per GPU
+
+One tracking job rarely saturates a large GPU: on an RTX 6000 Ada with
+4512×4512 videos (`gpu_fast`, ViTPose + identity + head-tail) one job used
+about 58% of the GPU. Total throughput over five GPUs was 126 fps at one job
+per GPU, 146 fps at two (+16%) and 147 fps at three, so **2 jobs per GPU was
+the sweet spot** there. Use it when the GPUs are underused and each has room
+for a second job's models in memory; it does nothing for CPU-bound
+(background-subtraction) runs.
+
+Every child sizes its OpenMP/BLAS/torch thread pools from the full core
+count, so K > 1 multiplies CPU pressure. Without `--threads-per-job` the
+fan-out logs one warning suggesting `--threads-per-job ≈ cpu_count / (GPUs × K)`.
+Thread caps can change floating-point reduction order, so compare against a
+sequential run under the same caps when checking byte-identity.
 
 ### On a shared machine
 
@@ -119,7 +147,9 @@ Two related habits on a shared box:
 - Requirements in each child: `conda` on `PATH` for SLEAP pose, and the same
   `HYDRA_DATA_DIR`/`HYDRA_CONFIG_DIR` as the parent (inherited automatically).
 
-The GUI exposes the same feature under **Batch › Run videos in parallel (one process per GPU)**.
+The GUI exposes the same feature under **Batch › Run videos in parallel (processes per GPU)**;
+the spinbox next to it is `--jobs-per-gpu` and **Longest first** is
+`--longest-first` (the GUI has no thread-cap control).
 
 ## Applying a tuned inference profile
 

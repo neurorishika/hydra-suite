@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,11 +17,14 @@ from hydra_suite.runtime.cuda_devices import CudaDevice
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
     build_child_env,
+    build_gpu_slots,
     decide_gpu_slots,
     default_child_command,
+    order_longest_first,
     parse_progress_line,
     parse_summary_line,
     run_batch_fanout,
+    video_frame_count,
 )
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
 
@@ -642,3 +646,351 @@ def test_decide_gpu_slots_on_a_non_cuda_host():
     # An explicit device the host does not have stays an error.
     with pytest.raises(ValueError):
         decide_gpu_slots(["0"], [], host_has_cuda=False)
+
+
+# --- K=1 characterization: commands, env and GPU assignment as today --------
+
+
+def _record_launches(monkeypatch):
+    """Record every child (argv, env delta) and run a trivial stand-in instead."""
+    import subprocess
+
+    real_popen = subprocess.Popen
+    launches: list[tuple[list[str], dict[str, str]]] = []
+
+    def _popen(command, **kwargs):
+        env = kwargs["env"]
+        delta = {k: v for k, v in env.items() if os.environ.get(k) != v}
+        launches.append((list(command), delta))
+        return real_popen([sys.executable, "-c", "print('ok')"], **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    return launches
+
+
+def _expected_command(spec_video: str, run_dir: Path, index: int) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "hydra_suite.trackerkit.app",
+        "--log-level",
+        "INFO",
+        "track",
+        spec_video,
+        "--config",
+        str(run_dir / f"job_{index}_config.json"),
+    ]
+
+
+_CAP_VARS = (
+    "CUDA_VISIBLE_DEVICES",
+    "PYTHONUNBUFFERED",
+    "KMP_DUPLICATE_LIB_OK",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMBA_NUM_THREADS",
+)
+
+
+@pytest.mark.parametrize("extra", [{}, {"jobs_per_gpu": 1}])
+@pytest.mark.parametrize(
+    "jobs, threads, n_gpus, expected_gpus, expected_threads",
+    [
+        (None, None, 2, ["GPU-aaaa", "GPU-bbbb"], None),
+        (1, None, 2, ["GPU-aaaa", "GPU-aaaa"], None),
+        (99, 3, 2, ["GPU-aaaa", "GPU-bbbb"], "3"),
+        (2, 3, 0, [None, None], "3"),
+    ],
+)
+def test_k1_children_are_launched_exactly_as_before(
+    tmp_path, monkeypatch, extra, jobs, threads, n_gpus, expected_gpus, expected_threads
+):
+    for var in _CAP_VARS:
+        monkeypatch.delenv(var, raising=False)
+    launches = _record_launches(monkeypatch)
+    specs = [_spec(tmp_path, n) for n in ("a", "b")]
+    run_dir = tmp_path / "run"
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=_GPUS[:n_gpus],
+            jobs=jobs,
+            threads_per_job=threads,
+            run_dir=run_dir,
+            **extra,
+        ),
+    )
+    assert result.success
+    assert len(launches) == 2
+    for i, ((command, delta), gpu) in enumerate(zip(launches, expected_gpus), 1):
+        assert command == _expected_command(specs[i - 1].video_path, run_dir, i)
+        expected = {"PYTHONUNBUFFERED": "1", "KMP_DUPLICATE_LIB_OK": "TRUE"}
+        if gpu is not None:
+            expected["CUDA_VISIBLE_DEVICES"] = gpu
+        if expected_threads is not None:
+            for var in _CAP_VARS[3:]:
+                expected[var] = expected_threads
+        assert delta == expected
+
+
+# --- Multiple jobs per GPU --------------------------------------------------
+
+_THREE = [
+    CudaDevice(0, "GPU-aaaa", "x"),
+    CudaDevice(1, "GPU-bbbb", "x"),
+    CudaDevice(2, "GPU-cccc", "x"),
+]
+
+
+def test_build_gpu_slots_gives_each_gpu_k_slots_round_robin():
+    slots = build_gpu_slots(_THREE, jobs=None, jobs_per_gpu=2)
+    assert len(slots) == 6
+    assert slots == _THREE + _THREE  # spread across GPUs before doubling up
+
+
+def test_build_gpu_slots_clamps_jobs_to_gpus_times_k():
+    assert len(build_gpu_slots(_THREE, jobs=99, jobs_per_gpu=2)) == 6
+    # A cap below GPUs x K still reaches every GPU before doubling up.
+    assert build_gpu_slots(_THREE, jobs=4, jobs_per_gpu=2) == _THREE + _THREE[:1]
+
+
+def test_build_gpu_slots_k1_is_todays_arithmetic():
+    for jobs in (None, 1, 2, 3, 99):
+        expected_n = 3 if jobs is None else max(1, min(jobs, 3))
+        assert build_gpu_slots(_THREE, jobs=jobs, jobs_per_gpu=1) == _THREE[:expected_n]
+
+
+def test_build_gpu_slots_without_gpus_is_unpinned():
+    assert build_gpu_slots([], jobs=None, jobs_per_gpu=1) == [None]
+    assert build_gpu_slots([], jobs=3, jobs_per_gpu=1) == [None, None, None]
+
+
+@pytest.mark.parametrize("k", [0, -1])
+def test_build_gpu_slots_rejects_k_below_one(k):
+    with pytest.raises(ValueError, match="jobs_per_gpu"):
+        build_gpu_slots(_THREE, jobs=None, jobs_per_gpu=k)
+
+
+def test_gpu_listed_twice_still_raises():
+    """Repeating a GPU in --gpus is NOT a way to share it; --jobs-per-gpu is."""
+    with pytest.raises(ValueError):
+        decide_gpu_slots(["0", "0"], _GPUS, host_has_cuda=True)
+
+
+def test_two_jobs_on_one_gpu_run_concurrently_on_the_same_device(tmp_path):
+    specs = [_spec(tmp_path, n, sleep=0.8) for n in ("a", "b")]
+    t0 = time.monotonic()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=_GPUS[:1],
+            jobs_per_gpu=2,
+            threads_per_job=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    wall = time.monotonic() - t0
+    assert result.success
+    seen = [r.log_path.read_text().split("GPU=")[1].split("\n")[0] for r in result.jobs]
+    assert seen == ["GPU-aaaa", "GPU-aaaa"]
+    assert wall < 1.5, f"2 jobs on one GPU at K=2 should overlap; took {wall:.1f}s"
+
+
+def test_k2_reaps_and_reuses_shared_gpu_slots(tmp_path):
+    """Five videos through 2 GPUs x 2 slots: never more than 2 per GPU."""
+    specs = [_spec(tmp_path, n, sleep=0.3) for n in "abcde"]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs_per_gpu=2,
+            threads_per_job=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    assert result.success and len(result.jobs) == 5
+    assert {r.gpu.uuid for r in result.jobs} == {"GPU-aaaa", "GPU-bbbb"}
+
+
+def _oversubscription_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "oversubscri" in r.getMessage()
+    ]
+
+
+@pytest.mark.parametrize(
+    "k, threads, n_gpus, fires",
+    [(2, None, 1, True), (1, None, 1, False), (2, 4, 1, False), (2, None, 0, False)],
+)
+def test_oversubscription_warning(tmp_path, caplog, k, threads, n_gpus, fires):
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    result = run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(
+            gpus=_GPUS[:n_gpus],
+            jobs_per_gpu=k,
+            threads_per_job=threads,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    assert result.success
+    warnings = _oversubscription_warnings(caplog)
+    assert len(warnings) == (1 if fires else 0)
+    if fires:
+        assert "--threads-per-job" in warnings[0].getMessage()
+
+
+def test_oversubscription_suggestion_divides_cores_by_slots():
+    from hydra_suite.trackerkit.batch_fanout import suggested_threads_per_job
+
+    assert suggested_threads_per_job(n_slots=10, cpu_count=128) == 12
+    assert suggested_threads_per_job(n_slots=64, cpu_count=8) == 1
+    assert suggested_threads_per_job(n_slots=4, cpu_count=None) == 1
+
+
+# --- Longest-first ordering ----------------------------------------------------
+
+
+def _named(tmp_path, names, **cfg):
+    specs = [_spec(tmp_path, n, **cfg) for n in names]
+    return [replace(s, index=i) for i, s in enumerate(specs, 1)]
+
+
+def _frames(table):
+    return lambda path: table[Path(path).stem]
+
+
+def test_order_longest_first_sorts_by_frames_descending_and_is_stable(tmp_path):
+    specs = _named(tmp_path, ["a", "b", "c", "d"])
+    ordered = order_longest_first(specs, _frames({"a": 10, "b": 30, "c": 10, "d": 20}))
+    assert [Path(s.video_path).stem for s in ordered] == ["b", "d", "a", "c"]
+    assert [s.index for s in ordered] == [2, 4, 1, 3]  # indices travel with specs
+
+
+def test_order_longest_first_puts_unprobeable_videos_first(tmp_path):
+    specs = _named(tmp_path, ["a", "b", "c"])
+    ordered = order_longest_first(specs, _frames({"a": 10, "b": None, "c": 50}))
+    assert [Path(s.video_path).stem for s in ordered] == ["b", "c", "a"]
+
+
+def test_order_longest_first_honours_the_configured_frame_range(tmp_path):
+    a = _spec(tmp_path, "a", start_frame=0, end_frame=99)  # 100 of 1000 frames
+    b = _spec(tmp_path, "b", start_frame=500)  # 500 of 1000 frames
+    c = _spec(tmp_path, "c", end_frame=10**9)  # clamped to the video: 300
+    specs = [replace(s, index=i) for i, s in enumerate([a, b, c], 1)]
+    ordered = order_longest_first(specs, _frames({"a": 1000, "b": 1000, "c": 300}))
+    assert [Path(s.video_path).stem for s in ordered] == ["b", "c", "a"]
+
+
+def test_order_longest_first_survives_a_probe_that_raises(tmp_path):
+    def _boom(path):
+        if Path(path).stem == "b":
+            raise RuntimeError("corrupt")
+        return 5
+
+    specs = _named(tmp_path, ["a", "b"])
+    assert [Path(s.video_path).stem for s in order_longest_first(specs, _boom)] == [
+        "b",
+        "a",
+    ]
+
+
+def test_longest_first_launches_in_length_order_and_reports_in_input_order(tmp_path):
+    rec = _Recorder()
+    specs = [_spec(tmp_path, n) for n in ("short", "long", "mid")]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=1,
+            longest_first=True,
+            video_frames=_frames({"short": 1, "long": 100, "mid": 50}),
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+        events=rec,
+    )
+    assert result.success
+    assert [Path(v).stem for v, _gpu, _log in rec.started] == ["long", "mid", "short"]
+    assert [Path(r.spec.video_path).stem for r in result.jobs] == [
+        "short",
+        "long",
+        "mid",
+    ]
+
+
+def test_default_order_is_input_order_and_never_probes(tmp_path):
+    rec = _Recorder()
+    specs = [_spec(tmp_path, n) for n in ("short", "long", "mid")]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            jobs=1,
+            video_frames=lambda _p: pytest.fail("must not probe"),
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+        events=rec,
+    )
+    assert result.success
+    assert [Path(v).stem for v, _gpu, _log in rec.started] == ["short", "long", "mid"]
+
+
+def test_video_frame_count_reads_a_real_clip_and_tolerates_garbage(tmp_path):
+    import cv2
+    import numpy as np
+
+    path = tmp_path / "clip.avi"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), 10, (16, 16))
+    for _ in range(7):
+        writer.write(np.zeros((16, 16, 3), np.uint8))
+    writer.release()
+    assert video_frame_count(str(path)) == 7
+    bogus = tmp_path / "bogus.mp4"
+    bogus.write_bytes(b"\x00")
+    assert video_frame_count(str(bogus)) is None
+
+
+def test_no_oversubscription_warning_when_jobs_cap_leaves_one_child_per_gpu(
+    tmp_path, caplog
+):
+    """--jobs-per-gpu 2 --jobs 2 on 2 GPUs opens one slot per GPU: no sharing."""
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    result = run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs=2,
+            jobs_per_gpu=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    assert result.success
+    assert not _oversubscription_warnings(caplog)
+
+
+def test_oversubscription_suggestion_uses_the_real_slot_count(
+    tmp_path, caplog, monkeypatch
+):
+    import hydra_suite.trackerkit.batch_fanout as fanout_mod
+
+    monkeypatch.setattr(fanout_mod.os, "cpu_count", lambda: 30)
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs=3,  # 3 slots out of 2 x 2
+            jobs_per_gpu=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    (warning,) = _oversubscription_warnings(caplog)
+    assert "--threads-per-job 10" in warning.getMessage()

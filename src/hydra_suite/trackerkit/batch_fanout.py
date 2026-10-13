@@ -2,7 +2,8 @@
 
 Each job is the ordinary CLI child ``python -m hydra_suite.trackerkit.app track
 <video> --config <json>`` -- the exact sequential path -- pinned to one GPU
-with ``CUDA_VISIBLE_DEVICES=<uuid>``. The SLEAP service the child spawns
+with ``CUDA_VISIBLE_DEVICES=<uuid>``. A GPU may host ``jobs_per_gpu`` children
+at once; each is still its own process and session group. The SLEAP service the child spawns
 inherits that mask, so pose runs on the same GPU. This module owns
 scheduling, log capture, progress parsing, failure policy and cancellation;
 it changes nothing about how a video is tracked.
@@ -84,9 +85,15 @@ _THREAD_CAP_VARS = (
 @dataclass
 class FanoutOptions:
     gpus: list[CudaDevice] = field(default_factory=list)
-    # ``None`` means "unspecified": one slot per GPU when ``gpus`` is set,
+    # ``None`` means "unspecified": every GPU slot when ``gpus`` is set,
     # otherwise a single slot.
     jobs: Optional[int] = None
+    # Concurrent children per selected GPU; ignored without ``gpus``.
+    jobs_per_gpu: int = 1
+    # Launch the longest videos first (see :func:`order_longest_first`);
+    # ``video_frames`` overrides the frame-count probe (tests).
+    longest_first: bool = False
+    video_frames: Optional[Callable[[str], Optional[int]]] = None
     threads_per_job: Optional[int] = None
     log_level: str = "INFO"
     run_dir: Optional[Path] = None
@@ -266,6 +273,87 @@ def decide_gpu_slots(
     raise ValueError(
         "no CUDA devices visible to nvidia-smi; --gpus needs an NVIDIA host"
     )
+
+
+def build_gpu_slots(
+    gpus: Sequence[CudaDevice],
+    *,
+    jobs: Optional[int],
+    jobs_per_gpu: int = 1,
+) -> list[Optional[CudaDevice]]:
+    """The scheduler's slots: each GPU ``jobs_per_gpu`` times, capped by ``jobs``.
+
+    The single source of the slot arithmetic for the scheduler, the CLI and the
+    GUI. Slots go round-robin over the GPUs (``g0, g1, g0, g1``) so a ``jobs``
+    cap below ``GPUs x K`` spreads across every GPU before doubling up on one.
+    At ``jobs_per_gpu=1`` this is exactly ``gpus[:jobs]``. ``jobs=None`` means
+    every slot; without GPUs it is ``jobs`` unpinned slots (default 1).
+    """
+    k = int(jobs_per_gpu)
+    if k < 1:
+        raise ValueError(f"jobs_per_gpu must be >= 1, got {jobs_per_gpu}")
+    if not gpus:
+        return [None] * max(1, int(jobs or 1))
+    slots: list[Optional[CudaDevice]] = list(gpus) * k
+    requested = len(slots) if jobs is None else int(jobs)
+    return slots[: max(1, min(requested, len(slots)))]
+
+
+def video_frame_count(video_path: str) -> Optional[int]:
+    """The container's frame count, or ``None`` when it cannot be read."""
+    try:
+        # Lazy: cli_config pulls in cv2, and this module is otherwise cheap.
+        from hydra_suite.trackerkit.cli_config import probe_video
+
+        return probe_video(video_path).total_frames
+    except Exception:  # noqa: BLE001 - an unreadable video just has no length
+        return None
+
+
+def _frames_to_track(
+    spec: BatchJobSpec, frame_count: Callable[[str], Optional[int]]
+) -> Optional[int]:
+    """Frames the child will track: the video clipped to the config's range."""
+    try:
+        total = frame_count(spec.video_path)
+    except Exception:  # noqa: BLE001 - treat a failing probe as "unknown"
+        total = None
+    if not total or int(total) <= 0:
+        return None
+    last = int(total) - 1
+    cfg = spec.config or {}
+    try:
+        start = max(0, int(cfg.get("start_frame") or 0))
+        end = cfg.get("end_frame")
+        end = last if end is None else min(int(end), last)
+    except (TypeError, ValueError):
+        return int(total)
+    return max(0, end - start + 1)
+
+
+def order_longest_first(
+    specs: Sequence[BatchJobSpec],
+    frame_count: Callable[[str], Optional[int]] = video_frame_count,
+) -> list[BatchJobSpec]:
+    """Specs reordered so the most frames launch first (largest-job-first).
+
+    A long video started last becomes the batch's tail, with every other
+    slot idle; starting it first lets the short ones fill in around it.
+    Videos whose length cannot be read go first: they may be long, and if
+    they are unreadable the child fails fast instead of after hours of work.
+    Ties keep input order. ``index`` travels with each spec unchanged.
+    """
+    lengths = [_frames_to_track(spec, frame_count) for spec in specs]
+    order = sorted(
+        range(len(specs)),
+        key=lambda i: (lengths[i] is not None, -(lengths[i] or 0), i),
+    )
+    return [specs[i] for i in order]
+
+
+def suggested_threads_per_job(n_slots: int, cpu_count: Optional[int]) -> int:
+    """An even split of the host's cores across concurrent children (>= 1)."""
+    return max(1, int(cpu_count or 1) // max(1, int(n_slots)))
 
 
 def parse_progress_line(line: str) -> Optional[tuple[int, str]]:
@@ -628,15 +716,23 @@ def run_batch_fanout(
     if any(s.index < 1 for s in specs) or len({s.index for s in specs}) != len(specs):
         specs = [replace(s, index=i) for i, s in enumerate(specs, 1)]
 
-    slots: list[Optional[CudaDevice]]
-    if options.gpus:
-        # Unspecified jobs -> one slot per GPU; an explicit jobs is clamped to
-        # the GPU count so two children never share one device.
-        requested = len(options.gpus) if options.jobs is None else int(options.jobs)
-        n = max(1, min(requested, len(options.gpus)))
-        slots = list(options.gpus[:n])
-    else:
-        slots = [None] * max(1, int(options.jobs or 1))
+    # Unspecified jobs -> every GPU slot; an explicit jobs is clamped to
+    # GPUs x jobs_per_gpu, so a device is shared only when asked for.
+    slots = build_gpu_slots(
+        options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
+    )
+    # Keyed on the slots actually opened: a --jobs cap can leave one child
+    # per GPU even at jobs_per_gpu > 1, and then nothing is shared.
+    if options.gpus and len(slots) > len(options.gpus) and not options.threads_per_job:
+        logger.warning(
+            "Fan-out: %d children across %d GPU(s) without --threads-per-job "
+            "risks CPU oversubscription -- every child starts one "
+            "OpenMP/BLAS/torch thread per core. Consider --threads-per-job %d "
+            "(cpu_count / concurrent children).",
+            len(slots),
+            len(options.gpus),
+            suggested_threads_per_job(len(slots), os.cpu_count()),
+        )
 
     owns_run_dir = not options.run_dir
     run_dir = (
@@ -650,6 +746,16 @@ def run_batch_fanout(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     pending = list(specs)
+    if options.longest_first:
+        logger.info(
+            "Fan-out: reading frame counts of %d video(s) for longest-first",
+            len(specs),
+        )
+        pending = order_longest_first(specs, options.video_frames or video_frame_count)
+        logger.info(
+            "Fan-out: longest first -> %s",
+            ", ".join(Path(s.video_path).name for s in pending),
+        )
     running: list[_Live] = []
     finished: dict[int, FanoutJobResult] = {}
     free_slots: list[Optional[CudaDevice]] = list(slots)

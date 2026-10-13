@@ -344,12 +344,15 @@ class SetupPanel(QWidget):
         self.chk_batch_keystone_override.setChecked(False)
         v_container.addWidget(self.chk_batch_keystone_override)
 
-        # --- Parallel fan-out (one child process per GPU) ---
+        # --- Parallel fan-out (one or more child processes per GPU) ---
         from hydra_suite.runtime.cuda_devices import list_cuda_devices
 
         cuda_devices = list_cuda_devices()
+        self._batch_parallel_has_cuda = bool(cuda_devices)
+        h_chk_par = QHBoxLayout()
+        h_chk_par.setContentsMargins(0, 0, 0, 0)
         self.chk_batch_parallel = QCheckBox(
-            "Run videos in parallel (one process per GPU)"
+            "Run videos in parallel (processes per GPU)"
         )
         self.chk_batch_parallel.setToolTip(
             "Each video runs as its own headless child process pinned to one\n"
@@ -364,19 +367,37 @@ class SetupPanel(QWidget):
         self.chk_batch_parallel.toggled.connect(
             self._main_window._on_batch_parallel_changed
         )
-        v_container.addWidget(self.chk_batch_parallel)
+        h_chk_par.addWidget(self.chk_batch_parallel)
+        self.spin_batch_parallel_jobs_per_gpu = QSpinBox()
+        self.spin_batch_parallel_jobs_per_gpu.setRange(1, 8)
+        self.spin_batch_parallel_jobs_per_gpu.setValue(
+            max(1, int(self._main_window.config.batch_parallel_jobs_per_gpu))
+        )
+        self.spin_batch_parallel_jobs_per_gpu.setToolTip(
+            "Videos sharing each selected GPU at once.\n"
+            "One video often leaves a large GPU partly idle; 2 per GPU was\n"
+            "the sweet spot on RTX 6000 Ada. Every extra process adds CPU\n"
+            "threads and GPU memory, so raise it only with headroom on both."
+        )
+        h_chk_par.addWidget(self.spin_batch_parallel_jobs_per_gpu)
+        h_chk_par.addStretch(1)
+        v_container.addLayout(h_chk_par)
 
         self.container_batch_parallel = QWidget()
         h_par = QHBoxLayout(self.container_batch_parallel)
         h_par.setContentsMargins(0, 0, 0, 0)
         h_par.addWidget(QLabel("Jobs:"))
         self.spin_batch_parallel_jobs = QSpinBox()
-        self.spin_batch_parallel_jobs.setRange(1, 64)
+        # Room for every GPU at the highest processes-per-GPU, so the cap can
+        # never silently undo the spinbox below.
+        self.spin_batch_parallel_jobs.setRange(1, max(64, len(cuda_devices) * 8))
         default_jobs = int(self._main_window.config.batch_parallel_jobs) or max(
-            1, len(cuda_devices)
+            1, len(cuda_devices) * self.spin_batch_parallel_jobs_per_gpu.value()
         )
         self.spin_batch_parallel_jobs.setValue(default_jobs)
-        self.spin_batch_parallel_jobs.setToolTip("Maximum videos running at once.")
+        self.spin_batch_parallel_jobs.setToolTip(
+            "Maximum videos running at once (capped at GPUs x processes per GPU)."
+        )
         self.spin_batch_parallel_jobs.valueChanged.connect(
             self._main_window._on_batch_parallel_changed
         )
@@ -395,7 +416,35 @@ class SetupPanel(QWidget):
             self._main_window._on_batch_parallel_changed
         )
         h_par.addWidget(self.edit_batch_parallel_gpus)
+        self.chk_batch_parallel_longest_first = QCheckBox("Longest first")
+        self.chk_batch_parallel_longest_first.setToolTip(
+            "Start the videos with the most frames first, so one long video\n"
+            "does not run alone at the end of the batch. Off = list order."
+        )
+        self.chk_batch_parallel_longest_first.setChecked(
+            bool(self._main_window.config.batch_parallel_longest_first)
+        )
+        self.chk_batch_parallel_longest_first.toggled.connect(
+            self._main_window._on_batch_parallel_changed
+        )
+        h_par.addWidget(self.chk_batch_parallel_longest_first)
         has_cuda = bool(cuda_devices)
+
+        def _jobs_per_gpu_changed(k: int) -> None:
+            # Keep Jobs at the full slot count, or the cap would silently undo
+            # the extra processes per GPU.
+            if has_cuda:
+                self.spin_batch_parallel_jobs.setValue(
+                    self._selected_gpu_count(cuda_devices) * int(k)
+                )
+            self._main_window._on_batch_parallel_changed()
+
+        self.spin_batch_parallel_jobs_per_gpu.valueChanged.connect(
+            _jobs_per_gpu_changed
+        )
+        self.spin_batch_parallel_jobs_per_gpu.setVisible(
+            has_cuda and self.chk_batch_parallel.isChecked()
+        )
         self.lbl_batch_parallel_gpus.setVisible(has_cuda)
         self.edit_batch_parallel_gpus.setVisible(has_cuda)
         self.container_batch_parallel.setVisible(self.chk_batch_parallel.isChecked())
@@ -1150,3 +1199,22 @@ class SetupPanel(QWidget):
                 f"Frame rate detected: {detected_fps:.2f} FPS\n\n"
                 f"Time per frame: {1000.0 / detected_fps:.2f} ms",
             )
+
+    def _selected_gpu_count(self, cuda_devices) -> int:
+        """GPUs the selector names (all of them if it does not resolve yet)."""
+        from hydra_suite.runtime.cuda_devices import (
+            parse_gpu_selectors,
+            resolve_gpu_selectors,
+        )
+
+        try:
+            return len(
+                resolve_gpu_selectors(
+                    parse_gpu_selectors(
+                        self.edit_batch_parallel_gpus.text().strip() or "auto"
+                    ),
+                    cuda_devices,
+                )
+            )
+        except ValueError:
+            return len(cuda_devices)

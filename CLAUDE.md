@@ -179,7 +179,7 @@ refinekit      # RefineKit interactive proofreading
 detectkit      # DetectKit detection tool
 ```
 
-`trackerkit track --video-list x.txt --gpus auto` fans a batch out one child process per GPU (see `docs/user-guide/trackerkit-cli.md`); fan-out engages only with `--gpus` or `--jobs > 1`, so the plain CLI path stays byte-identical.
+`trackerkit track --video-list x.txt --gpus auto` fans a batch out one child process per GPU (see `docs/user-guide/trackerkit-cli.md`); fan-out engages only with `--gpus` or `--jobs > 1`, so the plain CLI path stays byte-identical. `--jobs-per-gpu K` (needs `--gpus`) runs K children per GPU; use it when one job leaves the GPU underused — 2 was the sweet spot on RTX 6000 Ada 4512² videos (+16% total fps, 3 added nothing) — and pair it with `--threads-per-job ≈ cpu_count / (GPUs × K)`. `--longest-first` launches the longest videos first (opt-in; default is input order).
 
 ## Code Quality
 
