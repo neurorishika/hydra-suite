@@ -360,3 +360,62 @@ def test_software_backend_keeps_crf(tmp_path):
     assert enc._stream.options.get("crf") == "23"
     enc.write(np.zeros((48, 64, 3), dtype=np.uint8))
     enc.release()
+
+
+# ── backend probe isolation ───────────────────────────────────────────────────
+# The NVENC test encode used to run inside the tracking process. Its teardown
+# (avcodec_free_context -> libnvidia-encode -> libnvcuvid) segfaulted (7x) or
+# deadlocked in poll() (3x) at the start of the annotated render in a 66-video
+# diptera run after hours of NVDEC/TensorRT use; fresh processes never did.
+# The probe now runs in a throwaway child.
+
+
+def _completed(rc, out=""):
+    import subprocess
+
+    return subprocess.CompletedProcess(["probe"], rc, stdout=out, stderr="")
+
+
+def test_probe_backend_uses_child_result_without_encoding_in_parent(monkeypatch):
+    import hydra_suite.utils.video_encoder as ve
+
+    def _no_parent_encode(codec):
+        raise AssertionError("parent process must not run a test encode")
+
+    monkeypatch.setattr(ve, "_try_encode", _no_parent_encode)
+    seen = {}
+
+    def runner(cmd, **kw):
+        seen["cmd"], seen["timeout"] = cmd, kw.get("timeout")
+        return _completed(0, "nvenc\n")
+
+    assert ve._probe_backend(runner=runner) == "nvenc"
+    assert seen["cmd"][:3] == [sys.executable, "-m", "hydra_suite.utils.video_encoder"]
+    assert seen["timeout"] and seen["timeout"] > 0
+
+
+@pytest.mark.parametrize("outcome", ["segfault", "timeout", "garbage"], ids=lambda o: o)
+def test_probe_backend_survives_a_crashing_or_hanging_child(monkeypatch, outcome):
+    import subprocess
+
+    import hydra_suite.utils.video_encoder as ve
+
+    monkeypatch.setattr(
+        ve, "_try_encode", lambda codec: (_ for _ in ()).throw(AssertionError("no"))
+    )
+
+    def runner(cmd, **kw):
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        if outcome == "segfault":
+            return _completed(-11)
+        return _completed(0, "definitely-not-a-backend\n")
+
+    assert ve._probe_backend(runner=runner) in ("pyav_software", "opencv")
+
+
+def test_probe_backend_child_really_runs():
+    """End-to-end: the real child answers with a known backend."""
+    import hydra_suite.utils.video_encoder as ve
+
+    assert ve._probe_backend() in ("nvenc", "videotoolbox", "pyav_software", "opencv")

@@ -12,7 +12,9 @@ cv2.VideoWriter automatically.  Install PyAV via the [cuda] or [mps] extras:
 
 from __future__ import annotations
 
+import logging
 import os
+import subprocess
 import sys
 import tempfile
 from fractions import Fraction
@@ -20,6 +22,8 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # ── Global state ──────────────────────────────────────────────────────────────
 
@@ -144,8 +148,50 @@ def _try_encode(codec_name: str) -> bool:
         return False
 
 
-def _probe_backend() -> str:
-    """Detect the best available video encoding backend."""
+_BACKENDS = ("nvenc", "videotoolbox", "pyav_software", "opencv")
+_PROBE_TIMEOUT_S = 120.0
+
+
+def _probe_backend(*, runner=subprocess.run) -> str:
+    """Detect the best available video encoding backend.
+
+    The test encodes run in a throwaway child process. Done in-process, the
+    NVENC probe's teardown (avcodec_free_context -> libnvidia-encode ->
+    libnvcuvid) segfaulted or deadlocked in poll() inside long tracking runs
+    that had used NVDEC/TensorRT for hours (10 of 66 videos in one diptera
+    batch); fresh processes never did. A child that crashes, hangs or answers
+    nonsense falls back to software encoding, decided without a test encode
+    in this process.
+    """
+    try:
+        import av
+    except ImportError:
+        return "opencv"
+    try:
+        proc = runner(
+            [sys.executable, "-m", __name__, "--probe-backend"],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_S,
+        )
+        answer = (proc.stdout or "").strip().splitlines()
+        if proc.returncode == 0 and answer and answer[-1] in _BACKENDS:
+            return answer[-1]
+        logger.warning(
+            "Video encoder probe child failed (exit %s); using software encoding",
+            proc.returncode,
+        )
+    except Exception as exc:  # timeout, spawn failure
+        logger.warning(
+            "Video encoder probe child did not finish (%s); using software encoding",
+            exc,
+        )
+    available: set[str] = av.codecs_available  # type: ignore[attr-defined]
+    return "pyav_software" if "libx264" in available else "opencv"
+
+
+def _probe_backend_in_process() -> str:
+    """The actual probe; only ever run inside the probe child."""
     try:
         import av
     except ImportError:
@@ -400,3 +446,7 @@ class VideoEncoder:
 
     def __exit__(self, *_: object) -> None:
         self.release()
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--probe-backend"]:
+    print(_probe_backend_in_process(), flush=True)
