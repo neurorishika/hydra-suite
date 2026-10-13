@@ -4897,11 +4897,12 @@ read a just-written frame's evidence back before <code>close()</code>/flush.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Return True iff the detection cache spans every frame in the range.</p>
+        <p>Return True iff EVERY cache member spans every frame in the range.</p>
 <p>Key validity alone (<code>caches_all_valid</code>) does not guarantee a cache
 produced by a full forward pass: an interrupted or shorter run yields a
-valid-keyed cache covering fewer frames. Backward/replay passes must
-additionally confirm frame-range coverage (legacy parity, H9).</p>
+valid-keyed cache covering fewer frames, and per-animal members may
+cover only a recomputed window of detection. Backward/replay passes
+must additionally confirm frame-range coverage (legacy parity, H9).</p>
 
     </div>
 
@@ -4918,7 +4919,7 @@ additionally confirm frame-range coverage (legacy parity, H9).</p>
 
     <div class="doc doc-contents ">
 
-        <p>Report up to <code>max_report</code> frames missing from the detection cache.</p>
+        <p>Report up to <code>max_report</code> frames some cache member is missing.</p>
 
     </div>
 
