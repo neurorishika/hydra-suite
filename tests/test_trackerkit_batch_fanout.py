@@ -106,7 +106,7 @@ def test_parse_progress_and_summary_lines():
     assert parse_summary_line("t - n - INFO - other") is None
 
 
-def test_build_child_env_pins_gpu_and_unbuffered_and_caps_only_when_unset():
+def test_build_child_env_pins_gpu_and_unbuffered_and_caps_with_min():
     gpu = CudaDevice(index=3, uuid="GPU-1234", name="x")
     env = build_child_env(
         {"PATH": "/bin", "OMP_NUM_THREADS": "7"}, gpu=gpu, threads_per_job=4
@@ -114,7 +114,7 @@ def test_build_child_env_pins_gpu_and_unbuffered_and_caps_only_when_unset():
     assert env["CUDA_VISIBLE_DEVICES"] == "GPU-1234"
     assert env["PYTHONUNBUFFERED"] == "1"
     assert env["KMP_DUPLICATE_LIB_OK"] == "TRUE"
-    assert env["OMP_NUM_THREADS"] == "7"  # parent's value wins
+    assert env["OMP_NUM_THREADS"] == "4"  # min(parent's 7, threads_per_job)
     assert env["NUMBA_NUM_THREADS"] == "4"
     assert env["MKL_NUM_THREADS"] == "4"
     assert env["OPENBLAS_NUM_THREADS"] == "4"
@@ -642,3 +642,99 @@ def test_decide_gpu_slots_on_a_non_cuda_host():
     # An explicit device the host does not have stays an error.
     with pytest.raises(ValueError):
         decide_gpu_slots(["0"], [], host_has_cuda=False)
+
+
+from hydra_suite.trackerkit.batch_fanout import (  # noqa: E402
+    FanoutOptions,
+    plan_fanout_cpu,
+    resolve_slot_count,
+)
+
+
+def test_child_env_caps_with_min_and_new_vars():
+    env = build_child_env(
+        {"OMP_NUM_THREADS": "64", "MKL_NUM_THREADS": "1", "HYDRA_CPU_BUDGET": "48"},
+        gpu=None,
+        threads_per_job=4,
+    )
+    assert env["OMP_NUM_THREADS"] == "4"
+    assert env["MKL_NUM_THREADS"] == "1"
+    for var in (
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "OPENCV_FFMPEG_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMBA_NUM_THREADS",
+    ):
+        assert env[var] == "4"
+    assert env["HYDRA_CPU_THREADS"] == "4"
+    assert "HYDRA_CPU_BUDGET" not in env
+
+
+def test_child_env_garbage_existing_values_treated_as_unset():
+    env = build_child_env(
+        {
+            "OMP_NUM_THREADS": "abc",
+            "MKL_NUM_THREADS": "0",
+            "OPENBLAS_NUM_THREADS": "-3",
+        },
+        gpu=None,
+        threads_per_job=4,
+    )
+    assert {
+        env[v] for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+    } == {"4"}
+
+
+def test_child_env_without_threads_is_unchanged_except_existing_rules():
+    env = build_child_env({"OMP_NUM_THREADS": "7"}, gpu=None, threads_per_job=None)
+    assert env["OMP_NUM_THREADS"] == "7" and "HYDRA_CPU_THREADS" not in env
+
+
+def _gpus(n):
+    return [CudaDevice(index=i, uuid=f"GPU-{i}", name="x") for i in range(n)]
+
+
+def test_resolve_slot_count_matches_scheduler():
+    assert resolve_slot_count(FanoutOptions(gpus=_gpus(4), jobs=None)) == 4
+    assert resolve_slot_count(FanoutOptions(gpus=_gpus(4), jobs=9)) == 4
+    assert resolve_slot_count(FanoutOptions(gpus=[], jobs=3)) == 3
+    assert resolve_slot_count(FanoutOptions(gpus=[], jobs=None)) == 1
+
+
+def test_plan_fanout_cpu_clamps_cpu_jobs_and_fills_threads():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=[], jobs=16), n_videos=20, cpu_budget=None, env={}, usable=12
+    )
+    assert (opts.jobs, opts.threads_per_job, plan.clamped) == (6, 2, True)
+
+
+def test_plan_fanout_cpu_few_videos_many_gpus():
+    opts, _ = plan_fanout_cpu(
+        FanoutOptions(gpus=_gpus(8), jobs=None),
+        n_videos=2,
+        cpu_budget=None,
+        env={},
+        usable=32,
+    )
+    assert (opts.jobs, opts.threads_per_job) == (8, 16)
+
+
+def test_plan_fanout_cpu_explicit_threads_override():
+    opts, plan = plan_fanout_cpu(
+        FanoutOptions(gpus=[], jobs=16, threads_per_job=3),
+        n_videos=20,
+        cpu_budget=None,
+        env={},
+        usable=12,
+    )
+    assert (opts.jobs, opts.threads_per_job, plan.clamped) == (16, 3, False)
+
+
+def test_plan_fanout_cpu_reads_process_env_when_env_none(monkeypatch):
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    opts, _ = plan_fanout_cpu(
+        FanoutOptions(gpus=[], jobs=2), n_videos=4, cpu_budget=8, usable=64
+    )
+    assert opts.threads_per_job == 4

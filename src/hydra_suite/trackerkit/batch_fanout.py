@@ -26,6 +26,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, Sequence, TextIO
 
+from hydra_suite.runtime.cpu_budget import (
+    ENV_CPU_BUDGET,
+    ENV_CPU_THREADS,
+    THREAD_ENV_VARS,
+    CpuPlan,
+    _positive_int,
+    plan_cpu,
+    resolve_cpu_budget,
+)
 from hydra_suite.runtime.cuda_devices import CudaDevice, resolve_gpu_selectors
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
 from hydra_suite.utils.video_artifacts import (
@@ -73,12 +82,6 @@ _PROGRESS_RE = re.compile(
     r"\[(?:track forward|track backward|post)\] (\d{1,3})% ?(.*)$"
 )
 _SUMMARY_RE = re.compile(r"Tracker CLI completed: (.*)$")
-_THREAD_CAP_VARS = (
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "NUMBA_NUM_THREADS",
-)
 
 
 @dataclass
@@ -295,9 +298,44 @@ def build_child_env(
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     if threads_per_job is not None and int(threads_per_job) > 0:
-        for var in _THREAD_CAP_VARS:
-            env.setdefault(var, str(int(threads_per_job)))
+        n = int(threads_per_job)
+        # The child sizes itself from its own cap, never the box-wide budget.
+        env.pop(ENV_CPU_BUDGET, None)
+        env[ENV_CPU_THREADS] = str(n)
+        for var in THREAD_ENV_VARS:
+            existing = _positive_int(env.get(var))
+            env[var] = str(min(existing, n) if existing is not None else n)
     return env
+
+
+def resolve_slot_count(options: FanoutOptions) -> int:
+    """Concurrent child slots the scheduler opens for ``options``."""
+    if options.gpus:
+        # Unspecified jobs -> one slot per GPU; an explicit jobs is clamped to
+        # the GPU count so two children never share one device.
+        requested = len(options.gpus) if options.jobs is None else int(options.jobs)
+        return max(1, min(requested, len(options.gpus)))
+    return max(1, int(options.jobs or 1))
+
+
+def plan_fanout_cpu(
+    options: FanoutOptions,
+    *,
+    n_videos: int,
+    cpu_budget: Optional[int],
+    env: Optional[Mapping[str, str]] = None,
+    usable: Optional[int] = None,
+) -> tuple[FanoutOptions, CpuPlan]:
+    """Fit the slot count into the CPU budget and size each child's threads."""
+    budget = resolve_cpu_budget(cpu_budget, env=env, usable=usable)
+    plan = plan_cpu(
+        jobs=resolve_slot_count(options),
+        n_videos=n_videos,
+        budget=budget,
+        gpu_bound=bool(options.gpus),
+        threads_per_job=options.threads_per_job,
+    )
+    return replace(options, jobs=plan.jobs, threads_per_job=plan.threads_per_job), plan
 
 
 def default_child_command(
@@ -629,14 +667,11 @@ def run_batch_fanout(
         specs = [replace(s, index=i) for i, s in enumerate(specs, 1)]
 
     slots: list[Optional[CudaDevice]]
+    n = resolve_slot_count(options)
     if options.gpus:
-        # Unspecified jobs -> one slot per GPU; an explicit jobs is clamped to
-        # the GPU count so two children never share one device.
-        requested = len(options.gpus) if options.jobs is None else int(options.jobs)
-        n = max(1, min(requested, len(options.gpus)))
         slots = list(options.gpus[:n])
     else:
-        slots = [None] * max(1, int(options.jobs or 1))
+        slots = [None] * n
 
     owns_run_dir = not options.run_dir
     run_dir = (
