@@ -55,7 +55,7 @@ def _cgroup_quota_cores(cgroup_root: str, proc_cgroup: str) -> Optional[int]:
                 break
             node = node.parent
         return best
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 
@@ -106,8 +106,15 @@ def resolve_cpu_budget(
     usable = usable_cores() if usable is None else max(1, int(usable))
     warnings: list[str] = []
     cores, source = usable, "auto"
+    flag = None
     if requested:
-        cores, source = int(requested), "flag"
+        flag = _positive_int(requested)
+        if flag is None:
+            warnings.append(
+                f"Ignoring invalid CPU budget {requested!r} (need an integer >= 1)."
+            )
+    if flag is not None:
+        cores, source = flag, "flag"
     else:
         raw = env.get(ENV_CPU_BUDGET)
         if raw is not None and raw.strip() != "":
@@ -183,6 +190,8 @@ def resolve_process_cap(
     child = _positive_int(env.get(ENV_CPU_THREADS))
     if child is not None:
         return child
-    if not cli_budget and _positive_int(env.get(ENV_CPU_BUDGET)) is None:
+    if (not cli_budget or _positive_int(cli_budget) is None) and _positive_int(
+        env.get(ENV_CPU_BUDGET)
+    ) is None:
         return None
     return resolve_cpu_budget(cli_budget, env=env, usable=usable).cores

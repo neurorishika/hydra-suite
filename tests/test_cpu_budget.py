@@ -132,3 +132,26 @@ def test_resolve_process_cap_precedence():
         cb.resolve_process_cap(None, env={"HYDRA_CPU_THREADS": "junk"}, usable=16)
         is None
     )
+
+
+def test_negative_request_is_ignored_with_warning():
+    b = cb.resolve_cpu_budget(-3, env={}, usable=8)
+    assert (b.cores, b.source) == (8, "auto") and b.warnings
+    assert cb.resolve_process_cap(-3, env={}, usable=16) is None
+    assert cb.resolve_process_cap(-3, env={"HYDRA_CPU_BUDGET": "4"}, usable=16) == 4
+
+
+def test_usable_cores_container_root_cgroup(tmp_path):
+    root = tmp_path / "cg"
+    proc = tmp_path / "proc_cgroup"
+    _write(proc, "0::/\n")
+    _write(root / "cpu.max", "300000 100000\n")
+    assert (
+        cb.usable_cores(
+            affinity=set(range(16)),
+            cpu_count=16,
+            cgroup_root=str(root),
+            proc_cgroup=str(proc),
+        )
+        == 3
+    )
