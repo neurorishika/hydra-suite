@@ -420,7 +420,9 @@ class SetupPanel(QWidget):
             # Keep Jobs at the full slot count, or the cap would silently undo
             # the extra processes per GPU.
             if has_cuda:
-                self.spin_batch_parallel_jobs.setValue(len(cuda_devices) * int(k))
+                self.spin_batch_parallel_jobs.setValue(
+                    self._selected_gpu_count(cuda_devices) * int(k)
+                )
             self._main_window._on_batch_parallel_changed()
 
         self.spin_batch_parallel_jobs_per_gpu.valueChanged.connect(
@@ -1183,3 +1185,22 @@ class SetupPanel(QWidget):
                 f"Frame rate detected: {detected_fps:.2f} FPS\n\n"
                 f"Time per frame: {1000.0 / detected_fps:.2f} ms",
             )
+
+    def _selected_gpu_count(self, cuda_devices) -> int:
+        """GPUs the selector names (all of them if it does not resolve yet)."""
+        from hydra_suite.runtime.cuda_devices import (
+            parse_gpu_selectors,
+            resolve_gpu_selectors,
+        )
+
+        try:
+            return len(
+                resolve_gpu_selectors(
+                    parse_gpu_selectors(
+                        self.edit_batch_parallel_gpus.text().strip() or "auto"
+                    ),
+                    cuda_devices,
+                )
+            )
+        except ValueError:
+            return len(cuda_devices)
