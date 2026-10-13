@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from hydra_suite.core.post.processing import (
+    HeadingFixSettings,
     interpolate_trajectories,
     resolve_trajectories,
     trim_positionless_ends,
@@ -186,6 +187,7 @@ def merge_trajectories(
                     heading_flip_max_burst=heading_flip_max_burst,
                     directed_heading_posthoc=directed_heading_posthoc,
                     fill_all_interior=fill_all_interior,
+                    heading_fix=HeadingFixSettings.from_params(params, resize_factor),
                 )
             elif isinstance(resolved, pd.DataFrame):
                 # No interpolation requested: positions are not fabricated,

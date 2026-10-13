@@ -25,6 +25,7 @@ from hydra_suite.core.post.pose_merge import (
     resolve_current_tag_cache_path,
 )
 from hydra_suite.core.post.processing import (
+    HeadingFixSettings,
     final_interpolation_max_gap,
     interpolate_trajectories,
     process_trajectories_from_csv,
@@ -268,6 +269,9 @@ class TrackingSessionCore:
                     self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
                 ),
                 fill_all_interior=True,
+                heading_fix=HeadingFixSettings.from_params(
+                    self.params, float(self.params.get("RESIZE_FACTOR", 1.0))
+                ),
             )
         else:
             df = trim_positionless_ends(df)
