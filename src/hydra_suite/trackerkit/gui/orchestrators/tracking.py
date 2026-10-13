@@ -113,6 +113,22 @@ class TrackingOrchestrator:
             self._calibration_dialog = None
             return False
 
+    def stop_calibration(self, timeout_ms: int = 20000) -> bool:
+        """Cancel a calibration search that may have outlived its dialog.
+
+        Returns True once no search thread is running. The worker is a child
+        of the dialog, itself a child of the main window, so closing the
+        window while it runs destroys a live QThread.
+        """
+        if not self._calibration_is_active():
+            return True
+        try:
+            return bool(self._calibration_dialog.cancel_and_wait(timeout_ms))
+        except RuntimeError:
+            # Underlying C++ dialog already deleted -> nothing is running.
+            self._calibration_dialog = None
+            return True
+
     def _params_or_report_limit(self, context: str):
         """``get_parameters_dict()`` or ``None`` after telling the user why not."""
         from hydra_suite.trackerkit.gui.limit_guard import params_or_report_limit

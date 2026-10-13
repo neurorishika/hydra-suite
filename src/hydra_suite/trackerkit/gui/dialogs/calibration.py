@@ -264,9 +264,20 @@ class CalibrationDialog(BaseDialog):
         self.spin_budget.setEnabled(True)
         self.btn_cancel.setEnabled(False)
 
+    def cancel_and_wait(self, timeout_ms: int) -> bool:
+        """Cancel a running search and wait up to ``timeout_ms`` for its thread.
+
+        Returns True once no search thread is running. A cancel stops the
+        current trial's sidecar, then the sidecar gets up to 10 s to exit, so
+        a short wait can return False with the thread still unwinding.
+        """
+        if self._worker is None or not self._worker.isRunning():
+            return True
+        self._worker.cancel()
+        self._worker.wait(timeout_ms)
+        return not self._worker.isRunning()
+
     def reject(self) -> None:
         """Cancel any running calibration before closing."""
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.cancel()
-            self._worker.wait(5000)
+        self.cancel_and_wait(5000)
         super().reject()

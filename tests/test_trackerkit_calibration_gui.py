@@ -346,3 +346,146 @@ def test_gui_worker_reports_the_cache_mode_it_calibrated_in(monkeypatch, tmp_pat
     worker.execute()
 
     assert payloads and payloads[0]["cache_replay"] is True
+
+
+class _FakeCalibrationWorker:
+    """Stands in for CalibrationWorker: stops on cancel() unless ``stuck``."""
+
+    def __init__(self, stuck: bool = False) -> None:
+        self.stuck = stuck
+        self.running = True
+        self.cancelled = False
+        self.waited_ms: list[int] = []
+
+    def isRunning(self) -> bool:
+        return self.running
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def wait(self, ms: int) -> bool:
+        self.waited_ms.append(ms)
+        if self.cancelled and not self.stuck:
+            self.running = False
+        return not self.running
+
+
+def _dialog(qapp):
+    from hydra_suite.trackerkit.gui.dialogs.calibration import CalibrationDialog
+
+    return CalibrationDialog(
+        params={},
+        config=object(),
+        video_path="/tmp/v.mp4",
+        frame_width=64,
+        frame_height=48,
+        start_frame=0,
+        end_frame=10,
+        realtime=False,
+        default_budget_seconds=60.0,
+    )
+
+
+def test_cancel_and_wait_cancels_then_reports_whether_the_thread_is_gone(qapp):
+    dialog = _dialog(qapp)
+    try:
+        assert dialog.cancel_and_wait(1000) is True  # nothing started
+        dialog._worker = _FakeCalibrationWorker()
+        assert dialog.cancel_and_wait(1234) is True
+        assert dialog._worker.cancelled and dialog._worker.waited_ms == [1234]
+        dialog._worker = _FakeCalibrationWorker(stuck=True)
+        assert dialog.cancel_and_wait(10) is False
+    finally:
+        dialog._worker = None
+        dialog.deleteLater()
+
+
+def _calibration_orchestrator(dialog):
+    from types import SimpleNamespace
+
+    from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
+
+    orch = TrackingOrchestrator.__new__(TrackingOrchestrator)
+    orch._mw = SimpleNamespace()
+    orch._calibration_dialog = dialog
+    return orch
+
+
+def test_stop_calibration_is_a_no_op_without_a_running_calibration():
+    assert _calibration_orchestrator(None).stop_calibration() is True
+
+
+def test_stop_calibration_cancels_a_worker_that_outlived_its_dialog():
+    """reject() waits only 5 s, so the search thread can outlive the dialog;
+    closing the window must stop it rather than destroy a running QThread."""
+    from types import SimpleNamespace
+
+    worker = _FakeCalibrationWorker()
+    dialog = SimpleNamespace(
+        is_calibration_running=worker.isRunning,
+        cancel_and_wait=lambda ms: worker.cancel() or worker.wait(ms),
+    )
+    assert _calibration_orchestrator(dialog).stop_calibration() is True
+    assert worker.cancelled and not worker.running
+
+    stuck = _FakeCalibrationWorker(stuck=True)
+    dialog = SimpleNamespace(
+        is_calibration_running=stuck.isRunning,
+        cancel_and_wait=lambda ms: stuck.cancel() or stuck.wait(ms),
+    )
+    assert _calibration_orchestrator(dialog).stop_calibration() is False
+
+
+def _close_stub(monkeypatch, calibration_stopped: bool):
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.gui.main_window as mw_mod
+
+    warnings: list = []
+    monkeypatch.setattr(
+        mw_mod,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *a: warnings.append(a)),
+    )
+    monkeypatch.setattr(
+        mw_mod,
+        "QApplication",
+        SimpleNamespace(
+            setOverrideCursor=lambda *a: None, restoreOverrideCursor=lambda *a: None
+        ),
+    )
+    events: list[str] = []
+    stub = SimpleNamespace(
+        _has_active_tracking_workers=lambda: False,
+        _tracking_orch=SimpleNamespace(
+            stop_calibration=lambda: events.append("stop_calibration")
+            or calibration_stopped
+        ),
+        _save_ui_settings=lambda: events.append("save"),
+        _status_log_tail=None,
+    )
+    event = SimpleNamespace(
+        ignore=lambda: events.append("ignore"), accept=lambda: events.append("accept")
+    )
+    return stub, event, events, warnings
+
+
+def test_close_is_refused_while_a_calibration_is_still_stopping(monkeypatch):
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    stub, event, events, warnings = _close_stub(monkeypatch, False)
+    MainWindow.closeEvent(stub, event)
+    assert events == ["stop_calibration", "ignore"], events
+    assert warnings, "the user was not told why the window stayed open"
+
+
+def test_close_proceeds_once_the_calibration_has_stopped(monkeypatch):
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    stub, event, events, warnings = _close_stub(monkeypatch, True)
+    # The stub is not a real QWidget, so reaching QMainWindow.closeEvent raises
+    # -- which is itself the proof that the close PROCEEDED.
+    with pytest.raises(TypeError, match="SimpleNamespace"):
+        MainWindow.closeEvent(stub, event)
+    assert events == ["stop_calibration", "save"], events
+    assert not warnings

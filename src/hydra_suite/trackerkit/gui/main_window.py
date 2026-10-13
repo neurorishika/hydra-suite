@@ -1557,6 +1557,23 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Stop active workers cleanly, then persist UI layout state on close."""
+        # A cancelled calibration can outlive its dialog (reject() waits only
+        # 5 s). Stop it first: closing now would destroy its running QThread.
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            calibration_stopped = self._tracking_orch.stop_calibration()
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not calibration_stopped:
+            QMessageBox.warning(
+                self,
+                "Calibration still stopping",
+                "The inference calibration has not finished stopping yet. "
+                "The window will stay open -- close it again in a moment.",
+            )
+            event.ignore()
+            return
+
         if self._has_active_tracking_workers():
             fanout_worker = getattr(self, "batch_fanout_worker", None)
             fanout_running = False

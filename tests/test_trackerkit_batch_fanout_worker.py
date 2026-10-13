@@ -423,7 +423,8 @@ def test_close_is_refused_while_the_fanout_is_still_stopping(monkeypatch):
     stub = SimpleNamespace(
         _has_active_tracking_workers=lambda: True,
         _tracking_orch=SimpleNamespace(
-            stop_tracking=lambda: events.append("stop_tracking")
+            stop_tracking=lambda: events.append("stop_tracking"),
+            stop_calibration=lambda: True,
         ),
         batch_fanout_worker=SimpleNamespace(isRunning=lambda: True),
         _save_ui_settings=lambda: events.append("saved"),
@@ -586,7 +587,8 @@ def test_second_close_offers_to_kill_the_children_and_then_proceeds(monkeypatch)
     stub = SimpleNamespace(
         _has_active_tracking_workers=lambda: True,
         _tracking_orch=SimpleNamespace(
-            stop_tracking=lambda: events.append("stop_tracking")
+            stop_tracking=lambda: events.append("stop_tracking"),
+            stop_calibration=lambda: True,
         ),
         batch_fanout_worker=worker,
         _save_ui_settings=lambda: events.append("saved"),
@@ -652,7 +654,9 @@ def test_second_close_answered_no_keeps_the_window_open(monkeypatch):
     )
     stub = SimpleNamespace(
         _has_active_tracking_workers=lambda: True,
-        _tracking_orch=SimpleNamespace(stop_tracking=lambda: None),
+        _tracking_orch=SimpleNamespace(
+            stop_tracking=lambda: None, stop_calibration=lambda: True
+        ),
         batch_fanout_worker=worker,
         _save_ui_settings=lambda: events.append("saved"),
         _status_log_tail=None,
