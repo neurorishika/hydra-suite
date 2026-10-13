@@ -1725,7 +1725,13 @@ class MainWindow(QMainWindow):
         self.config.batch_parallel_gpus = (
             panel.edit_batch_parallel_gpus.text().strip() or "auto"
         )
+        self.config.batch_parallel_jobs_per_gpu = int(
+            panel.spin_batch_parallel_jobs_per_gpu.value()
+        )
         panel.container_batch_parallel.setVisible(self.config.batch_parallel)
+        panel.spin_batch_parallel_jobs_per_gpu.setVisible(
+            self.config.batch_parallel and panel._batch_parallel_has_cuda
+        )
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""

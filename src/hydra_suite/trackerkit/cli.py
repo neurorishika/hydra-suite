@@ -13,6 +13,7 @@ from hydra_suite.runtime.cuda_devices import list_cuda_devices, parse_gpu_select
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
     FanoutResult,
+    build_gpu_slots,
     decide_gpu_slots,
     host_has_cuda,
     run_batch_fanout,
@@ -47,6 +48,7 @@ def run_tracking_cli(
     video_scale: float | None = None,
     gpus: str | None = None,
     jobs: int | None = None,
+    jobs_per_gpu: int = 1,
     threads_per_job: int | None = None,
     log_level: str = "INFO",
     apply_tuned_inference: bool | None = None,
@@ -54,6 +56,10 @@ def run_tracking_cli(
 ) -> int:
     """Run one or more TrackerKit sessions from the CLI (direct Qt-free path)."""
 
+    if int(jobs_per_gpu) < 1:
+        raise ValueError(f"jobs_per_gpu must be >= 1, got {jobs_per_gpu}")
+    if int(jobs_per_gpu) > 1 and not str(gpus or "").strip():
+        raise ValueError("--jobs-per-gpu needs --gpus")
     videos = [str(path).strip() for path in video_paths if str(path).strip()]
     if not videos:
         raise ValueError("At least one video path is required.")
@@ -84,18 +90,14 @@ def run_tracking_cli(
         if gpus
         else []
     )
-    # An unspecified --jobs means "one slot per selected GPU" (and 1 with no
-    # GPUs); an explicit --jobs is honoured but never exceeds the GPU count,
-    # because a second job on a GPU would contend for that GPU's memory.
-    if devices and jobs is None:
-        effective_jobs = len(devices)
-    else:
-        effective_jobs = max(1, int(jobs or 1))
-        if devices:
-            effective_jobs = min(effective_jobs, len(devices))
+    # An unspecified --jobs means "every GPU slot" (GPUs x --jobs-per-gpu, and
+    # 1 with no GPUs); an explicit --jobs is honoured but never exceeds the
+    # slot count, so a GPU is shared only when --jobs-per-gpu asks for it.
+    effective_jobs = len(build_gpu_slots(devices, jobs=jobs, jobs_per_gpu=jobs_per_gpu))
     options = FanoutOptions(
         gpus=devices,
         jobs=effective_jobs,
+        jobs_per_gpu=int(jobs_per_gpu) if devices else 1,
         threads_per_job=threads_per_job,
         log_level=log_level,
     )
@@ -230,8 +232,21 @@ def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
         logger.info(
             "Tracker CLI fan-out: %d videos, %d slot(s)%s",
             len(specs),
-            len(options.gpus) if options.gpus else options.jobs,
-            f" on GPUs {[g.index for g in options.gpus]}" if options.gpus else "",
+            len(
+                build_gpu_slots(
+                    options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
+                )
+            ),
+            (
+                f" on GPUs {[g.index for g in options.gpus]}"
+                + (
+                    f" x {options.jobs_per_gpu} jobs per GPU"
+                    if options.jobs_per_gpu > 1
+                    else ""
+                )
+                if options.gpus
+                else ""
+            ),
         )
         result = run_batch_fanout(
             specs, options, should_stop=stop_event.is_set, events=_CliEvents()

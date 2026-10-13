@@ -16,6 +16,7 @@ from hydra_suite.runtime.cuda_devices import CudaDevice
 from hydra_suite.trackerkit.batch_fanout import (
     FanoutOptions,
     build_child_env,
+    build_gpu_slots,
     decide_gpu_slots,
     default_child_command,
     parse_progress_line,
@@ -689,7 +690,7 @@ _CAP_VARS = (
 )
 
 
-@pytest.mark.parametrize("extra", [{}])
+@pytest.mark.parametrize("extra", [{}, {"jobs_per_gpu": 1}])
 @pytest.mark.parametrize(
     "jobs, threads, n_gpus, expected_gpus, expected_threads",
     [
@@ -728,3 +729,123 @@ def test_k1_children_are_launched_exactly_as_before(
             for var in _CAP_VARS[3:]:
                 expected[var] = expected_threads
         assert delta == expected
+
+
+# --- Multiple jobs per GPU --------------------------------------------------
+
+_THREE = [
+    CudaDevice(0, "GPU-aaaa", "x"),
+    CudaDevice(1, "GPU-bbbb", "x"),
+    CudaDevice(2, "GPU-cccc", "x"),
+]
+
+
+def test_build_gpu_slots_gives_each_gpu_k_slots_round_robin():
+    slots = build_gpu_slots(_THREE, jobs=None, jobs_per_gpu=2)
+    assert len(slots) == 6
+    assert slots == _THREE + _THREE  # spread across GPUs before doubling up
+
+
+def test_build_gpu_slots_clamps_jobs_to_gpus_times_k():
+    assert len(build_gpu_slots(_THREE, jobs=99, jobs_per_gpu=2)) == 6
+    # A cap below GPUs x K still reaches every GPU before doubling up.
+    assert build_gpu_slots(_THREE, jobs=4, jobs_per_gpu=2) == _THREE + _THREE[:1]
+
+
+def test_build_gpu_slots_k1_is_todays_arithmetic():
+    for jobs in (None, 1, 2, 3, 99):
+        expected_n = 3 if jobs is None else max(1, min(jobs, 3))
+        assert build_gpu_slots(_THREE, jobs=jobs, jobs_per_gpu=1) == _THREE[:expected_n]
+
+
+def test_build_gpu_slots_without_gpus_is_unpinned():
+    assert build_gpu_slots([], jobs=None, jobs_per_gpu=1) == [None]
+    assert build_gpu_slots([], jobs=3, jobs_per_gpu=1) == [None, None, None]
+
+
+@pytest.mark.parametrize("k", [0, -1])
+def test_build_gpu_slots_rejects_k_below_one(k):
+    with pytest.raises(ValueError, match="jobs_per_gpu"):
+        build_gpu_slots(_THREE, jobs=None, jobs_per_gpu=k)
+
+
+def test_gpu_listed_twice_still_raises():
+    """Repeating a GPU in --gpus is NOT a way to share it; --jobs-per-gpu is."""
+    with pytest.raises(ValueError):
+        decide_gpu_slots(["0", "0"], _GPUS, host_has_cuda=True)
+
+
+def test_two_jobs_on_one_gpu_run_concurrently_on_the_same_device(tmp_path):
+    specs = [_spec(tmp_path, n, sleep=0.8) for n in ("a", "b")]
+    t0 = time.monotonic()
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=_GPUS[:1],
+            jobs_per_gpu=2,
+            threads_per_job=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    wall = time.monotonic() - t0
+    assert result.success
+    seen = [r.log_path.read_text().split("GPU=")[1].split("\n")[0] for r in result.jobs]
+    assert seen == ["GPU-aaaa", "GPU-aaaa"]
+    assert wall < 1.5, f"2 jobs on one GPU at K=2 should overlap; took {wall:.1f}s"
+
+
+def test_k2_reaps_and_reuses_shared_gpu_slots(tmp_path):
+    """Five videos through 2 GPUs x 2 slots: never more than 2 per GPU."""
+    specs = [_spec(tmp_path, n, sleep=0.3) for n in "abcde"]
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=_GPUS,
+            jobs_per_gpu=2,
+            threads_per_job=2,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    assert result.success and len(result.jobs) == 5
+    assert {r.gpu.uuid for r in result.jobs} == {"GPU-aaaa", "GPU-bbbb"}
+
+
+def _oversubscription_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "oversubscri" in r.getMessage()
+    ]
+
+
+@pytest.mark.parametrize(
+    "k, threads, n_gpus, fires",
+    [(2, None, 1, True), (1, None, 1, False), (2, 4, 1, False), (2, None, 0, False)],
+)
+def test_oversubscription_warning(tmp_path, caplog, k, threads, n_gpus, fires):
+    caplog.set_level("WARNING", logger="hydra_suite.trackerkit.batch_fanout")
+    result = run_batch_fanout(
+        [_spec(tmp_path, "a")],
+        FanoutOptions(
+            gpus=_GPUS[:n_gpus],
+            jobs_per_gpu=k,
+            threads_per_job=threads,
+            run_dir=tmp_path / "run",
+            child_command=_fake_command,
+        ),
+    )
+    assert result.success
+    warnings = _oversubscription_warnings(caplog)
+    assert len(warnings) == (1 if fires else 0)
+    if fires:
+        assert "--threads-per-job" in warnings[0].getMessage()
+
+
+def test_oversubscription_suggestion_divides_cores_by_slots():
+    from hydra_suite.trackerkit.batch_fanout import suggested_threads_per_job
+
+    assert suggested_threads_per_job(n_slots=10, cpu_count=128) == 12
+    assert suggested_threads_per_job(n_slots=64, cpu_count=8) == 1
+    assert suggested_threads_per_job(n_slots=4, cpu_count=None) == 1

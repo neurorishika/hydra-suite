@@ -268,12 +268,16 @@ def test_close_prompt_counts_a_running_fanout_worker():
 # --- GPU resolution on the GUI thread ---------------------------------------
 
 
-def _orchestrator(gpus: str, jobs: int = 0):
+def _orchestrator(gpus: str, jobs: int = 0, jobs_per_gpu: int = 1):
     from types import SimpleNamespace
 
     from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
 
-    config = SimpleNamespace(batch_parallel_gpus=gpus, batch_parallel_jobs=jobs)
+    config = SimpleNamespace(
+        batch_parallel_gpus=gpus,
+        batch_parallel_jobs=jobs,
+        batch_parallel_jobs_per_gpu=jobs_per_gpu,
+    )
     main_window = SimpleNamespace(
         config=config, _on_batch_parallel_changed=lambda: None
     )
@@ -327,6 +331,24 @@ def test_gui_pins_the_selected_devices(monkeypatch):
     options = _orchestrator("1")._resolve_fanout_options()
     assert options is not None and options.gpus == [devices[1]]
     assert options.jobs is None  # unspecified: one slot per selected GPU
+    assert options.jobs_per_gpu == 1
+
+
+def test_gui_jobs_per_gpu_reaches_the_options_and_clamps_jobs(monkeypatch):
+    devices = [CudaDevice(0, "GPU-aaaa", "x"), CudaDevice(1, "GPU-bbbb", "x")]
+    _patch_devices(monkeypatch, devices, has_cuda=True)
+    _capture_warnings(monkeypatch)
+    options = _orchestrator("auto", jobs=99, jobs_per_gpu=2)._resolve_fanout_options()
+    assert options.jobs_per_gpu == 2 and options.jobs == 4
+    options = _orchestrator("auto", jobs_per_gpu=2)._resolve_fanout_options()
+    assert options.jobs_per_gpu == 2 and options.jobs is None
+
+
+def test_gui_jobs_per_gpu_is_ignored_without_gpus(monkeypatch):
+    _patch_devices(monkeypatch, [], has_cuda=False)
+    _capture_warnings(monkeypatch)
+    options = _orchestrator("auto", jobs=2, jobs_per_gpu=3)._resolve_fanout_options()
+    assert options.gpus == [] and options.jobs == 2 and options.jobs_per_gpu == 1
 
 
 # --- Window-close budget ----------------------------------------------------
@@ -687,7 +709,11 @@ def test_starting_a_new_batch_resets_the_close_warned_flag(app, monkeypatch, tmp
         chk_batch_parallel=SimpleNamespace(isChecked=lambda: True),
         chk_batch_keystone_override=SimpleNamespace(isChecked=lambda: False),
     )
-    config = SimpleNamespace(batch_parallel_gpus="auto", batch_parallel_jobs=0)
+    config = SimpleNamespace(
+        batch_parallel_gpus="auto",
+        batch_parallel_jobs=0,
+        batch_parallel_jobs_per_gpu=1,
+    )
     main_window = SimpleNamespace(
         config=config,
         batch_videos=[str(video)],
