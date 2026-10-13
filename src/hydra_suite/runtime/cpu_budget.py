@@ -247,6 +247,24 @@ def single_run_cpu_cap(
     return None if budget.source == "auto" else budget.cores
 
 
+def capped_child_env(base: Mapping[str, str], n: int) -> dict[str, str]:
+    """A copy of ``base`` for a child process capped at ``n`` threads.
+
+    Sets ``HYDRA_CPU_THREADS`` (the child applies it in-process), strips
+    ``HYDRA_CPU_BUDGET`` (a child never re-resolves the box-wide budget) and
+    lowers every thread env var to ``min(existing, n)`` (unset -> ``n``).
+    Shared by the fan-out child builder and the calibration sidecar launcher.
+    """
+    n = max(1, int(n))
+    env = dict(base)
+    env.pop(ENV_CPU_BUDGET, None)
+    env[ENV_CPU_THREADS] = str(n)
+    for var in THREAD_ENV_VARS:
+        existing = positive_int(env.get(var))
+        env[var] = str(min(existing, n) if existing is not None else n)
+    return env
+
+
 # --------------------------------------------------------------------------
 # Process-level cap (applied) + per-thread binder
 # --------------------------------------------------------------------------

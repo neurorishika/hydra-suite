@@ -27,13 +27,10 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, Sequence, TextIO
 
 from hydra_suite.runtime.cpu_budget import (
-    ENV_CPU_BUDGET,
-    ENV_CPU_THREADS,
-    THREAD_ENV_VARS,
     CpuBudget,
     CpuPlan,
+    capped_child_env,
     plan_cpu,
-    positive_int,
     resolve_cpu_budget,
 )
 from hydra_suite.runtime.cuda_devices import CudaDevice, resolve_gpu_selectors
@@ -299,13 +296,8 @@ def build_child_env(
     env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     if threads_per_job is not None and int(threads_per_job) > 0:
-        n = int(threads_per_job)
         # The child sizes itself from its own cap, never the box-wide budget.
-        env.pop(ENV_CPU_BUDGET, None)
-        env[ENV_CPU_THREADS] = str(n)
-        for var in THREAD_ENV_VARS:
-            existing = positive_int(env.get(var))
-            env[var] = str(min(existing, n) if existing is not None else n)
+        env = capped_child_env(env, int(threads_per_job))
     return env
 
 

@@ -168,3 +168,12 @@ def test_usable_cores_container_root_cgroup(tmp_path):
         )
         == 3
     )
+
+
+def test_capped_child_env_caps_thread_vars_and_strips_budget():
+    base = {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "16", "HYDRA_CPU_BUDGET": "32"}
+    env = cb.capped_child_env(base, 4)
+    assert env["HYDRA_CPU_THREADS"] == "4" and "HYDRA_CPU_BUDGET" not in env
+    assert env["OMP_NUM_THREADS"] == "1" and env["MKL_NUM_THREADS"] == "4"
+    assert all(env[v] for v in cb.THREAD_ENV_VARS)
+    assert base["MKL_NUM_THREADS"] == "16"  # input untouched

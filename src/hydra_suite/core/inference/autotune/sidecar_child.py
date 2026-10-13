@@ -25,6 +25,11 @@ from hydra_suite.core.inference.autotune.sidecar import (
 from hydra_suite.core.tracking.session import SessionCallbacks, TrackingSessionCore
 from hydra_suite.core.tracking.worker import TrackingEngineCore
 from hydra_suite.data.csv_writer import CSVWriterThread, build_tracking_csv_header
+from hydra_suite.runtime.cpu_budget import (
+    bind_thread_cpu_cap,
+    inherited_cpu_threads,
+    set_process_cpu_cap,
+)
 
 
 def _read_request(path: Path) -> dict[str, Any]:
@@ -372,7 +377,23 @@ def _atomic_result(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _apply_inherited_cpu_cap() -> None:
+    """Apply the cap a capped parent handed down via ``HYDRA_CPU_THREADS``.
+
+    Only the inherited per-child cap counts: the launcher sets it (and strips
+    ``HYDRA_CPU_BUDGET``) exactly when the parent is capped, so an uncapped
+    parent's trial child stays uncapped even if ``HYDRA_CPU_BUDGET`` happens
+    to be in its environment (plain-path invariant). Runs on the main thread,
+    which runs every trial; engine/pipeline threads bind themselves.
+    """
+    cap = inherited_cpu_threads()
+    if cap is not None:
+        set_process_cpu_cap(cap)
+        bind_thread_cpu_cap()
+
+
 def run(request_path: Path) -> None:
+    _apply_inherited_cpu_cap()
     request_path = request_path.expanduser().resolve()
     request_root = request_path.parent
     request = _read_request(request_path)
