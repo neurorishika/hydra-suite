@@ -272,7 +272,12 @@ class TensorRTEngineRunner:
     def run(self, batch: np.ndarray) -> Dict[str, np.ndarray]:
         input_shape = tuple(int(v) for v in batch.shape)
         if hasattr(self._context, "set_input_shape"):
-            self._context.set_input_shape(self.input_name, input_shape)
+            if self._context.set_input_shape(self.input_name, input_shape) is False:
+                raise RuntimeError(
+                    f"TensorRT rejected input shape {input_shape} for "
+                    f"{self.input_name!r}; the engine's optimization profile "
+                    "does not cover this batch."
+                )
         elif hasattr(self._context, "set_binding_shape"):
             index = self._engine.get_binding_index(self.input_name)
             self._context.set_binding_shape(index, input_shape)
@@ -334,7 +339,12 @@ class TensorRTEngineRunner:
         """
         input_shape = tuple(int(v) for v in batch_cuda.shape)
         if hasattr(self._context, "set_input_shape"):
-            self._context.set_input_shape(self.input_name, input_shape)
+            if self._context.set_input_shape(self.input_name, input_shape) is False:
+                raise RuntimeError(
+                    f"TensorRT rejected input shape {input_shape} for "
+                    f"{self.input_name!r}; the engine's optimization profile "
+                    "does not cover this batch."
+                )
         elif hasattr(self._context, "set_binding_shape"):
             index = self._engine.get_binding_index(self.input_name)
             self._context.set_binding_shape(index, input_shape)

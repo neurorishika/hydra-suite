@@ -367,6 +367,13 @@ class Grid(RegionSource):
             task=self.task(config),
             max_detections=effective_raw_detection_cap(config),
         )
+        # The TRT engine's profile was sized at load time from its own chunk
+        # estimate; never submit more than it accepts.
+        engine_max = getattr(
+            getattr(model, "_executor", None), "_profile_max_batch", None
+        )
+        if engine_max:
+            chunk_size = min(chunk_size, int(engine_max))
         letterbox = device_frames and not isinstance(model, DirectExecutorAdapter)
 
         for chunk in iter_tile_job_chunks(
@@ -972,6 +979,11 @@ class SlicedStage1Proposals(Stage1Proposals):
             task="detect",
             max_detections=candidate_cap,
         )
+        engine_max = getattr(
+            getattr(model, "_executor", None), "_profile_max_batch", None
+        )
+        if engine_max:
+            chunk_size = min(chunk_size, int(engine_max))
         stage1_kwargs: dict[str, Any] = {}
         if seq.detect_image_size > 0:
             stage1_kwargs["imgsz"] = seq.detect_image_size

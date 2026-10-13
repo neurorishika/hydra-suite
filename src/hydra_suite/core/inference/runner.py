@@ -466,9 +466,8 @@ def _load_obb_for_config(
                 "imgsz (%s) could not be probed at load time; falling back to "
                 "detection_batch_size=%d for the TRT engine profile. If the "
                 "runtime tier is gpu_fast, the exported engine's dynamic-batch "
-                "profile may not cover the real tile-chunk size and inference "
-                "may fail at setInputShape — a manually sized engine export "
-                "may be required.",
+                "profile may not cover the real tile-chunk size, in which case "
+                "every chunk is split to fit it (extra launches per frame).",
                 frame_hw,
                 imgsz,
                 batch_size,
