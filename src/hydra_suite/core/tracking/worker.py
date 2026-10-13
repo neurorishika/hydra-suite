@@ -1376,6 +1376,13 @@ class TrackingEngineCore:
                 # a clear DownstreamCacheError (not a key-mismatch rejection).
                 cache_filter_config=_written_filter_cfg,
             )
+            if not (self.backward_mode or self.cache_read_only_replay):
+                # Realtime keeps cached detections only when reuse is allowed;
+                # otherwise it recomputes (and overwrites) this window.
+                inference_runner.configure_realtime_pass(
+                    window=(int(start_frame), int(end_frame)),
+                    reuse_detections=bool(self.use_cached_detections),
+                )
             if not (
                 self.backward_mode or self.cache_read_only_replay or self.preview_mode
             ):
@@ -1659,6 +1666,10 @@ class TrackingEngineCore:
                     cache_dir=_fwd_cache_dir,
                     video_path=self.video_path,
                     cache_only=False,
+                )
+                bgsub_runner.configure_realtime_pass(
+                    window=(int(start_frame), int(end_frame)),
+                    reuse_detections=bool(self.use_cached_detections),
                 )
                 if _fwd_cache_dir is not None:
                     logger.info(

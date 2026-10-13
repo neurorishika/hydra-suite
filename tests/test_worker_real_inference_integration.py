@@ -433,6 +433,9 @@ def test_forward_invalid_caches_triggers_batch_pass(monkeypatch, tmp_path):
     calls = {"batch": 0}
 
     class _NeedsBatchRunner:
+        def configure_realtime_pass(self, **_kwargs):
+            pass
+
         def __init__(self, *_a, **_k):
             pass
 
@@ -484,6 +487,9 @@ def test_autotune_overlay_resolves_before_runner_loads_models(monkeypatch, tmp_p
         return effective, overlay, ResolveResult(overlay)
 
     class _ProbeRunner:
+        def configure_realtime_pass(self, **_kwargs):
+            pass
+
         def __init__(self, config, *_args, **_kwargs):
             calls.append(("runner", config.detection_batch_size))
 
@@ -544,6 +550,9 @@ def test_preflight_probe_failure_does_not_kill_the_run(monkeypatch, tmp_path):
         raise FileNotFoundError("nvidia-smi")
 
     class _ProbeRunner:
+        def configure_realtime_pass(self, **_kwargs):
+            pass
+
         def __init__(self, config, *_args, **_kwargs):
             calls.append(("runner", config.detection_batch_size))
 
@@ -597,6 +606,9 @@ def test_forward_valid_caches_skips_batch_pass(monkeypatch, tmp_path):
     """
 
     class _CachedRunner:
+        def configure_realtime_pass(self, **_kwargs):
+            pass
+
         def __init__(self, *_a, **_k):
             pass
 
@@ -652,6 +664,9 @@ def test_realtime_yolo_obb_threads_roi_mask_into_run_realtime(monkeypatch, tmp_p
     calls: dict = {}
 
     class _RoiProbeRunner:
+        def configure_realtime_pass(self, **kwargs):
+            calls["configure"] = kwargs
+
         def __init__(self, *_a, **_k):
             pass
 
@@ -703,6 +718,10 @@ def test_realtime_yolo_obb_threads_roi_mask_into_run_realtime(monkeypatch, tmp_p
         calls.get("roi_mask") is not None
     ), "run_realtime must be called with a non-None roi_mask when ROI_MASK is configured"
     np.testing.assert_array_equal(calls["roi_mask"], roi_mask)
+    # Reuse disabled: the realtime pass recomputes its own frame window.
+    assert calls["configure"]["reuse_detections"] is False
+    start, end = calls["configure"]["window"]
+    assert start == 0 and end >= start
 
 
 def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
@@ -725,6 +744,9 @@ def test_preview_never_launches_a_calibration(monkeypatch, tmp_path):
         raise AssertionError("preview must not reach the autotune preflight")
 
     class _ProbeRunner:
+        def configure_realtime_pass(self, **_kwargs):
+            pass
+
         def __init__(self, config, *_args, **_kwargs):
             calls.append(("runner", config.detection_batch_size))
 
@@ -788,6 +810,9 @@ def _tuned_overlay(effective: int):
 
 class _BatchProbeRunner:
     """Records the batch size the config carried at construction."""
+
+    def configure_realtime_pass(self, **_kwargs):
+        pass
 
     seen: list = []
 
