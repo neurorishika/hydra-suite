@@ -180,29 +180,15 @@ def test_reuse_not_requested_still_reruns_the_detector(tmp_path, video):
     assert obb.call_count > 0
 
 
-def test_detection_cache_covering_a_different_range_is_not_partially_reused(
-    tmp_path, video
-):
-    """Partial reuse needs detection coverage == the requested range; a
-    shorter request falls back to running the detector (promotion would
-    otherwise mix coverages)."""
-    from hydra_suite.core.inference.runner import InferenceRunner
-
+def test_window_inside_the_cached_range_is_partially_reused(tmp_path, video):
+    """Partial reuse needs detection to COVER the requested window, not equal
+    it: a window inside the cached range reads detections back."""
     built = tmp_path / "built"
     _build(built, 10, video)
-    with (
-        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
-        patch(_P + "run_obb", side_effect=_fake_run_obb) as obb,
-        patch(_P + "run_headtail_batch", side_effect=_fake_ht),
-        patch(_P + "run_cnn_batch", side_effect=_fake_cnn),
-        patch(_P + "run_pose_batch", side_effect=_fake_pose),
-        patch(_P + "run_apriltag", side_effect=_fake_apriltag),
-    ):
-        ml.return_value = _models()
-        runner = InferenceRunner(_stricter_size(), cache_dir=built, video_path=video)
-        runner.run_batch_pass(video, end_frame=2, reuse_detection_cache=True)
-        runner.close()
-    assert obb.call_count > 0
+
+    calls = _window_pass(built, _stricter_size(), video, start=0, end=2, reuse=True)
+
+    assert calls["run_obb"] == 0
 
 
 def test_only_the_stale_stage_is_recomputed_and_written(tmp_path, video):
@@ -332,13 +318,24 @@ def test_reuse_run_says_limit_hits_were_reported_at_build_time(tmp_path, video, 
     assert "detection-limit hits were reported when the cache was built" in hits[0]
 
 
-def _window_pass(cache_dir, cfg, video, *, start, end, reuse):
-    """Batch pass over ``[start, end]``; returns detector call count."""
+def _window_pass(
+    cache_dir, cfg, video, *, start, end, reuse, should_stop=None, obb=_fake_run_obb
+):
+    """Batch pass over ``[start, end]``; returns call counts and written kinds."""
+    from hydra_suite.core.inference.cache.chunked import ChunkedArrayStore
     from hydra_suite.core.inference.runner import InferenceRunner
+
+    written_kinds: list[str] = []
+    real_append = ChunkedArrayStore.append_chunk
+
+    def _append(self, frames, arrays):
+        written_kinds.append(self.kind)
+        return real_append(self, frames, arrays)
 
     with (
         patch("hydra_suite.core.inference.runner._load_all_models") as ml,
-        patch(_P + "run_obb", side_effect=_fake_run_obb) as obb,
+        patch.object(ChunkedArrayStore, "append_chunk", _append),
+        patch(_P + "run_obb", side_effect=obb) as obb_mock,
         patch(_P + "run_headtail_batch", side_effect=_fake_ht),
         patch(_P + "run_cnn_batch", side_effect=_fake_cnn),
         patch(_P + "run_pose_batch", side_effect=_fake_pose),
@@ -348,49 +345,214 @@ def _window_pass(cache_dir, cfg, video, *, start, end, reuse):
         runner = InferenceRunner(cfg, cache_dir=cache_dir, video_path=video)
         try:
             runner.run_batch_pass(
-                video, start_frame=start, end_frame=end, reuse_detection_cache=reuse
+                video,
+                start_frame=start,
+                end_frame=end,
+                reuse_detection_cache=reuse,
+                should_stop=should_stop,
             )
         finally:
             runner.close()
-    return obb.call_count
+    return {"run_obb": obb_mock.call_count, "written_kinds": written_kinds}
 
 
-def _revision_dirs(cache_dir):
-    return sorted(p for p in (cache_dir / ".cache-generations").glob("*/*"))
+def _replay_runner(cache_dir, cfg, video):
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    with patch("hydra_suite.core.inference.runner._load_all_models") as ml:
+        ml.return_value = _models()
+        return InferenceRunner(
+            cfg, cache_dir=cache_dir, video_path=video, cache_only=True
+        )
+
+
+def _cache_listing(cache_dir):
+    generations = cache_dir / ".cache-generations"
+    return (
+        sorted(str(p.relative_to(cache_dir)) for p in generations.glob("*/*")),
+        (cache_dir / "cache_set.json").read_bytes(),
+    )
+
+
+def test_window_after_filter_change_recomputes_only_the_window(tmp_path, video):
+    """The reported failure: a window inside the cached range after a
+    replay-filter change. Detections are reused, the stale per-animal stages
+    run over the window only, and the result is promoted with per-animal
+    coverage a subset of detection's."""
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    new_cfg = _stricter_size()
+
+    calls = _window_pass(built, new_cfg, video, start=2, end=4, reuse=True)
+
+    assert calls["run_obb"] == 0
+    assert "detection" not in calls["written_kinds"]
+    runner = _replay_runner(built, new_cfg, video)
+    assert runner.caches_all_valid()
+    assert runner.detection_cache_covers_range(2, 4)
+    assert not runner.detection_cache_covers_range(0, _NUM_FRAMES - 1)
+    missing = runner.detection_cache_missing_frames(0, _NUM_FRAMES - 1)
+    assert missing and set(missing) == {0, 1, 5}
+
+    fresh = tmp_path / "fresh"
+    _fresh_build(fresh, new_cfg, video)
+    want = _replay_cfg(fresh, new_cfg, video)
+    for i in range(2, 5):
+        assert _view(runner.load_frame(i)) == _view(want[i]), f"frame {i}"
+
+
+def test_full_run_after_a_window_fills_the_rest_without_the_detector(tmp_path, video):
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    new_cfg = _stricter_size()
+    _window_pass(built, new_cfg, video, start=2, end=4, reuse=True)
+
+    calls = _window_pass(built, new_cfg, video, start=0, end=None, reuse=True)
+
+    assert calls["run_obb"] == 0
+    assert "detection" not in calls["written_kinds"]
+    fresh = tmp_path / "fresh"
+    _fresh_build(fresh, new_cfg, video)
+    got = _replay_cfg(built, new_cfg, video)
+    want = _replay_cfg(fresh, new_cfg, video)
+    for i in range(_NUM_FRAMES):
+        assert _view(got[i]) == _view(want[i]), f"frame {i}"
 
 
 @pytest.mark.parametrize("reuse", [True, False])
-def test_window_run_after_filter_change_fails_before_any_compute(
-    tmp_path, video, reuse
+def test_window_starting_at_zero_keeps_the_full_cache(tmp_path, video, reuse):
+    """A window from frame 0 that ends early must not replace a valid
+    full-range cache with a window-only generation."""
+    built = tmp_path / "built"
+    _build(built, 10, video)
+
+    _window_pass(built, _cfg(10), video, start=0, end=2, reuse=reuse)
+
+    runner = _replay_runner(built, _cfg(10), video)
+    assert runner.caches_all_valid()
+    assert runner.detection_cache_covers_range(0, _NUM_FRAMES - 1)
+
+
+def test_stale_detection_never_resumes_over_valid_per_animal_members(tmp_path, video):
+    """Per-animal keys do not fold in the detector's identity: a detection
+    re-key with otherwise-valid per-animal members must start a new
+    generation, so no per-animal row can point at superseded detections."""
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    before = _cache_listing(built)[1]
+    cfg = _cfg(10)
+    cfg.detection_batch_size = 2  # detection cache key only
+
+    calls = _window_pass(built, cfg, video, start=2, end=4, reuse=True)
+
+    assert calls["run_obb"] > 0
+    assert {"headtail", "cnn", "pose", "apriltag"} <= set(calls["written_kinds"])
+    assert _cache_listing(built)[1] != before
+    runner = _replay_runner(built, cfg, video)
+    assert runner.caches_all_valid()
+    assert runner.detection_cache_covers_range(2, 4)
+    assert not runner.detection_cache_covers_range(0, 1)
+
+
+@pytest.mark.parametrize("start", [0, 2])  # fresh and resume staging
+def test_cancelled_pass_leaves_no_staging_behind(tmp_path, video, start):
+    from hydra_suite.core.inference.cancellation import InferenceCancelled
+
+    built = tmp_path / "built"
+    _build(built, 10, video)
+    before = _cache_listing(built)
+
+    with pytest.raises(InferenceCancelled):
+        _window_pass(
+            built,
+            _stricter_size(),
+            video,
+            start=start,
+            end=None,
+            reuse=False,
+            should_stop=lambda: True,
+        )
+
+    assert _cache_listing(built) == before
+
+
+def _shifted_run_obb(frames, *a, **k):
+    """A detector whose rows differ from the cached ones (x + 1)."""
+    import dataclasses
+
+    out = []
+    for obb in _fake_run_obb(frames, *a, **k):
+        centroids = obb.centroids.copy()
+        centroids[:, 0] += 1.0
+        corners = obb.corners.copy()
+        corners[:, :, 0] += 1.0
+        out.append(dataclasses.replace(obb, centroids=centroids, corners=corners))
+    return out
+
+
+def _assert_per_animal_rows_follow_detections(cache_dir, cfg, video, frames):
+    runner = _replay_runner(cache_dir, cfg, video)
+    for i in frames:
+        if i in _EMPTY_FRAMES:
+            continue
+        frame = runner.load_frame(i)
+        assert frame.headtail.heading_hints.tolist() == (
+            frame.obb.centroids[:, 0].tolist()
+        ), f"frame {i}"
+
+
+@pytest.mark.parametrize(
+    "built_end, start, end, reuse", [(None, 2, 4, False), (3, 2, 5, True)]
+)
+def test_resumed_window_keys_per_animal_rows_to_the_kept_detections(
+    tmp_path, video, built_end, start, end, reuse
 ):
-    """A window strictly inside the cached range, after a filter change,
-    would rebuild the stale per-animal members over the window only while
-    detection keeps its full coverage -- a generation that can never be
-    promoted. It must refuse up front: no detector run, no staged revision,
-    the active cache untouched, and a message naming the way out."""
-    from hydra_suite.core.inference.runner import MixedCacheCoverageError
+    """Resume keeps the cached detection rows; per-animal stages must be
+    computed from them, not from a live detector output that differs."""
+    built = tmp_path / "built"
+    _window_pass(built, _cfg(10), video, start=0, end=built_end, reuse=False)
+
+    _window_pass(
+        built,
+        _stricter_size(),
+        video,
+        start=start,
+        end=end,
+        reuse=reuse,
+        obb=_shifted_run_obb,
+    )
+
+    _assert_per_animal_rows_follow_detections(
+        built, _stricter_size(), video, range(start, end + 1)
+    )
+
+
+def test_resumed_realtime_keys_per_animal_rows_to_the_kept_detections(tmp_path, video):
+    import cv2
+
+    from hydra_suite.core.inference.runner import InferenceRunner
+    from tests.test_n_independent_replay import _rt_fakes
 
     built = tmp_path / "built"
     _build(built, 10, video)
-    manifest_before = (built / "cache_set.json").read_bytes()
-    revisions_before = _revision_dirs(built)
+    cfg = _stricter_size()
+    ht, cnn, pose, tag = _rt_fakes()
+    cap = cv2.VideoCapture(str(video))
+    frames = [cap.read()[1] for _ in range(_NUM_FRAMES)]
+    cap.release()
+    r = "hydra_suite.core.inference.runner."
+    with (
+        patch(r + "_load_all_models") as ml,
+        patch(r + "run_obb", side_effect=_shifted_run_obb),
+        patch(r + "run_headtail", side_effect=ht),
+        patch(r + "run_cnn", side_effect=cnn),
+        patch(r + "run_pose", side_effect=pose),
+        patch(r + "run_apriltag", side_effect=tag),
+    ):
+        ml.return_value = _models()
+        runner = InferenceRunner(cfg, cache_dir=built, video_path=video)
+        for i, frame in enumerate(frames):
+            runner.run_realtime(frame, i)
+        runner.close()
 
-    with pytest.raises(MixedCacheCoverageError) as excinfo:
-        _window_pass(built, _stricter_size(), video, start=2, end=4, reuse=reuse)
-
-    message = str(excinfo.value)
-    assert "2-4" in message and "full frame range" in message
-    assert "headtail" in message
-    assert _revision_dirs(built) == revisions_before
-    assert (built / "cache_set.json").read_bytes() == manifest_before
-
-
-def test_window_run_with_valid_caches_still_resumes(tmp_path, video):
-    """Same window, unchanged filters: every member stays coextensive, so
-    the guard must not fire."""
-    built = tmp_path / "built"
-    _build(built, 10, video)
-
-    _window_pass(built, _cfg(10), video, start=2, end=4, reuse=False)
-
-    _replay_cfg(built, _cfg(10), video)
+    _assert_per_animal_rows_follow_detections(built, cfg, video, range(_NUM_FRAMES))

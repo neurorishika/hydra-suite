@@ -118,6 +118,25 @@ class _AllModels:
     bgsub: BgSubModel | None = None
 
 
+def _merge_ranges(
+    ranges: "tuple[tuple[int, int], ...] | list[tuple[int, int]]",
+) -> tuple[tuple[int, int], ...]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted((int(a), int(b)) for a, b in ranges):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
+
+
+def _ranges_within(
+    inner: tuple[tuple[int, int], ...], outer: tuple[tuple[int, int], ...]
+) -> bool:
+    """Whether every merged ``inner`` range lies inside one ``outer`` range."""
+    return all(any(a <= s and e <= b for a, b in outer) for s, e in inner)
+
+
 @dataclass
 class _CacheSet:
     detection: DetectionCacheHandle | None = None
@@ -147,20 +166,97 @@ class _CacheSet:
             handles.append(self.apriltag)
         return handles
 
-    def close(self, *, complete: bool = True) -> None:
-        """Close members, then expose a prepared generation with one rename."""
+    def per_animal_handles(self) -> list[CacheHandle]:
+        return [h for h in self.all_handles() if h is not self.detection]
+
+    def structurally_valid(self) -> bool:
+        """Every member key-valid in one generation, per-animal ⊆ detection.
+
+        The cache-set invariant: detection's coverage is the reference and
+        every per-animal member covers a subset of it (a window recomputed
+        after a replay-filter change covers only that window). Validity says
+        nothing about any frame range -- ask :meth:`covers_frame_range` before
+        replaying one.
+        """
         handles = self.all_handles()
-        for handle in handles:
-            handle.close(commit_generation=complete)
-        if not complete or not self.pending_promotion:
+        if (
+            not self.set_manifest_valid
+            or self.detection is None
+            or not all(handle.is_reusable() for handle in handles)
+        ):
+            return False
+        if self.generation_id is not None and any(
+            handle._store.generation_id != self.generation_id for handle in handles
+        ):
+            return False
+        detection = _merge_ranges(self.detection.coverage_ranges())
+        return all(
+            _ranges_within(_merge_ranges(handle.coverage_ranges()), detection)
+            for handle in self.per_animal_handles()
+        )
+
+    def covers_frame_range(self, start_frame: int, end_frame: int) -> bool:
+        """Whether EVERY member holds every frame of ``[start, end]``."""
+        handles = self.all_handles()
+        return bool(handles) and all(
+            handle.covers_frame_range(start_frame, end_frame) for handle in handles
+        )
+
+    def missing_frames(
+        self, start_frame: int, end_frame: int, max_report: int = 10
+    ) -> list[int]:
+        """Up to ``max_report`` frames of the range some member lacks."""
+        missing: set[int] = set()
+        for handle in self.all_handles():
+            missing.update(
+                handle.get_missing_frames(start_frame, end_frame, max_report)
+            )
+        return sorted(missing)[:max_report]
+
+    def _discard_staging(self) -> None:
+        """Remove an unpromoted staging revision (and its empty generation)."""
+        root = self.staging_root
+        self.pending_promotion = False
+        if root is None:
+            return
+        shutil.rmtree(root, ignore_errors=True)
+        try:
+            root.parent.rmdir()
+        except OSError:
+            pass  # other revisions of this generation remain
+
+    def close(self, *, complete: bool = True) -> None:
+        """Close members, then expose a prepared generation with one rename.
+
+        A pass that did not complete, or whose result breaks the cache-set
+        invariant (see :meth:`structurally_valid`), discards its staging
+        revision: an unpromoted revision is never read again.
+        """
+        handles = self.all_handles()
+        try:
+            for handle in handles:
+                handle.close(commit_generation=complete)
+        except BaseException:
+            if self.pending_promotion:
+                self._discard_staging()
+            raise
+        if not self.pending_promotion:
+            return
+        if not complete:
+            self._discard_staging()
             return
         if self.discard_if_unchanged and not any(
             getattr(handle, "_write_started", False) for handle in handles
         ):
-            if self.staging_root is not None:
-                shutil.rmtree(self.staging_root)
-            self.pending_promotion = False
+            self._discard_staging()
             return
+        try:
+            self._promote(handles)
+        except BaseException:
+            self._discard_staging()
+            raise
+
+    def _promote(self, handles: list[CacheHandle]) -> None:
         if (
             self.cache_dir is None
             or self.generation_id is None
@@ -171,11 +267,13 @@ class _CacheSet:
             )
         if not handles or not all(handle.is_reusable() for handle in handles):
             raise RuntimeError("refusing to promote an incomplete cache generation")
-        reference = handles[0].coverage_ranges()
-        if any(handle.coverage_ranges() != reference for handle in handles):
-            raise RuntimeError("refusing to promote a mixed-coverage cache generation")
         if any(handle._store.generation_id != self.generation_id for handle in handles):
             raise RuntimeError("refusing to promote mixed cache generations")
+        if not self.structurally_valid():
+            raise RuntimeError(
+                "refusing to promote a cache generation whose per-animal "
+                "coverage exceeds its detection coverage"
+            )
         manifest = publish_cache_set(
             self.cache_dir,
             self.generation_id,
@@ -444,30 +542,63 @@ def _warn_geometry_mismatch(model_path: str, session_geometry) -> None:
 
 
 def cache_set_is_fully_reusable(caches: _CacheSet) -> bool:
-    """Whether every configured cache member is key-valid and coextensive.
+    """Whether the cache set is structurally valid (see ``_CacheSet``).
 
     This is deliberately independent of :class:`InferenceRunner` construction:
     callers that only decide whether to prepare/reuse replay evidence must not
     initialize an OBB backend merely to inspect cache metadata.  It is the
     pure cache-set portion of ``InferenceRunner.caches_all_valid()``.
+
+    Per-animal members may cover a subset of detection (a window recomputed
+    after a replay-filter change), so a caller about to replay frames must
+    also ask ``caches.covers_frame_range``.
     """
 
-    handles = caches.all_handles()
-    if (
-        not caches.set_manifest_valid
-        or not handles
-        or not all(handle.is_reusable() for handle in handles)
-    ):
-        return False
-    if caches.generation_id is not None and any(
-        handle._store.generation_id != caches.generation_id for handle in handles
-    ):
-        return False
-    # A child crash can publish detection chunks before a downstream stage
-    # finishes. Matching keys alone must not turn that honest partial cache
-    # into a reusable complete pass.
-    reference = caches.detection.coverage_ranges() if caches.detection else ()
-    return all(handle.coverage_ranges() == reference for handle in handles)
+    return caches.structurally_valid()
+
+
+def _active_detection_reusable(caches: _CacheSet) -> bool:
+    detection = caches.detection
+    return (
+        caches.set_manifest_valid
+        and caches.generation_id is not None
+        and detection is not None
+        and detection.is_reusable()
+        and detection._store.generation_id == caches.generation_id
+    )
+
+
+def choose_write_mode(
+    caches: _CacheSet,
+    *,
+    window: "tuple[int, int] | None",
+    recompute_window: bool,
+) -> str:
+    """``"fresh"`` (new generation) or ``"resume"`` (extend the active one).
+
+    ``caches`` is the read-only probe of the active generation. Resume keeps
+    every reusable member's frames and adds the pass's; a re-keyed member is
+    rebuilt over the pass alone. That is only sound while detection stays
+    reusable: per-animal keys do not fold in the detector's identity, so
+    resuming over a re-keyed detection would keep per-animal rows pointing at
+    superseded detections. Fresh is also chosen when the pass recomputes a
+    ``window`` holding all of detection's frames, which then loses nothing.
+    """
+
+    # A key-valid member failing its checksum cannot be healed by resume
+    # (which skips every frame its manifest lists): rebuild. ``is_valid`` must
+    # be read BEFORE ``is_reusable`` (which clears it).
+    for handle in caches.all_handles():
+        if handle.is_valid() and not handle.is_reusable():
+            return "fresh"
+    if not _active_detection_reusable(caches):
+        return "fresh"
+    if recompute_window and window is not None:
+        start, end = (int(v) for v in window)
+        coverage = _merge_ranges(caches.detection.coverage_ranges())
+        if _ranges_within(coverage, ((start, end),)):
+            return "fresh"
+    return "resume"
 
 
 @dataclass(frozen=True)
@@ -495,23 +626,21 @@ def partial_reuse_plan(
     """Plan a batch pass that reuses the detection cache, or ``None``.
 
     Engages only when the detection member of the active cache generation is
-    key-valid and covers EXACTLY ``[start_frame, end_frame]``: the recomputed
-    per-animal members are written over that range, and the cache set is only
-    promotable when every member has the same coverage. A per-animal member is
-    reused when it is reusable, of the same generation and coextensive with
-    detection; anything else is recomputed.
+    key-valid and covers ``[start_frame, end_frame]``. A per-animal member is
+    reused when it is reusable, of the same generation and covers the window;
+    anything else is recomputed over the window (resume mode keeps its other
+    frames when its key is unchanged), which keeps it a subset of detection.
     """
 
     if not caches.set_manifest_valid or caches.detection is None:
         return None
     generation = caches.generation_id
     detection = caches.detection
-    expected = ((int(start_frame), int(end_frame)),)
     if (
         generation is None
         or not detection.is_reusable()
         or detection._store.generation_id != generation
-        or detection.coverage_ranges() != expected
+        or not detection.covers_frame_range(start_frame, end_frame)
     ):
         return None
 
@@ -521,7 +650,7 @@ def partial_reuse_plan(
         return not (
             handle.is_reusable()
             and handle._store.generation_id == generation
-            and handle.coverage_ranges() == expected
+            and handle.covers_frame_range(start_frame, end_frame)
         )
 
     # A key-valid member that fails its checksum cannot be repaired in resume
@@ -538,62 +667,6 @@ def partial_reuse_plan(
         cnn=tuple(_stale(handle) for handle in caches.cnn),
         pose=_stale(caches.pose),
         apriltag=_stale(caches.apriltag),
-    )
-
-
-class MixedCacheCoverageError(RuntimeError):
-    """A resumed batch pass would leave cache members with unequal coverage."""
-
-
-def _merge_ranges(
-    ranges: "tuple[tuple[int, int], ...] | list[tuple[int, int]]",
-) -> tuple[tuple[int, int], ...]:
-    merged: list[tuple[int, int]] = []
-    for start, end in sorted((int(a), int(b)) for a, b in ranges):
-        if merged and start <= merged[-1][1] + 1:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-    return tuple(merged)
-
-
-def check_resume_coverage(caches: _CacheSet, start_frame: int, end_frame: int) -> None:
-    """Refuse a resumed pass whose result could never be promoted.
-
-    Resume mode clones the active generation: a reusable member keeps its
-    coverage and gains the window, while a stale member (re-keyed, e.g. by a
-    replay-filter change) is rebuilt over the window alone. When those
-    predicted coverages differ, ``_CacheSet.close`` refuses the promotion --
-    after the whole pass has run. ``caches`` is the read-only probe of the
-    active generation; raise before anything is cloned or computed.
-    """
-
-    if not caches.set_manifest_valid or caches.generation_id is None:
-        return
-    window = ((int(start_frame), int(end_frame)),)
-    predicted: dict[str, tuple[tuple[int, int], ...]] = {}
-    stale: list[str] = []
-    cached: tuple[tuple[int, int], ...] = ()
-    for handle in caches.all_handles():
-        name = Path(handle.path).name.removesuffix(".npz")
-        if handle.is_reusable() and handle._store.generation_id == caches.generation_id:
-            cached = _merge_ranges(handle.coverage_ranges())
-            predicted[name] = _merge_ranges(cached + window)
-        else:
-            stale.append(name)
-            predicted[name] = window
-    if len(set(predicted.values())) <= 1:
-        return
-    covered = ", ".join(f"{a}-{b}" for a, b in cached)
-    raise MixedCacheCoverageError(
-        f"Frames {start_frame}-{end_frame} cannot be run against the existing "
-        f"inference cache (frames {covered}): its {', '.join(stale)} results "
-        "were computed under different settings (e.g. a changed detection "
-        "filter such as the IoU threshold), and recomputing them for this "
-        "window alone would leave the cache inconsistent. Either restore the "
-        "settings the cache was built with, or run the full frame range once "
-        "with cached detections enabled (detections are reused; only the "
-        "stale per-animal stages are recomputed)."
     )
 
 
@@ -1252,6 +1325,8 @@ class InferenceRunner:
         # False when opened read-only by load_frame. close() only flushes when
         # writable, so a backward (read) pass never overwrites the forward cache.
         self._caches_writable = False
+        # Read-only view of the detections a resumed realtime pass keeps.
+        self._kept_detections: _CacheSet | None = None
         # Identity Phase 3, Task 4: when set, both run_realtime and
         # run_batch_pass write an IdentityEvidence sidecar during the
         # inference pass, ahead of tracking (Task 5 flips the tracker to read
@@ -1320,12 +1395,13 @@ class InferenceRunner:
         return cache_set_is_fully_reusable(caches)
 
     def detection_cache_covers_range(self, start_frame: int, end_frame: int) -> bool:
-        """Return True iff the detection cache spans every frame in the range.
+        """Return True iff EVERY cache member spans every frame in the range.
 
         Key validity alone (``caches_all_valid``) does not guarantee a cache
         produced by a full forward pass: an interrupted or shorter run yields a
-        valid-keyed cache covering fewer frames. Backward/replay passes must
-        additionally confirm frame-range coverage (legacy parity, H9).
+        valid-keyed cache covering fewer frames, and per-animal members may
+        cover only a recomputed window of detection. Backward/replay passes
+        must additionally confirm frame-range coverage (legacy parity, H9).
         """
         if self.cache_dir is None:
             return False
@@ -1339,12 +1415,12 @@ class InferenceRunner:
         )
         if not caches.set_manifest_valid or caches.detection is None:
             return False
-        return caches.detection.covers_frame_range(start_frame, end_frame)
+        return caches.covers_frame_range(start_frame, end_frame)
 
     def detection_cache_missing_frames(
         self, start_frame: int, end_frame: int, max_report: int = 10
     ) -> list[int]:
-        """Report up to ``max_report`` frames missing from the detection cache."""
+        """Report up to ``max_report`` frames some cache member is missing."""
         if self.cache_dir is None:
             return []
         caches = _open_caches(
@@ -1357,7 +1433,7 @@ class InferenceRunner:
         )
         if not caches.set_manifest_valid or caches.detection is None:
             return []
-        return caches.detection.get_missing_frames(start_frame, end_frame, max_report)
+        return caches.missing_frames(start_frame, end_frame, max_report)
 
     def run_realtime(
         self,
@@ -1371,12 +1447,32 @@ class InferenceRunner:
             # detections + downstream results. Backward tracking replays them via
             # load_frame; without this, realtime + backward gets an empty backward pass.
             if self._caches is None and self.cache_dir is not None:
+                probe = _open_caches(
+                    self.config,
+                    self.cache_dir,
+                    self._video_sig,
+                    self._roi_mask,
+                    read_only=True,
+                )
+                try:
+                    write_mode = choose_write_mode(
+                        probe, window=None, recompute_window=False
+                    )
+                except BaseException:
+                    probe.close()
+                    raise
+                # Resume keeps the active detection rows; frames they hold
+                # replace the live detector output (see _build_pipeline).
+                if write_mode == "resume":
+                    self._kept_detections = probe
+                else:
+                    probe.close()
                 self._caches = _open_caches(
                     self.config,
                     self.cache_dir,
                     self._video_sig,
                     self._roi_mask,
-                    write_mode="resume",
+                    write_mode=write_mode,
                 )
                 self._caches_writable = True
             caches = self._caches if self._caches_writable else None
@@ -1421,6 +1517,14 @@ class InferenceRunner:
                     else:
                         raw_obb = raw
                     raw_obb = self._rank_and_bound(raw_obb, frame_idx)
+                kept = self._kept_detections
+                kept_obb = (
+                    kept.detection.read_frame(frame_idx)
+                    if kept is not None and kept.detection is not None
+                    else None
+                )
+                if kept_obb is not None:
+                    raw_obb = kept_obb
                 # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
                 # CPU OBB path generate them at frame 0) so cached ids are unique per
                 # frame.
@@ -1999,6 +2103,7 @@ class InferenceRunner:
         caches: _CacheSet,
         roi_mask: "np.ndarray | None" = None,
         reuse_plan: _PartialReusePlan | None = None,
+        cached_detection=None,
     ) -> Pipeline:
         """Construct the depth=1 Pipeline that drives the batch stage layer.
 
@@ -2013,6 +2118,9 @@ class InferenceRunner:
         cache instead of running the detector, and only the stale per-animal
         stages run and are written. Head-tail still runs (unwritten) when a
         stale CNN phase or pose needs it, so their inputs match a fresh run.
+
+        ``cached_detection`` (resume): frames it returns use the kept cached
+        detections instead of the live detector output.
         """
         headtail_model = self._models.headtail
         cnn_models = list(self._models.cnn)
@@ -2075,6 +2183,7 @@ class InferenceRunner:
             clipping_stats=self.clipping_stats,
             detection_limit_stats=self.detection_limit_stats,
             detection_reader=detection_reader,
+            cached_detection=cached_detection,
         )
 
     def run_batch_pass(
@@ -2161,34 +2270,41 @@ class InferenceRunner:
                         reuse_plan,
                     )
 
-            write_mode = (
-                "fresh" if start_frame == 0 and reuse_plan is None else "resume"
+            probe = _open_caches(
+                self.config,
+                self.cache_dir,
+                self._video_sig,
+                self._roi_mask,
+                read_only=True,
             )
-            if write_mode == "resume" and reuse_plan is None:
-                probe = _open_caches(
-                    self.config,
-                    self.cache_dir,
-                    self._video_sig,
-                    self._roi_mask,
-                    read_only=True,
+            try:
+                write_mode = choose_write_mode(
+                    probe,
+                    window=(start_frame, end_frame),
+                    recompute_window=reuse_plan is None,
                 )
-                try:
-                    check_resume_coverage(probe, start_frame, end_frame)
-                except MixedCacheCoverageError:
-                    frame_source.close()
-                    raise
-                finally:
-                    probe.close()
-
-            with span(N.OPEN_CACHES):
-                caches = _open_caches(
-                    self.config,
-                    self.cache_dir,
-                    self._video_sig,
-                    self._roi_mask,
-                    write_mode=write_mode,
-                )
+                with span(N.OPEN_CACHES):
+                    caches = _open_caches(
+                        self.config,
+                        self.cache_dir,
+                        self._video_sig,
+                        self._roi_mask,
+                        write_mode=write_mode,
+                    )
+            except BaseException:
+                probe.close()
+                raise
             self._caches = caches
+            # Resume keeps the active detection rows (the store skips frames it
+            # holds); per-animal stages must be computed from those rows, not
+            # from a live detector output that may differ from them. The probe
+            # reads the active revision, which the resumed staging copy never
+            # modifies.
+            kept = None
+            if write_mode == "resume" and reuse_plan is None:
+                kept = probe
+            else:
+                probe.close()
 
             # The whole pass is now driven by Pipeline.run: it owns the windowing and
             # (at depth>=2) the producer/consumer double buffer. The video decode is
@@ -2203,6 +2319,11 @@ class InferenceRunner:
                 caches,
                 roi_mask=self._frame_space_roi_mask(video_path),
                 reuse_plan=reuse_plan,
+                cached_detection=(
+                    kept.detection.read_frame
+                    if kept is not None and kept.detection is not None
+                    else None
+                ),
             )
             complete_pass = False
             try:
@@ -2230,6 +2351,8 @@ class InferenceRunner:
                 # inside it. CacheWriter.close raises before this point when
                 # its worker fails to stop by the deadline.
                 caches.close(complete=complete_pass)
+                if kept is not None:
+                    kept.close()
 
             # Identity Phase 3, Task 4 (batch seam): write the evidence sidecar
             # AFTER the raw caches above are flushed to disk -- and only on a
@@ -2366,6 +2489,9 @@ class InferenceRunner:
             self._caches.close()
             self._caches = None
             self._caches_writable = False
+        if self._kept_detections is not None:
+            self._kept_detections.close()
+            self._kept_detections = None
         # Flush the realtime identity-evidence sidecar (Task 4), if any frame
         # ever wrote to it. Mirrors the raw caches' write-mode-only flush
         # above: this cache is only ever opened in mode="w" by

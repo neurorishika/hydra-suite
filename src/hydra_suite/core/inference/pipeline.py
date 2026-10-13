@@ -184,6 +184,7 @@ class Pipeline:
         detection_limit_stats: "DetectionLimitStats | None" = None,
         collect_results: bool = False,
         detection_reader: "Callable[[int], OBBResult | None] | None" = None,
+        cached_detection: "Callable[[int], OBBResult | None] | None" = None,
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
@@ -218,6 +219,11 @@ class Pipeline:
         # (already confidence-ranked) detection cache per frame instead of
         # running the detector; everything downstream is unchanged.
         self.detection_reader = detection_reader
+        # Resume over a cache whose detections are kept: frames the active
+        # detection cache already holds use those rows instead of the live
+        # detector output, so per-animal rows stay keyed to the detections the
+        # cache keeps (the resumed detection store skips those frames).
+        self.cached_detection = cached_detection
         # Effective execution model: 1 (sync) or N>=2 (deep prefetch). depth
         # takes effect directly — no clamping, except under the opt-in
         # deep-GPU profiling pass (HYDRA_PROFILE_GPU), which forces 1 so a
@@ -393,14 +399,23 @@ class Pipeline:
                 )
 
         from_cache = getattr(self, "detection_reader", None) is not None
+        cached_detection = getattr(self, "cached_detection", None)
         with span(N.MATERIALIZE, units=len(frames)):
             for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
-                obb_result = (
-                    materialize_tensors(raw, effective_raw_detection_cap(cfg.obb))
-                    if isinstance(raw, _RawOBBTensors)
-                    else raw
+                kept = (
+                    cached_detection(frame_idx)
+                    if cached_detection is not None
+                    else None
                 )
-                if cfg.detection_source == "obb" and not from_cache:
+                if kept is not None:
+                    obb_result = kept
+                else:
+                    obb_result = (
+                        materialize_tensors(raw, effective_raw_detection_cap(cfg.obb))
+                        if isinstance(raw, _RawOBBTensors)
+                        else raw
+                    )
+                if cfg.detection_source == "obb" and not from_cache and kept is None:
                     # Every cached OBB frame is confidence-ranked and bounded
                     # to the limit; a frame with more candidates (the probe
                     # row survived) is a LOUD hit: WARNING + run summary.

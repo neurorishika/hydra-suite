@@ -192,12 +192,11 @@ def inspect_replay_cache_admission(
         detection = caches.detection
         if detection is None:
             return ReplayCacheAdmission(False, False)
-        range_covered = bool(detection.covers_frame_range(start_frame, end_frame))
+        # Every member, not just detection: per-animal members may cover only
+        # a recomputed window of detection's frames.
+        range_covered = bool(caches.covers_frame_range(start_frame, end_frame))
         missing = (
-            tuple(
-                int(frame)
-                for frame in detection.get_missing_frames(start_frame, end_frame)
-            )
+            tuple(int(frame) for frame in caches.missing_frames(start_frame, end_frame))
             if not range_covered
             else ()
         )
