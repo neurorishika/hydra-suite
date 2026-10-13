@@ -28,6 +28,12 @@ forces the baseline onto every video. `--sahi-profile` applies to all (see
 [SAHI calibration profiles](detectkit-sahi-calibration.md) and
 [SAHI Settings](sahi-settings.md)).
 
+Frame range: only a video's own config can restrict which frames are tracked.
+A video that inherits the keystone's config (including every later video
+under `--keystone-override` or a multi-video `--config`) never inherits the
+keystone's `start_frame`/`end_frame`; it is tracked from its first frame to
+its last. The GUI's sequential batch follows the same rule.
+
 Side-output retargeting: a video's own `<stem>_config.json` is used verbatim,
 including whatever `video_output_path` it names. A video that inherits the
 keystone's config instead of having its own, or any video in a **multi-video**
