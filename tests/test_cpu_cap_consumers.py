@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 from hydra_suite.runtime import cpu_budget as cb
@@ -78,22 +82,32 @@ def test_encoder_thread_count_untouched_when_uncapped(cap, tmp_path):
         enc.release()
 
 
-def test_cv2_capture_opens_fewer_threads_when_capped():
-    """OPENCV_FFMPEG_THREADS (set by the cap) shrinks cv2's decoder pool."""
-    import subprocess
-    import sys
-    from pathlib import Path
+def _make_clip(path, n=20):
+    import av
+    import numpy as np
 
-    psutil = pytest.importorskip("psutil")  # noqa: F841
-    clip = (
-        Path(__file__).resolve().parents[1]
-        / "tools/equivalence/fixtures/clips/fly_obb.mp4"
-    )
-    if not clip.exists():
-        pytest.skip("fixture clip not present")
+    c = av.open(str(path), mode="w")
+    st = c.add_stream("libx264", rate=10)
+    st.width, st.height, st.pix_fmt = 64, 64, "yuv420p"
+    for i in range(n):
+        f = av.VideoFrame.from_ndarray(np.full((64, 64, 3), i * 5, np.uint8), "bgr24")
+        for pkt in st.encode(f):
+            c.mux(pkt)
+    for pkt in st.encode():
+        c.mux(pkt)
+    c.close()
+    return path
+
+
+@pytest.mark.skipif((os.cpu_count() or 1) < 4, reason="needs >=4 cores")
+def test_cv2_capture_opens_fewer_threads_when_capped(tmp_path):
+    """OPENCV_FFMPEG_THREADS (set by the cap) shrinks cv2's decoder pool."""
+    pytest.importorskip("av")
+    pytest.importorskip("psutil")
+    clip = _make_clip(tmp_path / "c.mp4")
     code = (
         "import os,sys,cv2,psutil\n"
-        "if sys.argv[2]=='capped': os.environ['OPENCV_FFMPEG_THREADS']='2'\n"
+        "if sys.argv[2]=='capped': os.environ['OPENCV_FFMPEG_THREADS']='1'\n"
         "c=cv2.VideoCapture(sys.argv[1],cv2.CAP_FFMPEG); c.read()\n"
         "print(psutil.Process().num_threads())\n"
     )
@@ -108,3 +122,21 @@ def test_cv2_capture_opens_fewer_threads_when_capped():
         return int(out.stdout.strip().splitlines()[-1])
 
     assert run("capped") < run("uncapped")
+
+
+def test_pyav_reader_thread_count(cap, tmp_path):
+    av = pytest.importorskip("av")
+    from hydra_suite.utils.video_decoder import _PyAVReader
+
+    clip = str(_make_clip(tmp_path / "d.mp4"))
+    cap(2)
+    r = _PyAVReader(clip, 0, 64, 64)
+    assert r._stream.thread_count == 2
+    r._container.close()
+
+    cap(None)
+    r = _PyAVReader(clip, 0, 64, 64)
+    ref = av.open(clip).streams.video[0]
+    ref.thread_type = "AUTO"
+    assert r._stream.thread_count == ref.thread_count
+    r._container.close()
