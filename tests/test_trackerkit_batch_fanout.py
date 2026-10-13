@@ -642,3 +642,89 @@ def test_decide_gpu_slots_on_a_non_cuda_host():
     # An explicit device the host does not have stays an error.
     with pytest.raises(ValueError):
         decide_gpu_slots(["0"], [], host_has_cuda=False)
+
+
+# --- K=1 characterization: commands, env and GPU assignment as today --------
+
+
+def _record_launches(monkeypatch):
+    """Record every child (argv, env delta) and run a trivial stand-in instead."""
+    import subprocess
+
+    real_popen = subprocess.Popen
+    launches: list[tuple[list[str], dict[str, str]]] = []
+
+    def _popen(command, **kwargs):
+        env = kwargs["env"]
+        delta = {k: v for k, v in env.items() if os.environ.get(k) != v}
+        launches.append((list(command), delta))
+        return real_popen([sys.executable, "-c", "print('ok')"], **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    return launches
+
+
+def _expected_command(spec_video: str, run_dir: Path, index: int) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "hydra_suite.trackerkit.app",
+        "--log-level",
+        "INFO",
+        "track",
+        spec_video,
+        "--config",
+        str(run_dir / f"job_{index}_config.json"),
+    ]
+
+
+_CAP_VARS = (
+    "CUDA_VISIBLE_DEVICES",
+    "PYTHONUNBUFFERED",
+    "KMP_DUPLICATE_LIB_OK",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMBA_NUM_THREADS",
+)
+
+
+@pytest.mark.parametrize("extra", [{}])
+@pytest.mark.parametrize(
+    "jobs, threads, n_gpus, expected_gpus, expected_threads",
+    [
+        (None, None, 2, ["GPU-aaaa", "GPU-bbbb"], None),
+        (1, None, 2, ["GPU-aaaa", "GPU-aaaa"], None),
+        (99, 3, 2, ["GPU-aaaa", "GPU-bbbb"], "3"),
+        (2, 3, 0, [None, None], "3"),
+    ],
+)
+def test_k1_children_are_launched_exactly_as_before(
+    tmp_path, monkeypatch, extra, jobs, threads, n_gpus, expected_gpus, expected_threads
+):
+    for var in _CAP_VARS:
+        monkeypatch.delenv(var, raising=False)
+    launches = _record_launches(monkeypatch)
+    specs = [_spec(tmp_path, n) for n in ("a", "b")]
+    run_dir = tmp_path / "run"
+    result = run_batch_fanout(
+        specs,
+        FanoutOptions(
+            gpus=_GPUS[:n_gpus],
+            jobs=jobs,
+            threads_per_job=threads,
+            run_dir=run_dir,
+            **extra,
+        ),
+    )
+    assert result.success
+    assert len(launches) == 2
+    for i, ((command, delta), gpu) in enumerate(zip(launches, expected_gpus), 1):
+        assert command == _expected_command(specs[i - 1].video_path, run_dir, i)
+        expected = {"PYTHONUNBUFFERED": "1", "KMP_DUPLICATE_LIB_OK": "TRUE"}
+        if gpu is not None:
+            expected["CUDA_VISIBLE_DEVICES"] = gpu
+        if expected_threads is not None:
+            for var in _CAP_VARS[3:]:
+                expected[var] = expected_threads
+        assert delta == expected
