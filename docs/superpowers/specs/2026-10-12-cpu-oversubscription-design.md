@@ -215,7 +215,11 @@ the GUI sets it before starting a tracking/post-processing/export worker.
 - `trackerkit calibrate --cpu-budget N` (≥ 1): same single-run cap
   (`single_run_cpu_cap`), applied before the session/inference config is
   built. `job run --calibrate --cpu-budget N` (and `job calibrate
-  --cpu-budget N`, local or remote) forwards it to the calibrate leg. The
+  --cpu-budget N`, local or remote) forwards it to the calibrate leg. Every
+  calibration trial runs in a sidecar child: a capped parent launches it with
+  `capped_child_env` (`HYDRA_CPU_THREADS=cap`, `HYDRA_CPU_BUDGET` stripped,
+  thread env vars lowered) and the child applies the inherited cap; an
+  uncapped parent launches it exactly as before. The
   tuning profile key has no cap term: a profile is measured under whatever
   cap is in force.
 

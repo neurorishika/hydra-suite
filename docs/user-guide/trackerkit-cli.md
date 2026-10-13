@@ -165,7 +165,7 @@ export HYDRA_CPU_BUDGET=32                                             # same as
   of its pools (video decoder, ONNX Runtime, PyTorch, BLAS/Numba, video
   encoder) to at most N threads, but those pools can run at the same time, so
   a child capped at N may briefly have several times N runnable threads
-  (roughly 4-6 x N in a full tracking run). The budget stops the N-fold
+  (an estimate from the number of pools, not a measurement). The budget stops the N-fold
   multiplication across parallel children; it is not an exact core limit.
 - **`HYDRA_CPU_THREADS`** is the per-process cap a parallel run hands each
   child. If it is already set where you launch a run (exported in the shell,
