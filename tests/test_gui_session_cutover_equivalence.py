@@ -53,20 +53,31 @@ def _clip_paths(name: str) -> tuple[Path, Path]:
     return (FIXTURE_CLIPS_DIR / f"{name}.mp4", FIXTURE_CONFIGS_DIR / f"{name}.json")
 
 
+# Side outputs rendered FROM the final CSV after it is written (AL dataset,
+# oriented per-track videos, annotated overlay video): they cannot change the
+# CSV this test compares, but the AL export alone pushed both ant clips past
+# the 300 s per-test timeout. ``enable_individual_dataset`` stays as configured
+# -- it also gates the interpolated post-pass, which does change the CSV.
+SIDE_OUTPUTS_OFF = {
+    "enable_dataset_generation": False,
+    "final_media_export_videos_enabled": False,
+    "video_output_enabled": False,
+}
+
+
 def _materialize_config(name: str, config_path: Path, tmp_path: Path) -> Path:
-    """Return a config path with pose_skeleton_file filled in, if needed.
+    """Return a runnable copy of the fixture config for this test.
 
     Fixture configs are intentionally portable (blank pose_skeleton_file); a
     concrete skeleton is normally supplied at run time (see
-    tools/equivalence/runner.py). Write a materialized copy for clips that
-    need it so pose keypoint_names resolve; pass the original path through
-    unchanged otherwise.
+    tools/equivalence/runner.py), so clips that need one get it filled in here
+    so pose keypoint_names resolve. Every clip also gets ``SIDE_OUTPUTS_OFF``.
     """
-    skeleton = CLIP_SKELETONS.get(name)
-    if skeleton is None:
-        return config_path
     cfg = json.loads(config_path.read_text())
-    cfg["pose_skeleton_file"] = str(skeleton)
+    skeleton = CLIP_SKELETONS.get(name)
+    if skeleton is not None:
+        cfg["pose_skeleton_file"] = str(skeleton)
+    cfg.update(SIDE_OUTPUTS_OFF)
     out_path = tmp_path / f"{name}_config.json"
     out_path.write_text(json.dumps(cfg))
     return out_path
@@ -77,6 +88,10 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+# Each clip tracks twice end to end (CLI leg + GUI post-tracking leg);
+# ant_cnn_identity alone takes ~280 s on an M-series Mac, too close to the
+# 300 s default.
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize("clip_name", CLIPS)
 def test_gui_run_session_worker_matches_cli(qapp, tmp_path, clip_name):
     clip_path, config_path = _clip_paths(clip_name)
@@ -97,7 +112,26 @@ def test_gui_run_session_worker_matches_cli(qapp, tmp_path, clip_name):
     cli_dir.mkdir()
     cli_clip = cli_dir / f"{clip_name}.mp4"
     shutil.copy(clip_path, cli_clip)
-    assert run_tracking_cli([str(cli_clip)], config_path=str(config_path)) == 0
+    # Record the forward pass's analysis-cache paths: the real GUI reads the
+    # same values off its tracking worker (``_collect_worker_props_path``), so
+    # the GUI leg below must get them too or it loses the realtime identity
+    # evidence (IdentityEvidenceSources "cnn") the CLI leg keeps.
+    from hydra_suite.trackerkit import headless_tracking
+
+    forward_cache_paths: dict = {}
+    real_engine_pass = headless_tracking._run_engine_pass
+
+    def _recording_engine_pass(*args, **kwargs):
+        result = real_engine_pass(*args, **kwargs)
+        if not kwargs.get("backward_mode"):
+            forward_cache_paths.update(result[3])
+        return result
+
+    headless_tracking._run_engine_pass = _recording_engine_pass
+    try:
+        assert run_tracking_cli([str(cli_clip)], config_path=str(config_path)) == 0
+    finally:
+        headless_tracking._run_engine_pass = real_engine_pass
     cli_final = next(cli_dir.glob("*_tracking_final.csv"))
     cli_forward_raw = next(cli_dir.glob("*_tracking_forward.csv"))
     cli_backward_raw = next(cli_dir.glob("*_tracking_backward.csv"))
@@ -154,8 +188,12 @@ def test_gui_run_session_worker_matches_cli(qapp, tmp_path, clip_name):
         _session_final_csv_path=None,
         _session_fps_list=[],
         current_detection_cache_path=detection_cache_path,
-        current_individual_properties_cache_path=None,
-        current_detected_properties_cache_path=None,
+        current_individual_properties_cache_path=forward_cache_paths.get(
+            "individual_properties_cache_path"
+        ),
+        current_detected_properties_cache_path=forward_cache_paths.get(
+            "detected_properties_cache_path"
+        ),
         get_parameters_dict=lambda: params,
         progress_bar=SimpleNamespace(
             setVisible=lambda *_: None, setValue=lambda *_: None
