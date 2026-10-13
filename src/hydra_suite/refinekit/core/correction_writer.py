@@ -238,11 +238,25 @@ class CorrectionWriter:
             )
         )
 
+        # The proofread CSV is in source pixels, so the body size needs no
+        # resize factor; without these the heading fix would treat every
+        # proofread join as an impossible instant reversal.
+        def _positive(*keys):
+            try:
+                value = float(_config_value(data, *keys) or 0.0)
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0 else None
+
         return {
             "method": method,
             "max_gap": max_gap,
             "heading_flip_max_burst": heading_flip_max_burst,
             "directed_heading_posthoc": directed_heading_posthoc,
+            "heading_body_size_px": _positive(
+                "reference_body_size", "REFERENCE_BODY_SIZE"
+            ),
+            "heading_frame_rate": _positive("fps", "FPS"),
         }
 
     def _normalize_df(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -269,6 +283,8 @@ class CorrectionWriter:
                 max_gap=settings["max_gap"],
                 heading_flip_max_burst=settings["heading_flip_max_burst"],
                 directed_heading_posthoc=settings["directed_heading_posthoc"],
+                heading_body_size_px=settings.get("heading_body_size_px"),
+                heading_frame_rate=settings.get("heading_frame_rate"),
             )
         except Exception:
             logger.exception(

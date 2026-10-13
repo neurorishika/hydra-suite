@@ -120,3 +120,49 @@ def test_interpolate_trajectories_passes_motion_to_the_heading_fix():
     )
     assert not _flipped(out["Theta"].to_numpy(), np.zeros(n)).any()
     assert heading_body_size_px({}, 1.0) is None
+
+
+def test_motion_term_corrects_a_long_run_against_clear_motion():
+    # 80 frames reversed while walking steadily forward: too long for the
+    # reversal rule alone (kept without motion), corrected once motion counts.
+    n = 300
+    x, y = _walk_plus_x(n)
+    theta = np.zeros(n)
+    theta[100:180] = PI
+    kept = _fix_heading_globally(theta, x=x, y=y)  # no body size: motion off
+    assert _flipped(kept, np.zeros(n))[100:180].all()
+    out = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0)
+    assert not _flipped(out, np.zeros(n)).any()
+
+
+def test_reversal_rule_spans_short_gaps_in_the_head_calls():
+    n = 300
+    theta = np.full(n, 1.0)
+    theta[100:130] = 1.0 + PI
+    theta[99] = theta[130] = np.nan  # head call missing at both ends of the run
+    x, y = np.zeros(n), np.zeros(n)
+    out = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0)
+    ok = ~np.isnan(theta)
+    assert not _flipped(out[ok], np.full(n, 1.0)[ok]).any()
+
+
+def test_missing_position_does_not_count_as_standing_still():
+    n = 200
+    theta = np.r_[np.full(100, 1.0), np.full(100, 1.0 + PI)]
+    x = np.zeros(n)
+    x[100] = np.nan  # the join frame has no position
+    out = _fix_heading_globally(theta, x=x, y=np.zeros(n), body_size_px=40.0)
+    assert not _flipped(out, theta).any()
+
+
+def test_reversal_rule_relaxes_at_low_frame_rates():
+    # At 3 fps a real one-frame turn can exceed 180 deg/frame worth of the max
+    # turn rate, so an instant reversal is no longer impossible.
+    n = 300
+    theta = np.full(n, 1.0)
+    theta[100:140] = 1.0 + PI
+    x, y = np.zeros(n), np.zeros(n)
+    folded = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0, fps=25.0)
+    assert not _flipped(folded, np.full(n, 1.0)).any()
+    kept = _fix_heading_globally(theta, x=x, y=y, body_size_px=40.0, fps=3.0)
+    assert not _flipped(kept, theta).any()

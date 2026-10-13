@@ -10,6 +10,7 @@ import pandas as pd
 
 from hydra_suite.core.post.processing import (
     heading_body_size_px,
+    heading_fps,
     interpolate_trajectories,
     resolve_trajectories,
     trim_positionless_ends,
@@ -188,6 +189,7 @@ def merge_trajectories(
                     directed_heading_posthoc=directed_heading_posthoc,
                     fill_all_interior=fill_all_interior,
                     heading_body_size_px=heading_body_size_px(params, resize_factor),
+                    heading_frame_rate=heading_fps(params),
                 )
             elif isinstance(resolved, pd.DataFrame):
                 # No interpolation requested: positions are not fabricated,

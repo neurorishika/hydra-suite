@@ -457,6 +457,7 @@ def relink_and_export_rich_csv(
     from hydra_suite.core.post.processing import (
         densify_trajectory_frames,
         heading_body_size_px,
+        heading_fps,
         interpolate_trajectories,
         relink_trajectories_with_pose_by_arena,
         trim_positionless_ends,
@@ -507,6 +508,7 @@ def relink_and_export_rich_csv(
             directed_heading_posthoc=final_directed_heading_posthoc,
             fill_all_interior=True,
             heading_body_size_px=heading_body_size_px(params, 1.0),
+            heading_frame_rate=heading_fps(params),
         )
     else:
         # interpolate_trajectories(method="none") is a pure no-op (it
