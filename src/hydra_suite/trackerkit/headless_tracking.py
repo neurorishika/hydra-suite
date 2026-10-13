@@ -111,13 +111,23 @@ def _run_engine_pass(
 
     thread = threading.Thread(target=_target, name=f"tracking-engine-{direction}")
     thread.start()
-    while thread.is_alive():
-        if should_stop():
-            engine.stop()
-        thread.join(timeout=0.2)
-
-    csv_writer.stop()
-    csv_writer.join(timeout=10)
+    try:
+        while thread.is_alive():
+            if should_stop():
+                engine.stop()
+            thread.join(timeout=0.2)
+    except BaseException:
+        # Interrupted while waiting (Ctrl-C, a test timeout): stop the engine
+        # so it releases its backends (e.g. the SLEAP service) instead of
+        # running on after this call has unwound.
+        engine.stop()
+        thread.join(timeout=10)
+        raise
+    finally:
+        # Always: CSVWriterThread is non-daemon and blocks on its queue until
+        # stopped, so a skipped stop() hangs interpreter exit forever.
+        csv_writer.stop()
+        csv_writer.join(timeout=10)
 
     # Parity with the GUI (TrackingOrchestrator._collect_worker_props_path):
     # surface the engine's analysis-cache paths so the post-tracking rich

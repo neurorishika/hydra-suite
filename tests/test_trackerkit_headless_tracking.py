@@ -6,6 +6,7 @@ import ast
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import hydra_suite.trackerkit.headless_tracking as ht
 from hydra_suite.core.tracking.session import SessionResult
@@ -171,3 +172,66 @@ def test_forward_failure_short_circuits_before_session(monkeypatch, tmp_path):
     result = ht.run_headless_tracking_session(_make_session(tmp_path))
     assert result["success"] is False
     assert "forward" in result["error"].lower()
+
+
+def test_interrupted_engine_pass_stops_the_engine_and_the_csv_writer(
+    monkeypatch, tmp_path
+):
+    """An exception in the waiting thread (Ctrl-C, a pytest timeout) used to
+    skip the writer shutdown: the non-daemon CSVWriterThread then blocked on
+    its queue forever and interpreter exit hung joining it."""
+    import threading
+    from types import SimpleNamespace
+
+    import hydra_suite.trackerkit.headless_tracking as ht
+
+    stopped = threading.Event()
+
+    class _BlockingEngine:
+        def __init__(self, *a, **k):
+            pass
+
+        def set_parameters(self, params):
+            pass
+
+        def run_tracking(self):
+            stopped.wait(timeout=30)
+
+        def stop(self):
+            stopped.set()
+
+    writers = []
+    real_writer = ht.CSVWriterThread
+    monkeypatch.setattr(
+        ht,
+        "CSVWriterThread",
+        lambda *a, **k: writers.append(real_writer(*a, **k)) or writers[-1],
+    )
+    monkeypatch.setattr(ht, "TrackingEngineCore", _BlockingEngine)
+
+    def _interrupt():
+        raise KeyboardInterrupt
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            ht._run_engine_pass(
+                SimpleNamespace(video_path="v.mp4", identity_method="none"),
+                params={},
+                raw_csv_path=str(tmp_path / "raw.csv"),
+                backward_mode=False,
+                detection_cache_path="",
+                use_cached_detections=False,
+                should_stop=_interrupt,
+            )
+
+        assert stopped.is_set(), "the engine was not asked to stop"
+        assert writers and not writers[0].is_alive(), "the CSV writer was leaked"
+        assert not [
+            t for t in threading.enumerate() if t.name == "tracking-engine-forward"
+        ], "the engine thread was leaked"
+    finally:
+        # Even when this test fails, never leave a thread that hangs exit.
+        stopped.set()
+        for writer in writers:
+            writer.stop()
+            writer.join(timeout=5)
