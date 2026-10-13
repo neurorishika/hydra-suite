@@ -36,6 +36,25 @@ import json
 import numpy as np
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _isolate_cpu_budget(monkeypatch):
+    """No test sees a box-level CPU budget, and none leaves the process capped.
+
+    ``HYDRA_CPU_BUDGET``/``HYDRA_CPU_THREADS`` exported on the host (e.g. a
+    shared GPU box) would otherwise reach any code path that resolves a cap,
+    and a real ``set_process_cpu_cap(n)`` (GUI worker start, CLI single run)
+    would leak capped thread env vars/pools into every later test. Lifting is
+    a no-op when nothing was capped; the module is only touched if imported.
+    """
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    yield
+    cpu_budget = sys.modules.get("hydra_suite.runtime.cpu_budget")
+    if cpu_budget is not None and cpu_budget.current_cpu_cap() is not None:
+        cpu_budget.set_process_cpu_cap(None)
+
+
 _FLY_OBB_CONFIG = (
     REPO_ROOT / "tools" / "equivalence" / "fixtures" / "configs" / "fly_obb.json"
 )

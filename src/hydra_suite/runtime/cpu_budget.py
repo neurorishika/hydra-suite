@@ -201,6 +201,58 @@ def resolve_process_cap(
     return resolve_cpu_budget(cli_budget, env=env, usable=usable).cores
 
 
+def inherited_cpu_threads(
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Optional[int]:
+    """A valid ``HYDRA_CPU_THREADS`` from ``env`` (default os.environ), else None.
+
+    A non-blank invalid value is ignored with a warning (never a crash).
+    """
+    env = os.environ if env is None else env
+    raw = env.get(ENV_CPU_THREADS)
+    value = positive_int(raw)
+    if value is None and raw is not None and raw.strip() != "":
+        (logger or logging.getLogger(__name__)).warning(
+            "CPU budget: ignoring invalid %s=%r (need an integer >= 1).",
+            ENV_CPU_THREADS,
+            raw,
+        )
+    return value
+
+
+def single_run_cpu_cap(
+    cpu_budget: Optional[int],
+    *,
+    env: Optional[Mapping[str, str]] = None,
+    logger: Optional[logging.Logger] = None,
+) -> Optional[int]:
+    """The thread cap for an in-process (non-fan-out) run, or None.
+
+    Same precedence as ``resolve_process_cap`` (HYDRA_CPU_THREADS >
+    budget > HYDRA_CPU_BUDGET), but the budget's warnings are logged: an
+    invalid ``HYDRA_CPU_BUDGET`` or a budget above the usable cores must be
+    visible, not silently ignored or clamped. A fan-out child
+    (HYDRA_CPU_THREADS set) skips them -- the parent already logged the plan,
+    and the inherited budget does not apply to the child.
+    """
+    env = os.environ if env is None else env
+    log = logger or logging.getLogger(__name__)
+    inherited = inherited_cpu_threads(env=env, logger=log)
+    if inherited is not None:
+        return inherited
+    raw_budget = env.get(ENV_CPU_BUDGET)
+    if cpu_budget is None and not (raw_budget or "").strip():
+        return None  # no budget source: uncapped (plain-path invariant)
+    budget = resolve_cpu_budget(cpu_budget, env=env)
+    for warning in budget.warnings:
+        log.warning("CPU budget: %s", warning)
+    # "auto" means every source was absent or invalid: stay uncapped, exactly
+    # as resolve_process_cap would.
+    return None if budget.source == "auto" else budget.cores
+
+
 # --------------------------------------------------------------------------
 # Process-level cap (applied) + per-thread binder
 # --------------------------------------------------------------------------

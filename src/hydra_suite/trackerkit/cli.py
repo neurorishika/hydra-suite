@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import signal
 import tempfile
 from pathlib import Path
 from typing import Optional, Sequence
 
 from hydra_suite.runtime.cpu_budget import (
-    ENV_CPU_BUDGET,
     ENV_CPU_THREADS,
     bind_thread_cpu_cap,
-    positive_int,
-    resolve_cpu_budget,
+    inherited_cpu_threads,
     set_process_cpu_cap,
+    single_run_cpu_cap,
 )
 from hydra_suite.runtime.cuda_devices import list_cuda_devices, parse_gpu_selectors
 from hydra_suite.trackerkit.batch_fanout import (
@@ -50,43 +48,13 @@ def fanout_requested(gpus: str | None, jobs: int | None) -> bool:
 
 
 def _inherited_cpu_threads() -> Optional[int]:
-    """A valid ``HYDRA_CPU_THREADS`` from this process's env, else None.
-
-    A non-blank invalid value is ignored with a warning (never a crash).
-    """
-    raw = os.environ.get(ENV_CPU_THREADS)
-    value = positive_int(raw)
-    if value is None and raw is not None and raw.strip() != "":
-        logger.warning(
-            "CPU budget: ignoring invalid %s=%r (need an integer >= 1).",
-            ENV_CPU_THREADS,
-            raw,
-        )
-    return value
+    """A valid ``HYDRA_CPU_THREADS`` from this process's env, else None."""
+    return inherited_cpu_threads(logger=logger)
 
 
 def _single_run_cpu_cap(cpu_budget: Optional[int]) -> Optional[int]:
-    """The thread cap for an in-process (non-fan-out) run, or None.
-
-    Same precedence as ``resolve_process_cap`` (HYDRA_CPU_THREADS >
-    --cpu-budget > HYDRA_CPU_BUDGET), resolved once here so the budget's
-    warnings are logged: an invalid ``HYDRA_CPU_BUDGET`` or a budget above the
-    usable cores must be visible, not silently ignored or clamped. A fan-out
-    child (HYDRA_CPU_THREADS set) skips them -- the parent already logged the
-    plan, and the inherited budget does not apply to the child.
-    """
-    inherited = _inherited_cpu_threads()
-    if inherited is not None:
-        return inherited
-    raw_budget = os.environ.get(ENV_CPU_BUDGET)
-    if cpu_budget is None and not (raw_budget or "").strip():
-        return None  # no budget source: uncapped (plain-path invariant)
-    budget = resolve_cpu_budget(cpu_budget)
-    for warning in budget.warnings:
-        logger.warning("CPU budget: %s", warning)
-    # "auto" means every source was absent or invalid: stay uncapped, exactly
-    # as resolve_process_cap would.
-    return None if budget.source == "auto" else budget.cores
+    """The thread cap for an in-process (non-fan-out) run, or None."""
+    return single_run_cpu_cap(cpu_budget, logger=logger)
 
 
 def run_tracking_cli(

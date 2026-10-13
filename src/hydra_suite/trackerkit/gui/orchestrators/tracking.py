@@ -14,7 +14,11 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from hydra_suite.runtime.cpu_budget import resolve_process_cap, set_process_cpu_cap
+from hydra_suite.runtime.cpu_budget import (
+    inherited_cpu_threads,
+    set_process_cpu_cap,
+    single_run_cpu_cap,
+)
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.dialogs.calibration import describe_calibration_outcome
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
@@ -1317,7 +1321,11 @@ class TrackingOrchestrator:
         """
         config = getattr(self._mw, "config", None)
         budget = int(getattr(config, "cpu_budget", 0) or 0)
-        set_process_cpu_cap(resolve_process_cap(budget if budget > 0 else None))
+        # Same resolution as the CLI's single run (HYDRA_CPU_THREADS > budget >
+        # HYDRA_CPU_BUDGET), logging invalid-env / over-usable warnings.
+        set_process_cpu_cap(
+            single_run_cpu_cap(budget if budget > 0 else None, logger=logger)
+        )
 
     def refresh_cpu_plan_label(self) -> None:
         """Show how the CPU budget splits across the parallel batch jobs.
@@ -1354,7 +1362,6 @@ class TrackingOrchestrator:
         warning has already been shown). The CPU plan (with its warnings) is
         kept on ``self._last_fanout_cpu_plan`` for the status line.
         """
-        from hydra_suite.runtime.cpu_budget import ENV_CPU_THREADS, positive_int
         from hydra_suite.runtime.cuda_devices import (
             list_cuda_devices,
             parse_gpu_selectors,
@@ -1399,7 +1406,7 @@ class TrackingOrchestrator:
         cpu_budget = int(getattr(cfg, "cpu_budget", 0) or 0) or None
         # Same as the CLI: a GUI already running under HYDRA_CPU_THREADS (a
         # shell export or an outer fan-out) bounds what its children share.
-        inherited = positive_int(os.environ.get(ENV_CPU_THREADS))
+        inherited = inherited_cpu_threads(logger=logger)
         if inherited is not None:
             cpu_budget = inherited if cpu_budget is None else min(cpu_budget, inherited)
         # threads_per_job stays None (planned): 0 would mean an explicit

@@ -1755,6 +1755,8 @@ class MainWindow(QMainWindow):
         else:
             # If turning off batch mode, keep the current video but reset batch tracking state
             self.current_batch_index = -1
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()
 
     def _sync_keystone_to_batch(self):
         """Ensure the currently loaded video is the FIRST item in the batch list."""
@@ -1776,6 +1778,8 @@ class MainWindow(QMainWindow):
         """Refresh the batch list widget with markers for the keystone."""
         if hasattr(self, "_session_orch"):
             self._session_orch._sync_batch_list_ui()
+        if hasattr(self, "_tracking_orch"):
+            self._tracking_orch.refresh_cpu_plan_label()  # video count changed
 
     def _on_batch_video_double_clicked(self, *args):
         """Switch to a video from the batch list: auto-saves current config then loads the new video's config."""

@@ -132,7 +132,7 @@ class TrackerConfig:
             batch_parallel=bool(data.get("batch_parallel", False)),
             batch_parallel_jobs=int(data.get("batch_parallel_jobs", 0)),
             batch_parallel_gpus=str(data.get("batch_parallel_gpus", "auto")),
-            cpu_budget=int(data.get("cpu_budget", 0) or 0),
+            cpu_budget=max(0, int(data.get("cpu_budget", 0) or 0)),
             roi_shapes=list(data.get("roi_shapes", [])),
             roi_current_mode=data.get("roi_current_mode", "circle"),
             roi_current_zone_type=data.get("roi_current_zone_type", "include"),

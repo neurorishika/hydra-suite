@@ -55,6 +55,7 @@ def test_cpu_budget_round_trips():
     cfg.cpu_budget = 6
     assert TrackerConfig.from_dict(cfg.to_dict()).cpu_budget == 6
     assert TrackerConfig.from_dict({}).cpu_budget == 0
+    assert TrackerConfig.from_dict({"cpu_budget": -3}).cpu_budget == 0
 
 
 def test_cpu_budget_never_reaches_engine_config():

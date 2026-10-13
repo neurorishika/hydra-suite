@@ -133,6 +133,46 @@ def test_apply_cpu_budget_zero_honours_hydra_cpu_budget(orchestrator, monkeypatc
     assert calls == [3]
 
 
+def test_apply_cpu_budget_warns_on_invalid_env(orchestrator, monkeypatch, caplog):
+    """Parity with the CLI single run: an invalid HYDRA_CPU_BUDGET is ignored
+    loudly, and the run stays uncapped."""
+    _usable(monkeypatch, 12)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "abc")
+    calls = []
+    monkeypatch.setattr(tracking_mod, "set_process_cpu_cap", calls.append)
+    with caplog.at_level("WARNING", logger=tracking_mod.logger.name):
+        orchestrator._apply_cpu_budget()
+    assert calls == [None]
+    assert any("HYDRA_CPU_BUDGET" in r.getMessage() for r in caplog.records)
+
+
+def test_apply_cpu_budget_warns_when_budget_exceeds_usable(
+    orchestrator, monkeypatch, caplog
+):
+    _usable(monkeypatch, 4)
+    calls = []
+    monkeypatch.setattr(tracking_mod, "set_process_cpu_cap", calls.append)
+    orchestrator._mw.config.cpu_budget = 16
+    with caplog.at_level("WARNING", logger=tracking_mod.logger.name):
+        orchestrator._apply_cpu_budget()
+    assert calls == [4]
+    assert any("exceeds" in r.getMessage() for r in caplog.records)
+
+
+def test_invalid_inherited_cpu_threads_warns_in_fanout(
+    orchestrator, monkeypatch, caplog
+):
+    _usable(monkeypatch, 12)
+    _no_cuda(monkeypatch)
+    monkeypatch.setenv("HYDRA_CPU_THREADS", "abc")
+    cfg = orchestrator._mw.config
+    cfg.batch_parallel_jobs, cfg.cpu_budget = 2, 8
+    with caplog.at_level("WARNING", logger=tracking_mod.logger.name):
+        options = orchestrator._resolve_fanout_options(n_videos=5)
+    assert (options.jobs, options.threads_per_job) == (2, 4)
+    assert any("HYDRA_CPU_THREADS" in r.getMessage() for r in caplog.records)
+
+
 # --- start_batch_fanout lifts the single-run cap before children spawn -------
 
 
@@ -205,12 +245,16 @@ def test_start_batch_fanout_lifts_single_run_cap_before_start(monkeypatch, tmp_p
         main_window, SimpleNamespace(), SimpleNamespace(setup=setup)
     )
     options = fanout_mod.FanoutOptions(gpus=[], jobs=2, threads_per_job=3)
-    orch._resolve_fanout_options = lambda n_videos=1: options
+    seen_n_videos = []
+    orch._resolve_fanout_options = lambda n_videos=1: (
+        seen_n_videos.append(n_videos) or options
+    )
     orch._last_fanout_cpu_plan = SimpleNamespace(
         warnings=("Requested 8 parallel job(s) but the CPU budget is 4 core(s).",)
     )
 
     assert orch.start_batch_fanout() is True
+    assert seen_n_videos == [2]  # len(specs): the plan sizes threads per video
     assert events.index("cap:None") < events.index("start")
     assert "2 slot(s)" in label.text
     assert "CPU budget" in label.text

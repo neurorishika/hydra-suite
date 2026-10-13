@@ -458,9 +458,12 @@ def test_plain_run_resolves_budget_once(monkeypatch, tmp_path):
     calls = _stub_cap(monkeypatch)
     monkeypatch.setattr(cli, "_run_sequential", lambda specs: 0)
     n = []
-    real = cli.resolve_cpu_budget
+    # The single-run helper lives in runtime.cpu_budget (shared with the GUI).
+    real = cpu_budget_mod.resolve_cpu_budget
     monkeypatch.setattr(
-        cli, "resolve_cpu_budget", lambda *a, **k: n.append(1) or real(*a, **k)
+        cpu_budget_mod,
+        "resolve_cpu_budget",
+        lambda *a, **k: n.append(1) or real(*a, **k),
     )
 
     def _no_second_resolve(*a, **k):
