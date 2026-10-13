@@ -60,7 +60,7 @@
   - `resolve_process_cap(cli_budget: int | None, *, env: Mapping[str,str] | None = None, usable: int | None = None) -> int | None`
   - Constants `GPU_BOUND_MIN_THREADS = 1`, `CPU_BOUND_MIN_THREADS = 2`, `THREAD_ENV_VARS` (tuple of the 7 names in Global Constraints), `ENV_CPU_THREADS = "HYDRA_CPU_THREADS"`, `ENV_CPU_BUDGET = "HYDRA_CPU_BUDGET"`.
 
-- [ ] **Step 1: Write the failing tests** (`tests/test_cpu_budget.py`)
+- [x] **Step 1: Write the failing tests** (`tests/test_cpu_budget.py`)
 
 ```python
 import pytest
@@ -152,12 +152,12 @@ def test_resolve_process_cap_precedence():
     assert cb.resolve_process_cap(None, env={"HYDRA_CPU_THREADS": "junk"}, usable=16) is None
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/test_cpu_budget.py -q`
 Expected: FAIL (`ModuleNotFoundError: hydra_suite.runtime.cpu_budget`).
 
-- [ ] **Step 3: Implement** `src/hydra_suite/runtime/cpu_budget.py` (first half; Task 2 appends the applier)
+- [x] **Step 3: Implement** `src/hydra_suite/runtime/cpu_budget.py` (first half; Task 2 appends the applier)
 
 ```python
 """CPU budget authority: usable cores, budget resolution, fan-out planning.
@@ -350,8 +350,8 @@ def resolve_process_cap(
 
 Also add `"threadpoolctl>=3.1"` to `[project] dependencies` in `pyproject.toml` beside `scikit-learn`.
 
-- [ ] **Step 4: Run tests** — same command, expect PASS.
-- [ ] **Step 5: Commit** — `git add src/hydra_suite/runtime/cpu_budget.py tests/test_cpu_budget.py pyproject.toml && git commit -m "feat(runtime): CPU budget resolution and fan-out planner"`
+- [x] **Step 4: Run tests** — same command, expect PASS.
+- [x] **Step 5: Commit** — `git add src/hydra_suite/runtime/cpu_budget.py tests/test_cpu_budget.py pyproject.toml && git commit -m "feat(runtime): CPU budget resolution and fan-out planner"`
 
 ---
 
@@ -366,7 +366,7 @@ Also add `"threadpoolctl>=3.1"` to `[project] dependencies` in `pyproject.toml` 
 - Consumes: `THREAD_ENV_VARS` (Task 1).
 - Produces: `set_process_cpu_cap(n: int | None) -> None`, `current_cpu_cap() -> int | None`, `bind_thread_cpu_cap() -> None`, `capped(value: int, cap: int | None) -> int` (helper: `value if cap is None else max(1, min(value, cap))`).
 
-- [ ] **Step 1: Write failing tests** (`tests/test_cpu_budget_apply.py`). Every assertion runs in a fresh interpreter.
+- [x] **Step 1: Write failing tests** (`tests/test_cpu_budget_apply.py`). Every assertion runs in a fresh interpreter.
 
 ```python
 import json
@@ -461,9 +461,9 @@ def test_bind_is_thread_local_numba():
     assert r["bound"] <= 2 and r["main_untouched"] is True
 ```
 
-- [ ] **Step 2: Run** `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/test_cpu_budget_apply.py -q` — expect FAIL (`AttributeError: set_process_cpu_cap`).
+- [x] **Step 2: Run** `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/test_cpu_budget_apply.py -q` — expect FAIL (`AttributeError: set_process_cpu_cap`).
 
-- [ ] **Step 3: Implement** (append to `cpu_budget.py`)
+- [x] **Step 3: Implement** (append to `cpu_budget.py`)
 
 ```python
 import logging
@@ -566,8 +566,8 @@ from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
         bind_thread_cpu_cap()
 ```
 
-- [ ] **Step 4: Run tests** — PASS. Also run `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/ -q -k "tracking_worker or headless" -x` to make sure nothing on the worker path broke.
-- [ ] **Step 5: Commit** — `git commit -m "feat(runtime): process-level CPU cap and per-thread numba binder"`
+- [x] **Step 4: Run tests** — PASS. Also run `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/ -q -k "tracking_worker or headless" -x` to make sure nothing on the worker path broke.
+- [x] **Step 5: Commit** — `git commit -m "feat(runtime): process-level CPU cap and per-thread numba binder"`
 
 ---
 
@@ -586,7 +586,7 @@ from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
 - Consumes: `current_cpu_cap()`, `capped()` (Task 2).
 - Produces: `session_options_for(threads: int | None) -> onnxruntime.SessionOptions | None`.
 
-- [ ] **Step 1: Write failing tests** (`tests/test_cpu_cap_consumers.py`)
+- [x] **Step 1: Write failing tests** (`tests/test_cpu_cap_consumers.py`)
 
 ```python
 import pytest
@@ -645,9 +645,9 @@ def test_encoder_thread_count_capped(cap, tmp_path):
 
 Before writing `test_encoder_thread_count_capped`, open `utils/video_encoder.py` and match the real `VideoEncoder` constructor/`write`/`close` names and how a backend is forced; adjust the test call to match (do not change the encoder's public API).
 
-- [ ] **Step 2: Run** — expect FAIL.
+- [x] **Step 2: Run** — expect FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `runtime/onnx_providers.py`:
 
@@ -708,7 +708,7 @@ def apriltag_thread_count(params) -> int:
 
 and replace `threads=int(params.get("APRILTAG_THREADS", 4))` at both sites with `threads=apriltag_thread_count(params)` (import the helper in `apriltag.py` from `hydra_suite.core.inference.config`; if that import is circular, put the helper in `runtime/cpu_budget.py` as `apriltag_thread_count` instead and import from there in both sites).
 
-- [ ] **Step 4: Run tests** — PASS. Then the cv2 decoder check (manual, records evidence for the review):
+- [x] **Step 4: Run tests** — PASS. Then the cv2 decoder check (manual, records evidence for the review):
 
 ```bash
 PYTHONPATH=$PWD/src conda run -n hydra-mps python - <<'EOF'
@@ -723,7 +723,7 @@ EOF
 ```
 
 Expected: capped capture thread count far below uncapped (≈ base + 3 vs base + 31).
-- [ ] **Step 5: Commit** — `git commit -m "feat: ORT, crop-warp, PyAV decode/encode and AprilTag honour the CPU cap"`
+- [x] **Step 5: Commit** — `git commit -m "feat: ORT, crop-warp, PyAV decode/encode and AprilTag honour the CPU cap"`
 
 ---
 
@@ -740,7 +740,7 @@ Expected: capped capture thread count far below uncapped (≈ base + 3 vs base +
   - `resolve_slot_count(options: FanoutOptions) -> int` — exactly `run_batch_fanout`'s current arithmetic.
   - `plan_fanout_cpu(options: FanoutOptions, *, n_videos: int, cpu_budget: int | None, env: Mapping[str,str] | None = None, usable: int | None = None) -> tuple[FanoutOptions, CpuPlan]` — returns a `dataclasses.replace(options, jobs=plan.jobs, threads_per_job=plan.threads_per_job)`; `gpu_bound=bool(options.gpus)`; passes `options.threads_per_job` as the explicit override.
 
-- [ ] **Step 1: Write failing tests** (append)
+- [x] **Step 1: Write failing tests** (append)
 
 ```python
 from hydra_suite.trackerkit.batch_fanout import (
@@ -799,9 +799,9 @@ Check `CudaDevice`'s real constructor fields in `runtime/cuda_devices.py` and ma
 
 Also update the existing test near line 117 that asserts the parent's `OMP_NUM_THREADS == "7"` wins when `threads_per_job` is set: it must now assert `min(7, threads_per_job)`.
 
-- [ ] **Step 2: Run** `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/test_trackerkit_batch_fanout.py -q` — FAIL.
+- [x] **Step 2: Run** `PYTHONPATH=$PWD/src conda run -n hydra-mps python -m pytest tests/test_trackerkit_batch_fanout.py -q` — FAIL.
 
-- [ ] **Step 3: Implement** in `batch_fanout.py`:
+- [x] **Step 3: Implement** in `batch_fanout.py`:
 
 ```python
 from hydra_suite.runtime.cpu_budget import (
@@ -862,8 +862,8 @@ def plan_fanout_cpu(
 
 (Make sure `replace` and `Mapping` are imported.)
 
-- [ ] **Step 4: Run** the batch-fanout test files: `tests/test_trackerkit_batch_fanout.py tests/test_trackerkit_cli_fanout.py tests/test_batch_fanout_windows.py tests/test_trackerkit_batch_fanout_worker.py` — PASS.
-- [ ] **Step 5: Commit** — `git commit -m "feat(trackerkit): fan-out children always get a CPU-budget thread cap"`
+- [x] **Step 4: Run** the batch-fanout test files: `tests/test_trackerkit_batch_fanout.py tests/test_trackerkit_cli_fanout.py tests/test_batch_fanout_windows.py tests/test_trackerkit_batch_fanout_worker.py` — PASS.
+- [x] **Step 5: Commit** — `git commit -m "feat(trackerkit): fan-out children always get a CPU-budget thread cap"`
 
 ---
 
@@ -880,7 +880,7 @@ def plan_fanout_cpu(
 - Consumes: `plan_fanout_cpu` (Task 4), `resolve_process_cap`, `set_process_cpu_cap`, `bind_thread_cpu_cap` (Tasks 1–2).
 - Produces: `run_tracking_cli(..., cpu_budget: int | None = None)`; `job_cli._fanout_flags(args) -> list[str]`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 In `tests/test_trackerkit_cli_fanout.py` (follow that file's existing pattern for monkeypatching `_run_fanout` / `_run_sequential` and creating dummy video files):
 
@@ -941,9 +941,9 @@ def test_cpu_budget_must_be_positive(tmp_path):
 
 Job run test: assert `_cmd_run` with a local job dir (follow the existing job-run test fixture) and `--jobs 2 --threads-per-job 3 --cpu-budget 8 --gpus 0,1` produces a `run_argv` containing `["--gpus", "0,1", "--jobs", "2", "--threads-per-job", "3", "--cpu-budget", "8"]`, and the remote ssh command string contains the same flags.
 
-- [ ] **Step 2: Run** — FAIL.
+- [x] **Step 2: Run** — FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `app.py` track parser, after `--threads-per-job`:
 
@@ -1026,8 +1026,8 @@ In `_cmd_run`: local branch `run_argv = ["./run.sh", *passthrough, *_fanout_flag
 
 Docs: add a "CPU budget" subsection to `docs/user-guide/trackerkit-cli.md` covering `--cpu-budget`, `HYDRA_CPU_BUDGET` (local only; use `--cpu-budget` with remote `job run`), the clamp warning, `--threads-per-job` as the override, and that the pose SLEAP sidecar inherits the same per-job cap (a pose job may use up to ~2×).
 
-- [ ] **Step 4: Run** the CLI/job/fanout test files — PASS. Run `make docs-build` if mkdocs is installed (skip otherwise; note it in the report).
-- [ ] **Step 5: Commit** — `git commit -m "feat(trackerkit): --cpu-budget, CPU-planned fan-out, job run forwards fan-out flags"`
+- [x] **Step 4: Run** the CLI/job/fanout test files — PASS. Run `make docs-build` if mkdocs is installed (skip otherwise; note it in the report).
+- [x] **Step 5: Commit** — `git commit -m "feat(trackerkit): --cpu-budget, CPU-planned fan-out, job run forwards fan-out flags"`
 
 ---
 
@@ -1045,7 +1045,7 @@ Docs: add a "CPU budget" subsection to `docs/user-guide/trackerkit-cli.md` cover
 - Consumes: `plan_fanout_cpu`, `resolve_slot_count` (Task 4); `set_process_cpu_cap`, `usable_cores`, `resolve_cpu_budget`, `plan_cpu` (Tasks 1–2).
 - Produces: `TrackerConfig.cpu_budget: int` (0 = auto); `TrackingOrchestrator._apply_cpu_budget() -> None`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Schema:
 
@@ -1085,9 +1085,9 @@ def test_apply_cpu_budget_zero_is_noop_and_positive_caps(orchestrator, monkeypat
 
 (`set_process_cpu_cap(None)` is itself a no-op when never capped — Task 2 — so passing None for 0 is correct and restores after a previous cap.)
 
-- [ ] **Step 2: Run** — FAIL.
+- [x] **Step 2: Run** — FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `schemas.py`: add under the batch fan-out fields
 
@@ -1171,8 +1171,8 @@ Note the spec says the GUI budget is clamped to usable cores — `QSpinBox` max 
 
 Find every worker start site: `grep -n "\.start()" src/hydra_suite/trackerkit/gui/orchestrators/*.py src/hydra_suite/trackerkit/gui/main_window.py` and call `self._apply_cpu_budget()` (or `self._mw._tracking_orchestrator._apply_cpu_budget()` from other orchestrators — use whatever accessor the code already uses to reach the tracking orchestrator) immediately before starting `TrackingWorker`, `PostProcessWorker`, `FinalMediaExportWorker`, `InterpolatedCropsWorker` and `SessionWorker`. Do not add it before preview/optimizer/fan-out workers (fan-out children get their own cap via env).
 
-- [ ] **Step 4: Run** the new tests plus `tests/test_trackerkit_config_schema_fanout.py tests/test_trackerkit_batch_fanout_worker.py` and any GUI test that touches `setup_panel`/`_resolve_fanout_options` (`grep -ln "setup_panel\|_resolve_fanout_options" tests/`) — PASS. Use `QT_QPA_PLATFORM=offscreen`.
-- [ ] **Step 5: Commit** — `git commit -m "feat(trackerkit-gui): CPU budget control, planned fan-out, process cap before workers"`
+- [x] **Step 4: Run** the new tests plus `tests/test_trackerkit_config_schema_fanout.py tests/test_trackerkit_batch_fanout_worker.py` and any GUI test that touches `setup_panel`/`_resolve_fanout_options` (`grep -ln "setup_panel\|_resolve_fanout_options" tests/`) — PASS. Use `QT_QPA_PLATFORM=offscreen`.
+- [x] **Step 5: Commit** — `git commit -m "feat(trackerkit-gui): CPU budget control, planned fan-out, process cap before workers"`
 
 ---
 
@@ -1182,7 +1182,7 @@ Find every worker start site: `grep -n "\.start()" src/hydra_suite/trackerkit/gu
 - Test: `tests/test_cpu_budget_child_probe.py`
 - Modify (only if Step 3 shows bytes differ): `setup_panel.py` parallel tooltip, `docs/user-guide/trackerkit-cli.md`
 
-- [ ] **Step 1: Child probe test** — spawns a real child with the fan-out env and checks pools:
+- [x] **Step 1: Child probe test** — spawns a real child with the fan-out env and checks pools:
 
 ```python
 import json, os, subprocess, sys, textwrap
@@ -1215,7 +1215,7 @@ def test_capped_child_pools_respect_cap():
 
 Run it; PASS.
 
-- [ ] **Step 2: Plain-path equivalence** — kill stale sleap/hydra processes first (`pgrep -fl "sleap|hydra"`; only those). Then, with conda `hydra-mps` active, run the matrix with baseline = this branch's base commit and current = the worktree:
+- [x] **Step 2: Plain-path equivalence** — kill stale sleap/hydra processes first (`pgrep -fl "sleap|hydra"`; only those). Then, with conda `hydra-mps` active, run the matrix with baseline = this branch's base commit and current = the worktree:
 
 ```bash
 git worktree add --detach .worktrees/cpu-base <branch-base-sha>   # = git merge-base HEAD main
@@ -1225,8 +1225,8 @@ REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/cpu-base/src WT_SRC=$PWD/src \
 
 Expected: EQUIVALENT (byte-identical) for both clips, row counts > 1, perf ratio ≤ 1.25. Remove the base worktree afterwards (`git worktree remove --force .worktrees/cpu-base`).
 
-- [ ] **Step 3: Fan-out vs plain parity measurement** — run `fly_obb` and `worm_bgsub` once plain and once via `trackerkit track <clip> --jobs 2 --cpu-budget 4` (CPU-only fan-out on this box) with the same config, and compare the `_tracking_final.csv` files with `cmp`. Record the result in the commit message. If any differ, change the parallel-checkbox tooltip claim from "byte-identical" to "match sequential tracking up to CPU floating-point rounding" and add the same sentence to the CLI doc.
+- [x] **Step 3: Fan-out vs plain parity measurement** — run `fly_obb` and `worm_bgsub` once plain and once via `trackerkit track <clip> --jobs 2 --cpu-budget 4` (CPU-only fan-out on this box) with the same config, and compare the `_tracking_final.csv` files with `cmp`. Record the result in the commit message. If any differ, change the parallel-checkbox tooltip claim from "byte-identical" to "match sequential tracking up to CPU floating-point rounding" and add the same sentence to the CLI doc.
 
-- [ ] **Step 4: Full suite** — `PYTHONPATH=$PWD/src conda run -n hydra-mps make pytest` (or the repo's batched equivalent). Compare failure SETS with the branch base (memory: chunking shifts make raw counts misleading); no new failures.
+- [x] **Step 4: Full suite** — `PYTHONPATH=$PWD/src conda run -n hydra-mps make pytest` (or the repo's batched equivalent). Compare failure SETS with the branch base (memory: chunking shifts make raw counts misleading); no new failures.
 
-- [ ] **Step 5: Commit** — `git commit -m "test: CPU budget child probe; verified plain-path byte-identity"`
+- [x] **Step 5: Commit** — `git commit -m "test: CPU budget child probe; verified plain-path byte-identity"`
