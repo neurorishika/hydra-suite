@@ -68,6 +68,9 @@ class _SteadyArena1Runner:
         self.clipping_stats = _ClippingStatsStub()
         self._call = 0
 
+    def configure_realtime_pass(self, **_kwargs):
+        pass
+
     def run_realtime(self, frame, frame_idx, roi_mask=None):
         from hydra_suite.core.inference.result import OBBResult
 
