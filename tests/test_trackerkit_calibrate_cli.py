@@ -218,3 +218,94 @@ def test_calibrate_threads_manual_fields_through_the_same_override_as_track(
         captured["config_data"]["inference_autotune_manual_fields"]
         == expected["inference_autotune_manual_fields"]
     )
+
+
+def test_calibrate_accepts_and_validates_cpu_budget(capsys):
+    from hydra_suite.trackerkit.app import parse_arguments
+
+    args = parse_arguments(["calibrate", "--video", "v.mp4", "--cpu-budget", "4"])
+    assert args.cpu_budget == 4
+    assert parse_arguments(["calibrate", "--video", "v.mp4"]).cpu_budget is None
+    with pytest.raises(SystemExit):
+        parse_arguments(["calibrate", "--video", "v.mp4", "--cpu-budget", "0"])
+    assert "--cpu-budget must be >= 1" in capsys.readouterr().err
+
+
+def _capture_calibrate_cap(monkeypatch, tmp_path):
+    """Run run_calibrate_cli up to session load; record cap calls in order."""
+    from hydra_suite.trackerkit import calibrate_cli, cli_config
+
+    video = tmp_path / "v.mp4"
+    _write_tiny_video(video)
+    events = []
+
+    class _Stop(Exception):
+        pass
+
+    def fake_session(*_a, **_k):
+        events.append("session")
+        raise _Stop()
+
+    monkeypatch.setattr(cli_config, "load_tracker_cli_session", fake_session)
+    monkeypatch.setattr(
+        calibrate_cli, "set_process_cpu_cap", lambda n: events.append(n)
+    )
+    monkeypatch.setattr(
+        calibrate_cli, "bind_thread_cpu_cap", lambda: events.append("bind")
+    )
+    return video, events, _Stop
+
+
+def test_calibrate_applies_cpu_budget_before_building_the_session(
+    monkeypatch, tmp_path
+):
+    """The cap must be in force before any config (AprilTag threads) is built."""
+    from hydra_suite.trackerkit import calibrate_cli
+
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 16)
+    video, events, stop = _capture_calibrate_cap(monkeypatch, tmp_path)
+    with pytest.raises(stop):
+        calibrate_cli.run_calibrate_cli(str(video), budget_seconds=60.0, cpu_budget=4)
+    assert events == [4, "bind", "session"]
+
+
+def test_calibrate_honours_hydra_cpu_budget_env(monkeypatch, tmp_path):
+    from hydra_suite.trackerkit import calibrate_cli
+
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    monkeypatch.setenv("HYDRA_CPU_BUDGET", "3")
+    monkeypatch.setattr("hydra_suite.runtime.cpu_budget.usable_cores", lambda **_: 16)
+    video, events, stop = _capture_calibrate_cap(monkeypatch, tmp_path)
+    with pytest.raises(stop):
+        calibrate_cli.run_calibrate_cli(str(video), budget_seconds=60.0)
+    assert events == [3, "bind", "session"]
+
+
+def test_calibrate_without_budget_touches_nothing(monkeypatch, tmp_path):
+    from hydra_suite.trackerkit import calibrate_cli
+
+    monkeypatch.delenv("HYDRA_CPU_THREADS", raising=False)
+    monkeypatch.delenv("HYDRA_CPU_BUDGET", raising=False)
+    video, events, stop = _capture_calibrate_cap(monkeypatch, tmp_path)
+    with pytest.raises(stop):
+        calibrate_cli.run_calibrate_cli(str(video), budget_seconds=60.0)
+    assert events == ["session"]
+
+
+def test_main_forwards_cpu_budget_to_calibrate(monkeypatch):
+    from hydra_suite.trackerkit import app, calibrate_cli
+
+    seen = {}
+
+    def fake_calibrate(video, **kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(calibrate_cli, "run_calibrate_cli", fake_calibrate)
+    monkeypatch.setattr(app, "check_dependencies", lambda: True)
+    monkeypatch.setattr(app, "setup_logging", lambda **kw: None)
+    with pytest.raises(SystemExit):
+        app.main(["calibrate", "--video", "v.mp4", "--cpu-budget", "2"])
+    assert seen["cpu_budget"] == 2

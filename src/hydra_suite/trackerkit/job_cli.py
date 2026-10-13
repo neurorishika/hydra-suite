@@ -502,6 +502,13 @@ def _fanout_flags(args) -> list[str]:
     return flags
 
 
+def _cpu_budget_flag(args) -> list[str]:
+    """``--cpu-budget N`` for the calibrate leg, so it measures under the
+    same cap the tracking run will use (empty when unset)."""
+    value = getattr(args, "cpu_budget", None)
+    return ["--cpu-budget", str(value)] if value is not None else []
+
+
 def _cmd_run(args) -> int:
     target = args.target
     passthrough = _run_track_args(Path(target)) if _is_local(target) else None
@@ -605,6 +612,7 @@ def _run_calibrate(target: str, args) -> int:
         ]
         for field in manual_fields:
             argv += ["--inference-autotune-manual", str(field)]
+        argv += _cpu_budget_flag(args)
         result = subprocess.run(argv, cwd=str(job_dir), env=env, check=False)
         return result.returncode
 
@@ -612,6 +620,9 @@ def _run_calibrate(target: str, args) -> int:
     bootstrap = _bootstrap_prefix(getattr(args, "remote_bootstrap", "") or "")
     tk = _remote_trackerkit_invocation()
     remote_cmd = f"{bootstrap}cd {shlex.quote(remote.path)} && {tk} job calibrate ."
+    cpu_flag = _cpu_budget_flag(args)
+    if cpu_flag:
+        remote_cmd += " " + shlex.join(cpu_flag)
     result = subprocess.run(
         ["ssh", remote.host, remote_cmd], check=False, stdin=subprocess.DEVNULL
     )

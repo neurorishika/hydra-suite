@@ -17,6 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from hydra_suite.runtime.cpu_budget import (
+    bind_thread_cpu_cap,
+    set_process_cpu_cap,
+    single_run_cpu_cap,
+)
+
 logger = logging.getLogger(__name__)
 
 # Statuses that mean "a validated profile now exists for this key" -- the
@@ -83,6 +89,7 @@ def run_calibrate_cli(
     config_path: str | None = None,
     budget_seconds: float,
     inference_autotune_manual: Sequence[str] | None = None,
+    cpu_budget: int | None = None,
 ) -> int:
     """Measure and persist a validated inference profile for one video/config.
 
@@ -107,6 +114,17 @@ def run_calibrate_cli(
         raise FileNotFoundError(f"Video not found: {video}")
     if config_path and not Path(config_path).is_file():
         raise FileNotFoundError(f"Config not found: {config_path}")
+
+    # Same opt-in single-run cap as ``track`` (--cpu-budget /
+    # HYDRA_CPU_BUDGET / an inherited HYDRA_CPU_THREADS), applied BEFORE the
+    # session and inference config are built (AprilTag threads are fixed at
+    # config-build time). No budget source -> None -> nothing is touched.
+    # The tuning profile key deliberately has no cap term: a profile is
+    # measured under whatever cap is in force.
+    cap = single_run_cpu_cap(cpu_budget, logger=logger)
+    if cap is not None:
+        set_process_cpu_cap(cap)
+        bind_thread_cpu_cap()
 
     # I4: manual fields feed ``compute_baseline_digest`` ->
     # ``key.baseline_digest``, so they are part of the profile key. ``track``

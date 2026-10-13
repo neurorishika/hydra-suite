@@ -290,11 +290,24 @@ Examples:
             "resulting profile -- it is part of the profile key."
         ),
     )
+    calibrate_parser.add_argument(
+        "--cpu-budget",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap this calibration's CPU thread pools at N cores, like "
+            "`track --cpu-budget` on a single run (else HYDRA_CPU_BUDGET; "
+            "uncapped when neither is given)."
+        ),
+    )
     # Deliberately NO --gpus / --jobs: concurrent calibration on one box
     # measures contention, not throughput, and would silently produce a
     # confidently wrong profile. Neither flag is registered on this
     # subparser, so passing either is an "unrecognized arguments" SystemExit
     # from argparse itself -- a loud rejection, not a silent ignore.
+    # (--cpu-budget is different: it caps this one process, it does not
+    # parallelise anything.)
 
     job_parser = subparsers.add_parser(
         "job",
@@ -430,6 +443,7 @@ Examples:
         "--inference-autotune-manual", action="append", default=[], metavar="FIELD"
     )
     job_calibrate.add_argument("--remote-bootstrap", type=str, default="")
+    job_calibrate.add_argument("--cpu-budget", type=int, default=None, metavar="N")
     job_calibrate.add_argument(
         "--budget-seconds", type=float, default=DEFAULT_CALIBRATION_BUDGET_SECONDS
     )
@@ -494,15 +508,25 @@ def parse_arguments(argv: list[str] | None = None) -> object:
             track_parser.error("--cpu-budget must be >= 1")
 
     if args.command == "job":
-        # `job run` forwards --cpu-budget to `track` on the compute box; reject
-        # a bad value here rather than after preflight (or over ssh).
-        cpu_budget = getattr(args, "cpu_budget", None)
-        if cpu_budget is not None and int(cpu_budget) < 1:
-            _subparser_choices(subcommands["job"])["run"].error(
-                "--cpu-budget must be >= 1"
-            )
+        # `job run` forwards these to `track` (and --cpu-budget to the
+        # calibrate leg) on the compute box; reject a bad value here rather
+        # than after preflight (or over ssh).
+        job_command = getattr(args, "job_command", None)
+        for attr, flag in (
+            ("jobs", "--jobs"),
+            ("threads_per_job", "--threads-per-job"),
+            ("cpu_budget", "--cpu-budget"),
+        ):
+            value = getattr(args, attr, None)
+            if value is not None and int(value) < 1:
+                _subparser_choices(subcommands["job"])[job_command].error(
+                    f"{flag} must be >= 1"
+                )
 
     if args.command == "calibrate":
+        cpu_budget = getattr(args, "cpu_budget", None)
+        if cpu_budget is not None and int(cpu_budget) < 1:
+            calibrate_parser.error("--cpu-budget must be >= 1")
         budget = getattr(args, "budget_seconds", None)
         if budget is not None and not (
             MINIMUM_CALIBRATION_BUDGET_SECONDS
@@ -680,6 +704,7 @@ def main(argv: list[str] | None = None) -> object:
                 inference_autotune_manual=getattr(
                     args, "inference_autotune_manual", []
                 ),
+                cpu_budget=getattr(args, "cpu_budget", None),
             )
         except DetectionLimitError as e:
             logger.error("Tracker calibration failed: %s", e)

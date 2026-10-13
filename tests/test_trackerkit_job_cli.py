@@ -484,3 +484,82 @@ def test_job_run_remote_forwards_fanout_flags(monkeypatch, detach):
 def test_job_run_rejects_non_positive_cpu_budget():
     with pytest.raises(SystemExit):
         parse_arguments(["job", "run", "/tmp/j", "--cpu-budget", "0"])
+
+
+@pytest.mark.parametrize("flag", ["--jobs", "--threads-per-job"])
+def test_job_run_rejects_non_positive_fanout_counts(flag, capsys):
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "run", "/tmp/j", flag, "0"])
+    assert "job run" in capsys.readouterr().err
+
+
+def test_job_calibrate_accepts_and_validates_cpu_budget(capsys):
+    args = parse_arguments(["job", "calibrate", "/tmp/j", "--cpu-budget", "6"])
+    assert args.cpu_budget == 6
+    with pytest.raises(SystemExit):
+        parse_arguments(["job", "calibrate", "/tmp/j", "--cpu-budget", "0"])
+    assert "job calibrate" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["run", "calibrate"])
+def test_local_calibrate_leg_forwards_cpu_budget(monkeypatch, tmp_path, command):
+    from hydra_suite.trackerkit import job_cli
+
+    job_dir = tmp_path / f"job_{command}"
+    _write_min_job(job_dir)
+    captured = []
+
+    def fake_run(argv, **kwargs):
+        captured.append(argv)
+        import subprocess as _subprocess
+
+        return _subprocess.CompletedProcess(argv, 1)  # stop after calibrate
+
+    monkeypatch.setattr(job_cli.subprocess, "run", fake_run)
+    argv = ["job", command, str(job_dir), "--cpu-budget", "5"]
+    if command == "run":
+        argv.append("--calibrate")
+    args = parse_arguments(argv)
+    (job_cli._cmd_run if command == "run" else job_cli._cmd_calibrate)(args)
+    calibrate_argv = captured[0]
+    assert "calibrate" in calibrate_argv
+    assert calibrate_argv[-2:] == ["--cpu-budget", "5"]
+
+
+def test_local_calibrate_leg_omits_cpu_budget_when_unset(monkeypatch, tmp_path):
+    from hydra_suite.trackerkit import job_cli
+
+    job_dir = tmp_path / "job_plain"
+    _write_min_job(job_dir)
+    captured = []
+
+    def fake_run(argv, **kwargs):
+        captured.append(argv)
+        import subprocess as _subprocess
+
+        return _subprocess.CompletedProcess(argv, 1)
+
+    monkeypatch.setattr(job_cli.subprocess, "run", fake_run)
+    job_cli._cmd_calibrate(parse_arguments(["job", "calibrate", str(job_dir)]))
+    assert "--cpu-budget" not in captured[0]
+
+
+def test_remote_calibrate_leg_forwards_cpu_budget(monkeypatch):
+    from hydra_suite.trackerkit import job_cli
+
+    captured = []
+
+    def fake_run(argv, **kwargs):
+        captured.append(argv)
+        import subprocess as _subprocess
+
+        return _subprocess.CompletedProcess(argv, 1)
+
+    monkeypatch.setattr(job_cli.subprocess, "run", fake_run)
+    job_cli._cmd_run(
+        parse_arguments(
+            ["job", "run", "host:/remote/j", "--calibrate", "--cpu-budget", "7"]
+        )
+    )
+    remote_cmd = captured[0][-1]
+    assert "job calibrate . --cpu-budget 7" in remote_cmd
