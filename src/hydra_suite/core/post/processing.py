@@ -97,37 +97,43 @@ def _compute_pairwise_distances_numba(
     common = 0
     detection_id_matches = 0
 
+    # For each frame of trajectory 1, the FIRST row of trajectory 2 with that
+    # frame (original row order): a stable argsort plus a left binary search
+    # finds exactly that row in O(log n2) instead of scanning all of frames2.
+    order2 = np.argsort(frames2, kind="mergesort")
+    sorted2 = frames2[order2]
+    n2 = len(sorted2)
+
     for i in range(len(frames1)):
         f1 = frames1[i]
         x1_val = x1[i]
         y1_val = y1[i]
         det1_val = det1[i]
 
-        for j in range(len(frames2)):
-            if frames2[j] == f1:
-                common += 1
+        pos = np.searchsorted(sorted2, f1)
+        if pos >= n2 or sorted2[pos] != f1:
+            continue
+        j = order2[pos]
+        common += 1
 
-                if use_detection_id:
-                    det2_val = det2[j]
-                    if not np.isnan(det1_val) and not np.isnan(det2_val):
-                        if det1_val == det2_val:
-                            detection_id_matches += 1
-                            agreeing += 1
-                            break
-
-                x2_val = x2[j]
-                y2_val = y2[j]
-
-                if np.isnan(x1_val) or np.isnan(y1_val):
-                    break
-
-                if np.isnan(x2_val) or np.isnan(y2_val):
-                    break
-
-                dist = np.sqrt((x1_val - x2_val) ** 2 + (y1_val - y2_val) ** 2)
-                if dist <= threshold:
+        if use_detection_id:
+            det2_val = det2[j]
+            if not np.isnan(det1_val) and not np.isnan(det2_val):
+                if det1_val == det2_val:
+                    detection_id_matches += 1
                     agreeing += 1
-                break
+                    continue
+
+        x2_val = x2[j]
+        y2_val = y2[j]
+        if np.isnan(x1_val) or np.isnan(y1_val):
+            continue
+        if np.isnan(x2_val) or np.isnan(y2_val):
+            continue
+
+        dist = np.sqrt((x1_val - x2_val) ** 2 + (y1_val - y2_val) ** 2)
+        if dist <= threshold:
+            agreeing += 1
 
     return agreeing, common, detection_id_matches
 
@@ -161,6 +167,31 @@ def _compute_all_merge_candidates_numba(
     n_fwd = len(fwd_starts)
     n_bwd = len(bwd_starts)
 
+    # Frame range of every trajectory: a pair whose ranges do not overlap has
+    # no common frame, so it can never reach ``agreeing > 0`` -- skipping it is
+    # exact and turns the all-pairs scan from O(n_fwd * n_bwd * frames) into a
+    # range test for every pair that cannot match.
+    fwd_lo = np.empty(n_fwd, dtype=np.int64)
+    fwd_hi = np.empty(n_fwd, dtype=np.int64)
+    for fi in range(n_fwd):
+        seg = fwd_frames_list[fwd_starts[fi] : fwd_ends[fi]]
+        if len(seg) == 0:
+            fwd_lo[fi] = 1
+            fwd_hi[fi] = 0
+        else:
+            fwd_lo[fi] = seg.min()
+            fwd_hi[fi] = seg.max()
+    bwd_lo = np.empty(n_bwd, dtype=np.int64)
+    bwd_hi = np.empty(n_bwd, dtype=np.int64)
+    for bi in range(n_bwd):
+        seg = bwd_frames_list[bwd_starts[bi] : bwd_ends[bi]]
+        if len(seg) == 0:
+            bwd_lo[bi] = 1
+            bwd_hi[bi] = 0
+        else:
+            bwd_lo[bi] = seg.min()
+            bwd_hi[bi] = seg.max()
+
     # Pre-allocate maximum possible candidates
     max_candidates = n_fwd * n_bwd
     candidates_fi = np.empty(max_candidates, dtype=np.int32)
@@ -178,6 +209,13 @@ def _compute_all_merge_candidates_numba(
         fwd_det = fwd_det_list[f_start:f_end]
 
         for bi in range(n_bwd):
+            if (
+                fwd_hi[fi] < fwd_lo[fi]
+                or bwd_hi[bi] < bwd_lo[bi]
+                or fwd_hi[fi] < bwd_lo[bi]
+                or bwd_hi[bi] < fwd_lo[fi]
+            ):
+                continue
             b_start, b_end = bwd_starts[bi], bwd_ends[bi]
             bwd_x = bwd_x_list[b_start:b_end]
             bwd_y = bwd_y_list[b_start:b_end]
@@ -2555,6 +2593,49 @@ def _count_overlap_agreement(
     return agreeing, detection_id_matches
 
 
+def _overlap_arrays(lookup):
+    """Frame-sorted (frames, X, Y, DetectionID) arrays of a frame lookup.
+
+    Same values the row dicts carry, so counting on them is exactly
+    ``_count_overlap_agreement`` without a Python loop per common frame.
+    """
+    try:
+        frames = np.array(sorted(lookup.keys()), dtype=np.int64)
+        rows = [lookup[f] for f in frames]
+        x = np.array([r.get("X", np.nan) for r in rows], dtype=np.float64)
+        y = np.array([r.get("Y", np.nan) for r in rows], dtype=np.float64)
+        det = np.array(
+            [
+                np.nan if _is_missing(r.get("DetectionID")) else r.get("DetectionID")
+                for r in rows
+            ],
+            dtype=np.float64,
+        )
+    except (TypeError, ValueError):
+        return None  # non-numeric values: the caller uses the row-dict path
+    return frames, x, y, det
+
+
+def _count_overlap_agreement_arrays(arr_a, arr_b, has_detection_id, agreement_distance):
+    """Vectorised ``_count_overlap_agreement``: (n_common, agreeing, det_matches)."""
+    fa, xa, ya, da = arr_a
+    fb, xb, yb, db = arr_b
+    if len(fa) == 0 or len(fb) == 0:
+        return 0, 0, 0
+    _, ia, ib = np.intersect1d(fa, fb, assume_unique=True, return_indices=True)
+    n_common = len(ia)
+    if n_common == 0:
+        return 0, 0, 0
+    if has_detection_id:
+        d1, d2 = da[ia], db[ib]
+        det_match = ~np.isnan(d1) & ~np.isnan(d2) & (d1 == d2)
+    else:
+        det_match = np.zeros(n_common, dtype=bool)
+    dist = np.sqrt((xa[ia] - xb[ib]) ** 2 + (ya[ia] - yb[ib]) ** 2)
+    agree = det_match | (dist <= agreement_distance)
+    return n_common, int(agree.sum()), int(det_match.sum())
+
+
 def _classify_overlap_frames(
     all_frames,
     lookup_a,
@@ -2888,6 +2969,7 @@ def _try_merge_trajectory_pair(
     max_spatial_jump,
     identity_disagree_min_run=5,
     identity_drives_splits: bool = True,
+    traj_arrays=None,
 ):
     """Try to merge trajectory pair (i, j). Returns merged segments list, or None if not mergeable."""
     lookup_a = traj_lookups[i]
@@ -2902,13 +2984,24 @@ def _try_merge_trajectory_pair(
     if end_a < start_b or end_b < start_a:
         return None
 
-    common_frames = frames_a.intersection(frames_b)
-    if len(common_frames) < min_overlap:
-        return None
-
-    agreeing, detection_id_matches = _count_overlap_agreement(
-        common_frames, lookup_a, lookup_b, has_detection_id, agreement_distance
-    )
+    if (
+        traj_arrays is not None
+        and traj_arrays[i] is not None
+        and traj_arrays[j] is not None
+    ):
+        n_common, agreeing, detection_id_matches = _count_overlap_agreement_arrays(
+            traj_arrays[i], traj_arrays[j], has_detection_id, agreement_distance
+        )
+        if n_common < min_overlap:
+            return None
+        common_frames = range(n_common)  # only len() is used below
+    else:
+        common_frames = frames_a.intersection(frames_b)
+        if len(common_frames) < min_overlap:
+            return None
+        agreeing, detection_id_matches = _count_overlap_agreement(
+            common_frames, lookup_a, lookup_b, has_detection_id, agreement_distance
+        )
 
     required_matches = (
         min_overlap if detection_id_matches < 2 else max(2, min_overlap // 2)
@@ -3054,6 +3147,7 @@ def _merge_overlapping_agreeing_trajectories(
         traj_lookups = []
         traj_frame_sets = []
         traj_bounds = []
+        traj_arrays = []
         next_cache: dict = {}
         for traj in trajectories:
             key = id(traj)
@@ -3064,11 +3158,12 @@ def _merge_overlapping_agreeing_trajectories(
                 bounds = (
                     (min(frame_set), max(frame_set)) if frame_set else (np.inf, -np.inf)
                 )
-                entry = (traj, lookup, frame_set, bounds)
+                entry = (traj, lookup, frame_set, bounds, _overlap_arrays(lookup))
             next_cache[key] = entry
             traj_lookups.append(entry[1])
             traj_frame_sets.append(entry[2])
             traj_bounds.append(entry[3])
+            traj_arrays.append(entry[4])
         # Only now release the previous generation: until `next_cache` is fully
         # built, the old entries are what keep the reused ids from being
         # recycled underneath us.
@@ -3135,6 +3230,7 @@ def _merge_overlapping_agreeing_trajectories(
                     max_spatial_jump,
                     identity_disagree_min_run=identity_disagree_min_run,
                     identity_drives_splits=identity_drives_splits,
+                    traj_arrays=traj_arrays,
                 )
 
                 if result_segments is not None:

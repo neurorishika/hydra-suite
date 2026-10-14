@@ -43,8 +43,20 @@ def _keys(traj: pd.DataFrame) -> list[tuple[int, float]]:
     )
 
 
+def _frames(traj: pd.DataFrame) -> np.ndarray:
+    return traj["FrameID"].to_numpy()
+
+
+def _slice(traj: pd.DataFrame, lo=None, hi=None) -> pd.DataFrame:
+    """Rows with ``lo <= FrameID <= hi`` of a frame-sorted trajectory."""
+    frames = _frames(traj)
+    a = 0 if lo is None else int(np.searchsorted(frames, lo, side="left"))
+    b = len(frames) if hi is None else int(np.searchsorted(frames, hi, side="right"))
+    return traj.iloc[a:b]
+
+
 def _row_at(traj: pd.DataFrame, frame: int):
-    rows = traj[traj["FrameID"] == frame]
+    rows = _slice(traj, frame, frame)
     return None if rows.empty else rows.iloc[0]
 
 
@@ -117,18 +129,18 @@ def _best(pieces, anchor, last, join_step_px):
 
 
 def _resolve_run(trajs, members, start, end, join_step_px):
-    first = trajs[members[0]]
-    run0 = first[(first["FrameID"] >= start) & (first["FrameID"] <= end)]
-    pre = [(i, trajs[i][trajs[i]["FrameID"] < start]) for i in members]
-    post = [(i, trajs[i][trajs[i]["FrameID"] > end]) for i in members]
+    # Trajectories are frame-sorted here, so position slicing replaces the
+    # boolean filters that dominated this pass on crowded clips.
+    run0 = _slice(trajs[members[0]], start, end)
+    pre = [(i, _slice(trajs[i], None, start - 1)) for i in members]
+    post = [(i, _slice(trajs[i], end + 1, None)) for i in members]
     pre_i = _best(pre, _run_endpoint(run0, last=False), True, join_step_px)
     post_i = _best(post, _run_endpoint(run0, last=True), False, join_step_px)
 
     owner = (
         pre_i if pre_i is not None else (post_i if post_i is not None else members[0])
     )
-    src = trajs[owner]
-    chain = [src[(src["FrameID"] >= start) & (src["FrameID"] <= end)]]
+    chain = [_slice(trajs[owner], start, end)]
     if pre_i is not None:
         chain.insert(0, dict(pre)[pre_i])
     if post_i is not None:
