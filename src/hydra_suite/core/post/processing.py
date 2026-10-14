@@ -17,7 +17,10 @@ import pandas as pd
 from scipy.interpolate import CubicSpline, UnivariateSpline, interp1d
 
 from hydra_suite.core.individual.identity import columns as C
-from hydra_suite.core.post.detection_exclusivity import enforce_detection_exclusivity
+from hydra_suite.core.post.detection_exclusivity import (
+    enforce_detection_exclusivity,
+    trim_coasting_ends,
+)
 from hydra_suite.core.post.heading_fix import (  # noqa: F401  (re-exported)
     HeadingFixSettings,
 )
@@ -1432,6 +1435,9 @@ def _resolve_trajectories_single_arena(
     # One trajectory per detection per frame: the passes are each one-to-one,
     # but resolving a crossing where they swapped at different frames can keep
     # both versions over the frames they agree on.
+    # Predicted rows past a track's last detection (and before its first) are
+    # the tracker coasting after losing the animal, not observations.
+    result_trajectories = trim_coasting_ends(result_trajectories)
     result_trajectories = enforce_detection_exclusivity(
         result_trajectories,
         join_step_px=HeadingFixSettings.from_params(

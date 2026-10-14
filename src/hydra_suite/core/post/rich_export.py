@@ -450,6 +450,9 @@ def relink_and_export_rich_csv(
     # straight through to one unchanged call when there is no arena_id
     # column, or a single arena).
     from hydra_suite.core.individual.postprocess_df import resolve_identity
+    from hydra_suite.core.post.detection_exclusivity import (
+        drop_predictions_on_other_detections,
+    )
     from hydra_suite.core.post.identity_postprocess import (
         assert_one_identity_per_trajectory,
         collapse_to_majority_identity,
@@ -515,6 +518,10 @@ def relink_and_export_rich_csv(
         # position-less rows introduced by densify_trajectory_frames still
         # get dropped, matching `_interpolate_and_scale`'s else-branch.
         relinked_with_pose = trim_positionless_ends(relinked_with_pose)
+
+    # A filled, relinked or copied position cannot occupy an animal another
+    # trajectory detects in that frame; drop such rows before identity.
+    relinked_with_pose = drop_predictions_on_other_detections(relinked_with_pose)
 
     # The single identity resolve for this pipeline run.
     relinked_with_pose = resolve_identity(
