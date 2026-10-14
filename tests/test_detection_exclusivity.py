@@ -134,3 +134,24 @@ def test_trajectories_without_detection_ids_pass_through():
     a = _ant(range(N), 0, 1).drop(columns=["DetectionID"])
     out = enforce_detection_exclusivity([a, a.copy()], join_step_px=50.0)
     assert len(out) == 2 and out[0] is a
+
+
+def test_coasting_rows_at_trajectory_ends_are_trimmed():
+    from hydra_suite.core.post.detection_exclusivity import trim_coasting_ends
+
+    a = _ant(range(30), 0, 1)
+    a.loc[a.FrameID < 3, "DetectionID"] = np.nan  # predicted before first detection
+    a.loc[a.FrameID >= 25, "DetectionID"] = np.nan  # coasting after the last one
+    a.loc[a.FrameID.between(10, 12), "DetectionID"] = np.nan  # interior gap
+    (out,) = trim_coasting_ends([a])
+    assert out.FrameID.min() == 3 and out.FrameID.max() == 24
+    assert out.FrameID.between(10, 12).sum() == 3  # interior gap kept
+
+
+def test_trajectories_without_predicted_ends_are_untouched():
+    from hydra_suite.core.post.detection_exclusivity import trim_coasting_ends
+
+    a = _ant(range(30), 0, 1)
+    b = a.drop(columns=["DetectionID"])
+    out = trim_coasting_ends([a, b])
+    assert out[0] is a and out[1] is b

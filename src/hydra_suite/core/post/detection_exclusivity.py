@@ -205,3 +205,34 @@ def enforce_detection_exclusivity(
                 if len(held_k) == 2:
                     heapq.heappush(heap, k)
     return [live[h] for h in sorted(live, key=lambda h: rank[h])]
+
+
+def trim_coasting_ends(trajs: Sequence[pd.DataFrame]) -> list[pd.DataFrame]:
+    """Drop each trajectory's predicted rows before its first and after its
+    last detection.
+
+    When a track loses its animal the tracker keeps predicting ("coasting")
+    for a few frames before giving up, and a new track often already holds the
+    animal by then. Those predicted rows are not observations: they sit on
+    other animals' detections, overlap the successor track, and make the
+    identity solver see two animals where there is one. Gaps between
+    detections are kept (interpolation fills them). Trajectories without a
+    ``DetectionID`` column, or with no detection at all, are returned
+    unchanged.
+    """
+    out = []
+    for traj in trajs:
+        if "DetectionID" not in traj.columns or traj.empty:
+            out.append(traj)
+            continue
+        real = traj["DetectionID"].notna().to_numpy()
+        if not real.any() or (real[0] and real[-1]):
+            out.append(traj)
+            continue
+        order = np.argsort(traj["FrameID"].to_numpy(), kind="stable")
+        real_sorted = real[order]
+        first = int(np.argmax(real_sorted))
+        last = len(real_sorted) - 1 - int(np.argmax(real_sorted[::-1]))
+        keep = order[first : last + 1]
+        out.append(traj.iloc[np.sort(keep)].reset_index(drop=True))
+    return out
