@@ -17,6 +17,7 @@ import pandas as pd
 from scipy.interpolate import CubicSpline, UnivariateSpline, interp1d
 
 from hydra_suite.core.individual.identity import columns as C
+from hydra_suite.core.post.detection_exclusivity import enforce_detection_exclusivity
 from hydra_suite.core.post.heading_fix import (  # noqa: F401  (re-exported)
     HeadingFixSettings,
 )
@@ -1426,6 +1427,16 @@ def _resolve_trajectories_single_arena(
         MIN_OVERLAP_FRAMES,
         should_stop=should_stop,
         progress=_sub_progress(progress, 0.85, 0.98),
+    )
+
+    # One trajectory per detection per frame: the passes are each one-to-one,
+    # but resolving a crossing where they swapped at different frames can keep
+    # both versions over the frames they agree on.
+    result_trajectories = enforce_detection_exclusivity(
+        result_trajectories,
+        join_step_px=HeadingFixSettings.from_params(
+            params, float(params.get("RESIZE_FACTOR", 1.0))
+        ).join_step_px,
     )
 
     # FINAL CLEANING: Now that stitching is done, remove trajectories that are still too short
