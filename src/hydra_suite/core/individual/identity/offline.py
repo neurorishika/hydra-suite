@@ -435,11 +435,38 @@ def _evidence_mass(duration: float, top_support: float) -> float:
     return float(duration) * float(top_support)
 
 
+def handoff_limits(params: dict[str, Any]) -> tuple[int, float]:
+    """``(max_frames, max_fraction)`` of detection-backed overlap that two
+    same-label fragments may share and still count as a hand-off.
+
+    When a track loses its animal it coasts on predictions for a few frames
+    while a new track already holds the animal, and both passes can keep a few
+    detection-backed frames on each side of the hand-off. Such an overlap is
+    not evidence of two animals. It stays a conflict once it exceeds either
+    ``IDENTITY_HANDOFF_MAX_SECONDS`` (default 1.5 s, converted with ``FPS``;
+    15 frames without a frame rate) or ``IDENTITY_HANDOFF_MAX_FRACTION``
+    (default 0.25) of the shorter fragment's detection-backed frames.
+    """
+
+    def _positive(key, default):
+        try:
+            value = float(params.get(key) or 0.0)
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    seconds = _positive("IDENTITY_HANDOFF_MAX_SECONDS", 1.5)
+    fps = _positive("FPS", 0.0)
+    frames = int(round(seconds * fps)) if fps else 15
+    return max(0, frames), _positive("IDENTITY_HANDOFF_MAX_FRACTION", 0.25)
+
+
 def _iterative_assign(
     frags: pd.DataFrame,
     known_labels: list[str],
     params: dict[str, Any],
     _debug_counts: dict[str, Any] | None = None,
+    detected_frames: list[frozenset] | None = None,
 ) -> dict[int, str | None]:
     """Mass-first seeding + doubt-ordered refinement with exact-objective
     multi-blocker displacement.
@@ -513,6 +540,11 @@ def _iterative_assign(
     fired rather than inferring it indirectly from the final assignment.
     Production callers pass ``None`` (the default) and pay no cost.
 
+    ``detected_frames``: per-fragment frames backed by a real detection.
+    When given, two fragments conflict only if their detection-backed overlap
+    exceeds the hand-off limits (``handoff_limits``); predicted rows are not
+    evidence of a second animal. Without it, any frame overlap conflicts.
+
     Returns ``{frag_index: assigned_label_or_None}`` (None means Unknown).
     """
     length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
@@ -562,10 +594,26 @@ def _iterative_assign(
     current: list[str | None] = [None] * n
     schedule: dict[str, list[int]] = {lbl: [] for lbl in known_labels}
 
+    handoff_frames, handoff_fraction = handoff_limits(params)
+    conflict_cache: dict[tuple[int, int], bool] = {}
+
     def _overlaps(i: int, j: int) -> bool:
-        return int(rows[i]["StartFrame"]) <= int(rows[j]["EndFrame"]) and int(
-            rows[j]["StartFrame"]
-        ) <= int(rows[i]["EndFrame"])
+        if not (
+            int(rows[i]["StartFrame"]) <= int(rows[j]["EndFrame"])
+            and int(rows[j]["StartFrame"]) <= int(rows[i]["EndFrame"])
+        ):
+            return False
+        if detected_frames is None:
+            return True
+        key = (i, j) if i < j else (j, i)
+        if key not in conflict_cache:
+            a, b = detected_frames[i], detected_frames[j]
+            shared = len(a & b)
+            shorter = min(len(a), len(b))
+            conflict_cache[key] = (
+                shared > handoff_frames or shared > handoff_fraction * shorter
+            )
+        return conflict_cache[key]
 
     def _blockers(i: int, label: str) -> list[int]:
         return [j for j in schedule[label] if j != i and _overlaps(i, j)]
@@ -1070,7 +1118,10 @@ def solve_global_assignment(
     summaries = traj_summaries.reset_index(drop=True)
     n_trajs = len(summaries)
 
-    assigned = _iterative_assign(summaries, known_labels, params)
+    detected = _detected_frames_by_traj(df, summaries)
+    assigned = _iterative_assign(
+        summaries, known_labels, params, detected_frames=detected
+    )
 
     # Per-fragment final score for committed labels (recomputed with the final
     # schedule so the value reflects the converged spatial configuration).
@@ -1160,6 +1211,62 @@ def solve_global_assignment(
         out.loc[mask, C.FINAL_FRAGMENT_SCORE] = assigned_scores[i]
         out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
 
+    return _unlabel_shared_label_rows(out, catalog)
+
+
+def _detection_backed(df: pd.DataFrame) -> pd.Series:
+    """Rows backed by a real detection (not a coasting prediction)."""
+    if "DetectionID" in df.columns:
+        return df["DetectionID"].notna()
+    if "State" in df.columns:
+        return df["State"].astype(str).str.lower().eq("active")
+    return pd.Series(True, index=df.index)
+
+
+def _detected_frames_by_traj(
+    df: pd.DataFrame, summaries: pd.DataFrame
+) -> list[frozenset]:
+    """Detection-backed frames of each summarised trajectory, in summary order."""
+    real = df[_detection_backed(df)]
+    by_traj = {
+        tid: frozenset(int(f) for f in g["FrameID"])
+        for tid, g in real.groupby("TrajectoryID", sort=False)
+    }
+    return [by_traj.get(tid, frozenset()) for tid in summaries["TrajectoryID"]]
+
+
+def _unlabel_shared_label_rows(
+    out: pd.DataFrame, catalog: IdentityCatalog
+) -> pd.DataFrame:
+    """Keep each label on at most one trajectory per frame.
+
+    The solver tolerates brief hand-off overlaps between same-label
+    trajectories; on those frames the label stays on one row -- a detection
+    over a prediction, then the higher fragment score, then the longer
+    trajectory -- and the other rows become ``unknown``.
+    """
+    labelled = out[~out[C.FINAL_LABEL].astype(str).str.lower().isin(_UNKNOWN_VALUES)]
+    if labelled.empty:
+        return out
+    dup = labelled[labelled.duplicated(["FrameID", C.FINAL_LABEL], keep=False)]
+    if dup.empty:
+        return out
+    lengths = out.groupby("TrajectoryID")["FrameID"].transform("size")
+    ranked = dup.assign(
+        _real=_detection_backed(dup).astype(int),
+        _score=pd.to_numeric(dup[C.FINAL_FRAGMENT_SCORE], errors="coerce").fillna(0.0),
+        _len=lengths.loc[dup.index],
+    ).sort_values(
+        ["FrameID", C.FINAL_LABEL, "_real", "_score", "_len", "TrajectoryID"],
+        ascending=[True, True, False, False, False, True],
+        kind="stable",
+    )
+    losers = ranked.index[ranked.duplicated(["FrameID", C.FINAL_LABEL], keep="first")]
+    out.loc[losers, C.FINAL_LABEL] = "unknown"
+    out.loc[losers, C.FINAL_ID] = catalog.unknown_index
+    out.loc[losers, C.FINAL_CONFIDENCE] = 0.0
+    out.loc[losers, C.FINAL_FRAGMENT_SCORE] = 0.0
+    out.loc[losers, C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
     return out
 
 

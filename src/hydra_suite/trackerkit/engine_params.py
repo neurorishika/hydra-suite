@@ -1390,6 +1390,14 @@ def build_engine_params(
         "FRAGMENT_MIN_SUPPORT": float(
             _cfg_get(cfg, "fragment_min_support", default=0.5)
         ),
+        # Optional hand-off tolerance for the fragment solver; unset keys keep
+        # the defaults in identity.offline.handoff_limits.
+        "IDENTITY_HANDOFF_MAX_SECONDS": _cfg_get(
+            cfg, "identity_handoff_max_seconds", default=None
+        ),
+        "IDENTITY_HANDOFF_MAX_FRACTION": _cfg_get(
+            cfg, "identity_handoff_max_fraction", default=None
+        ),
         "FRAGMENT_MAX_BLOCKERS": int(_cfg_get(cfg, "fragment_max_blockers", default=4)),
         "FRAGMENT_LENGTH_WEIGHT": float(
             _cfg_get(cfg, "fragment_length_weight", default=0.60)
