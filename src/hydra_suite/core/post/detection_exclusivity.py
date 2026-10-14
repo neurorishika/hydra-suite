@@ -236,3 +236,35 @@ def trim_coasting_ends(trajs: Sequence[pd.DataFrame]) -> list[pd.DataFrame]:
         keep = order[first : last + 1]
         out.append(traj.iloc[np.sort(keep)].reset_index(drop=True))
     return out
+
+
+def drop_predictions_on_other_detections(
+    df: pd.DataFrame, tolerance_px: float = 1.0
+) -> pd.DataFrame:
+    """Drop rows without their own detection that sit on another trajectory's
+    detection in the same frame.
+
+    A predicted, interpolated or copied position cannot occupy an animal that
+    another trajectory is detecting at that moment. Such rows appear after
+    merging (gap fills, relinked fragments, position-only copies of another
+    trajectory) and made two trajectories claim one animal. Rows backed by a
+    detection are never dropped, so two detections of one animal (a detector
+    double box) are left alone. ``df`` needs ``TrajectoryID``, ``FrameID``,
+    ``X``, ``Y`` and ``DetectionID``; otherwise it is returned unchanged.
+    """
+    needed = {"TrajectoryID", "FrameID", "X", "Y", "DetectionID"}
+    if df is None or df.empty or not needed.issubset(df.columns):
+        return df
+    real = df["DetectionID"].notna()
+    guess = ~real & df["X"].notna() & df["Y"].notna()
+    if not guess.any() or not real.any():
+        return df
+    dets = df.loc[real, ["FrameID", "TrajectoryID", "X", "Y"]]
+    cand = df.loc[guess, ["FrameID", "TrajectoryID", "X", "Y"]].reset_index()
+    pairs = cand.merge(dets, on="FrameID", suffixes=("", "_det"))
+    pairs = pairs[pairs["TrajectoryID"] != pairs["TrajectoryID_det"]]
+    close = np.hypot(pairs["X"] - pairs["X_det"], pairs["Y"] - pairs["Y_det"])
+    drop = pd.Index(pairs.loc[close <= tolerance_px, "index"].unique())
+    if drop.empty:
+        return df
+    return df.drop(index=drop)

@@ -155,3 +155,32 @@ def test_trajectories_without_predicted_ends_are_untouched():
     b = a.drop(columns=["DetectionID"])
     out = trim_coasting_ends([a, b])
     assert out[0] is a and out[1] is b
+
+
+def test_guessed_rows_on_another_trajectorys_detection_are_dropped():
+    from hydra_suite.core.post.detection_exclusivity import (
+        drop_predictions_on_other_detections,
+    )
+
+    a = _ant(range(20), 0, 1).assign(TrajectoryID=0)
+    # Trajectory 1: a position-only copy of ant A over frames 5-9, plus its own
+    # detections of another animal elsewhere.
+    copy = a[a.FrameID.between(5, 9)].assign(TrajectoryID=1, DetectionID=np.nan)
+    own = _ant(range(10, 20), 300, 2).assign(TrajectoryID=1)
+    # Trajectory 2: a second real detection of ant A (detector double box).
+    double = a[a.FrameID == 3].assign(TrajectoryID=2, DetectionID=999.0)
+    df = pd.concat([a, copy, own, double], ignore_index=True)
+    out = drop_predictions_on_other_detections(df)
+    assert out[(out.TrajectoryID == 1) & out.DetectionID.isna()].empty
+    assert len(out[out.TrajectoryID == 1]) == 10
+    assert len(out[out.TrajectoryID == 2]) == 1  # real detections are kept
+    assert len(out[out.TrajectoryID == 0]) == 20
+
+
+def test_drop_predictions_without_detection_ids_is_a_no_op():
+    from hydra_suite.core.post.detection_exclusivity import (
+        drop_predictions_on_other_detections,
+    )
+
+    df = _ant(range(10), 0, 1).drop(columns=["DetectionID"]).assign(TrajectoryID=0)
+    assert drop_predictions_on_other_detections(df) is df
