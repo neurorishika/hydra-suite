@@ -32,6 +32,8 @@ def _real_rows(traj: pd.DataFrame) -> pd.DataFrame:
 
 
 def _keys(traj: pd.DataFrame) -> list[tuple[int, float]]:
+    if "DetectionID" not in traj.columns:
+        return []
     real = _real_rows(traj)
     return list(
         zip(
@@ -48,7 +50,7 @@ def _row_at(traj: pd.DataFrame, frame: int):
 
 def _same_place(rows) -> bool:
     """All rows hold one detection, or are identical position-only rows."""
-    dets = [r["DetectionID"] for r in rows]
+    dets = [r.get("DetectionID", np.nan) for r in rows]
     if all(pd.notna(d) for d in dets):
         return len({float(d) for d in dets}) == 1
     if all(pd.isna(d) for d in dets):
@@ -66,7 +68,7 @@ def _run_end(trajs, members, start, owners) -> int:
         rows = [_row_at(trajs[i], nxt) for i in members]
         if any(r is None for r in rows) or not _same_place(rows):
             return frame
-        det = rows[0]["DetectionID"]
+        det = rows[0].get("DetectionID", np.nan)
         if pd.notna(det) and owners.get((nxt, float(det))) != member_set:
             return frame  # another trajectory joins or leaves: a new run
         frame = nxt
@@ -79,6 +81,8 @@ def _detection_endpoint(piece: pd.DataFrame, last: bool):
     shared run is not evidence that the animal continues there.
     """
     real = _real_rows(piece)
+    if real.empty:
+        return None
     real = real[real["X"].notna()]
     if real.empty:
         return None

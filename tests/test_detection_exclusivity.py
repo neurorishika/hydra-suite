@@ -128,3 +128,9 @@ def test_many_crossings_resolve_quickly():
     out = enforce_detection_exclusivity(trajs, join_step_px=50.0)
     assert _shared_rows(out) == 0
     assert time.perf_counter() - t0 < 20.0
+
+
+def test_trajectories_without_detection_ids_pass_through():
+    a = _ant(range(N), 0, 1).drop(columns=["DetectionID"])
+    out = enforce_detection_exclusivity([a, a.copy()], join_step_px=50.0)
+    assert len(out) == 2 and out[0] is a
