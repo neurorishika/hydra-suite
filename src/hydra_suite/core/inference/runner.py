@@ -696,10 +696,12 @@ def _load_all_models(
 
     When *cache_only* is True the runner will only be used for cache replay
     (``load_frame``/``caches_all_valid``/``detection_cache_covers_range``).
-    In that mode every model besides the OBB detector is skipped: OBB is
-    required to look up cache-key validity; HeadTail, CNN, Pose, and AprilTag
-    models are never invoked during replay so we avoid the expensive backend
-    initialisation (notably the ~8 s per-session SLEAP/ORT-TRT-EP init).
+    In that mode no model is loaded at all. Cache keys are built from the
+    config alone, and replay never invokes a stage, so loading the detector
+    would only put a TensorRT engine and a CUDA context on the GPU for the
+    whole replay pass (holding GPU memory outside any fan-out GPU phase).
+    HeadTail, CNN, Pose, and AprilTag were already skipped (notably the ~8 s
+    per-session SLEAP/ORT-TRT-EP init).
 
     bg-sub is the exception to the OBB rule: its cache key hashes params only
     (there is no model file — the "model" is a BackgroundModel primed from the
@@ -715,19 +717,19 @@ def _load_all_models(
 
     obb = None
     bgsub = None
-    if config.detection_source == "obb":
-        obb = _load_obb_for_config(config, runtime, video_path=video_path)
-    elif not cache_only:
-        bgsub = load_bgsub_model(config.bgsub, runtime, video_path=video_path)
-
     if cache_only:
         logger.debug(
-            "InferenceRunner cache_only=True: skipping HeadTail/CNN/Pose/AprilTag "
-            "model init (backward/replay pass reads from cache only)."
+            "InferenceRunner cache_only=True: skipping every model init "
+            "(backward/replay pass reads from cache only)."
         )
         return _AllModels(
             obb=obb, headtail=None, cnn=[], pose=None, apriltag=None, bgsub=bgsub
         )
+
+    if config.detection_source == "obb":
+        obb = _load_obb_for_config(config, runtime, video_path=video_path)
+    else:
+        bgsub = load_bgsub_model(config.bgsub, runtime, video_path=video_path)
 
     headtail = (
         load_headtail_model(config.headtail, runtime)
@@ -1251,11 +1253,19 @@ class InferenceRunner:
 
     Pass ``cache_only=True`` when the runner will only be used for cache replay
     (backward/replay passes that call ``load_frame``, ``caches_all_valid``, or
-    ``detection_cache_covers_range``).  In that mode the expensive HeadTail, CNN,
-    Pose (including SLEAP), and AprilTag backends are never initialised — only the
-    lightweight OBB model wrapper is loaded so cache-key validation still works.
-    This eliminates the ~8 s per-session SLEAP/ORT-TRT-EP init on backward passes.
+    ``detection_cache_covers_range``).  In that mode no model is loaded: cache
+    keys come from the config, and replay never runs a stage. This eliminates the
+    ~8 s per-session SLEAP/ORT-TRT-EP init on backward passes, and keeps a replay
+    pass from holding a detector engine on the GPU.
+
+    ``load_models=False`` (writable runners only) defers model loading to the
+    first call that needs a model (``run_batch_pass``, ``run_realtime``,
+    ``detect_batch_raw``, ``obb_class_names``). A forward pass whose caches turn
+    out to be complete then never loads a model at all.
     """
+
+    #: True while a ``load_models=False`` runner has not loaded its models yet.
+    _models_deferred: bool = False
 
     def __init__(
         self,
@@ -1267,6 +1277,7 @@ class InferenceRunner:
         identity_evidence: "IdentityEvidenceRunConfig | None" = None,
         runtime_overlay: "InferenceRuntimeOverlay | None" = None,
         cache_filter_config: "InferenceConfig | None" = None,
+        load_models: bool = True,
     ) -> None:
         from hydra_suite.utils.profiling_process import maybe_arm_process_recorder
 
@@ -1323,22 +1334,19 @@ class InferenceRunner:
         self.runtime = RuntimeContext.from_config(config)
         # bg-sub's "model" is a BackgroundModel primed from the video itself, so
         # the loader needs the path; the OBB loader ignores it.
-        self._models = _load_all_models(
-            config,
-            self.runtime,
-            cache_only=cache_only,
-            video_path=self._video_path,
-        )
-        self.runtime_artifact_ids = (
-            self._models.obb.runtime_artifact_ids
-            if self._models.obb is not None
-            else ()
-        )
-        self.runtime_artifact_prepare_seconds = (
-            self._models.obb.runtime_artifact_prepare_seconds
-            if self._models.obb is not None
-            else 0.0
-        )
+        self._models_deferred = bool(not load_models and not cache_only)
+        if self._models_deferred:
+            self._models = _AllModels(
+                obb=None, headtail=None, cnn=[], pose=None, apriltag=None
+            )
+        else:
+            self._models = _load_all_models(
+                config,
+                self.runtime,
+                cache_only=cache_only,
+                video_path=self._video_path,
+            )
+        self._set_runtime_artifact_info()
         self._caches: _CacheSet | None = None
         # True when self._caches was opened for WRITING (realtime persistence);
         # False when opened read-only by load_frame. close() only flushes when
@@ -1387,9 +1395,50 @@ class InferenceRunner:
             self.detection_limit_stats.record(frame_idx, candidate_count)
         return raw_obb
 
+    def _set_runtime_artifact_info(self) -> None:
+        self.runtime_artifact_ids = (
+            self._models.obb.runtime_artifact_ids
+            if self._models.obb is not None
+            else ()
+        )
+        self.runtime_artifact_prepare_seconds = (
+            self._models.obb.runtime_artifact_prepare_seconds
+            if self._models.obb is not None
+            else 0.0
+        )
+
+    def _ensure_models(self) -> None:
+        """Load the models a ``load_models=False`` runner deferred (once)."""
+        if not self._models_deferred:
+            return
+        self._models_deferred = False
+        logger.info("InferenceRunner: loading the deferred inference models")
+        self._models = _load_all_models(
+            self.config,
+            self.runtime,
+            cache_only=False,
+            video_path=self._video_path,
+        )
+        self._set_runtime_artifact_info()
+
+    def holds_gpu_models(self) -> bool:
+        """True while a detector or per-animal network model is loaded.
+
+        Those are what occupy accelerator memory; the bg-sub background model
+        and AprilTag detector are not counted.
+        """
+        models = self._models
+        return bool(
+            models.obb is not None
+            or models.headtail is not None
+            or models.pose is not None
+            or models.cnn
+        )
+
     @property
     def obb_class_names(self) -> "dict[int, str] | None":
         """id->name map from the loaded OBB model, for label display. None if no OBB model."""
+        self._ensure_models()
         if self._models.obb is None:
             return None
         # direct mode uses direct_model; sequential's classes come from the
@@ -1481,6 +1530,7 @@ class InferenceRunner:
         roi_mask: np.ndarray | None = None,
         roi_mask_cuda: Any = None,
     ) -> FrameResult:
+        self._ensure_models()
         with span(N.REALTIME):
             # Lazily open the caches for WRITING so the realtime forward pass persists
             # detections + downstream results. Backward tracking replays them via
@@ -2058,9 +2108,11 @@ class InferenceRunner:
         """Run OBB detection over a batch of frames, returning UNFILTERED raw
         results (pre-``filter_for_source``). No cache is read or written.
         """
+        self._ensure_models()
         if self._models.obb is None:
             raise RuntimeError(
-                "detect_batch_raw requires an OBB detection config (config.obb)"
+                "detect_batch_raw requires an OBB detection config (config.obb) "
+                "on a runner that loaded its models (not cache_only=True)"
             )
         frames = list(frames)
         if frame_indices is None:
@@ -2250,6 +2302,7 @@ class InferenceRunner:
 
         if self.cache_dir is None:
             raise RuntimeError("cache_dir must be set before calling run_batch_pass")
+        self._ensure_models()
         with span(N.INFERENCE), span(N.BATCH_PASS):
 
             # An explicit roi_mask overrides the construction-time one so the cache
@@ -2556,6 +2609,7 @@ class InferenceRunner:
         :meth:`close` will not close the models a second time. The bg-sub model
         is kept (it is the background state, not a GPU network).
         """
+        self._models_deferred = False
         models = self._models
         for mdl in (models.obb, models.headtail, models.pose, models.apriltag):
             if mdl is not None:

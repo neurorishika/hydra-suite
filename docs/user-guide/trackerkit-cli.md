@@ -148,14 +148,20 @@ use it instead of `--jobs`) keeps M children running in total, spread
 round-robin over the GPUs, and lets them share each GPU through a per-GPU
 semaphore: at most `--jobs-per-gpu` K children per GPU are in a *GPU phase*
 at once. The others wait (`GPU phase 'inference': all 1 slot(s) on GPU ... are
-busy; waiting...` in their log) or do CPU work. A GPU phase is:
+busy; waiting (2 other child(ren) also waiting; no queue order)...` in their
+log, repeated every 10 minutes) or do CPU work. There is **no queue**: when a
+slot frees, whichever waiting child polls first takes it, so phases have no
+fairness or ordering guarantee, and there is no phase timeout. A GPU phase is:
 
 - model loading plus the batched inference pass. When the tracking loop then
   only replays the detection cache, the child releases its stage models
   (including the SLEAP service) and returns PyTorch's cached CUDA memory
-  before handing the slot on. In realtime mode, and for GPU background
-  subtraction, inference runs inside the tracking loop, so the phase lasts for
-  the whole forward pass;
+  before handing the slot on. A forward pass whose caches already cover the
+  run (cache reuse on, not realtime) loads no model and takes no slot. In
+  realtime mode inference runs inside the tracking loop, so the phase lasts
+  for the whole forward pass. Background subtraction loads no detector or
+  per-animal network, so it takes no slot. Backward passes only replay the
+  cache and load no model;
 - the interpolated-crops pass (pose/CNN/head-tail on gaps);
 - active-learning dataset generation, which may run the detector.
 
@@ -165,8 +171,11 @@ a slot when its child dies, so a crash cannot wedge a GPU. The default
 gives them no lock settings at all; the same holds for any M ≤ GPUs × K.
 
 M counts against the [CPU budget](#cpu-budget) like any other job count:
-threads per child are `budget // M`, and M is reduced (with a warning) when
-the budget cannot feed it. Choose M from the time split: if a video spends
+each child gets `threads_per_job = budget // min(M, videos)` threads (e.g.
+`--cpu-budget 64 --max-jobs 16` gives 4 threads per child, half of what
+`--jobs 8` would), whether it is in a GPU or a CPU phase, and M is reduced
+(with a warning) when the budget cannot give each child at least one thread.
+`--threads-per-job N` overrides the split. Choose M from the time split: if a video spends
 roughly as long on the CPU as on the GPU, M ≈ 2 × GPUs × K keeps the GPUs
 busy. More children also means more host RAM.
 

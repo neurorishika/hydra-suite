@@ -585,11 +585,13 @@ def _launch(
         or (lambda s, c: default_child_command(s, c, log_level=options.log_level))
     )(spec, config_json)
     env = build_child_env(os.environ, gpu=gpu, threads_per_job=options.threads_per_job)
+    # Never inherit a semaphore from our own env (e.g. a fan-out launched
+    # from inside a phase-locked child): only this run's lock applies.
+    for var in _GPU_PHASE_ENV_VARS:
+        env.pop(var, None)
     if phase_lock is not None and gpu is not None:
         # Children outnumber this GPU's slots: they take a slot only around
-        # their GPU phases. Never inherit a stale semaphore from our own env.
-        for var in _GPU_PHASE_ENV_VARS:
-            env.pop(var, None)
+        # their GPU phases.
         env.update(phase_lock_env(phase_lock[0], gpu.uuid, phase_lock[1]))
     log_path = _job_log_path(spec, timestamp)
     log_handle = log_path.open("a", encoding="utf-8")

@@ -44,6 +44,8 @@ ENV_VARS = (ENV_LOCK_DIR, ENV_GPU, ENV_SLOTS)
 
 #: Seconds between attempts while every slot is taken.
 DEFAULT_POLL_S = 1.0
+#: Seconds between "still waiting" log lines.
+DEFAULT_WAIT_LOG_S = 600.0
 
 
 @dataclass(frozen=True)
@@ -52,9 +54,18 @@ class GpuPhaseConfig:
     gpu: str
     slots: int
 
+    @property
+    def _safe_gpu(self) -> str:
+        return re.sub(r"[^A-Za-z0-9_.-]", "_", self.gpu) or "gpu"
+
     def slot_path(self, slot: int) -> Path:
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", self.gpu) or "gpu"
-        return self.lock_dir / f"{safe}.slot{int(slot)}.lock"
+        return self.lock_dir / f"{self._safe_gpu}.slot{int(slot)}.lock"
+
+    def waiter_path(self, token: str) -> Path:
+        return self.lock_dir / f"{self._safe_gpu}.waiter.{token}"
+
+    def waiter_glob(self) -> str:
+        return f"{self._safe_gpu}.waiter.*"
 
 
 def phase_lock_env(lock_dir: Path | str, gpu: str, slots: int) -> dict[str, str]:
@@ -146,6 +157,66 @@ def _try_acquire_any(config: GpuPhaseConfig) -> Optional[tuple[int, int]]:
     return None
 
 
+class _WaiterMark:
+    """A locked marker file announcing "this process waits for this GPU".
+
+    Only for the wait log (how many children are queued). The slots have no
+    queue: whoever polls first after a release wins, so there is no fairness
+    or ordering across phases.
+    """
+
+    def __init__(self, config: GpuPhaseConfig) -> None:
+        self.config = config
+        token = f"{os.getpid()}.{threading.get_ident()}"
+        self.path = config.waiter_path(token)
+        self.fd: Optional[int] = None
+        try:
+            self.fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o644)
+            if not _try_lock(self.fd):
+                os.close(self.fd)
+                self.fd = None
+        except OSError:
+            self.fd = None
+
+    def others_waiting(self) -> int:
+        """Live waiters for this GPU besides this one (stale marks are swept)."""
+        count = 0
+        for path in self.config.lock_dir.glob(self.config.waiter_glob()):
+            if path == self.path:
+                continue
+            try:
+                fd = os.open(str(path), os.O_RDWR)
+            except OSError:
+                continue
+            try:
+                if _try_lock(fd):
+                    # Nobody holds it: its waiter is gone (killed while waiting).
+                    _unlock(fd)
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                else:
+                    count += 1
+            finally:
+                os.close(fd)
+        return count
+
+    def close(self) -> None:
+        if self.fd is None:
+            return
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+        _unlock(self.fd)
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self.fd = None
+
+
 # --- GPU memory --------------------------------------------------------------
 
 
@@ -229,36 +300,64 @@ def acquire_gpu_phase(
 
     For phases that do not fit one ``with`` block; prefer :func:`gpu_phase`.
     If ``should_stop`` turns true while waiting, the lease comes back with
-    ``acquired=False`` and the caller should abandon its GPU work.
+    ``acquired=False`` and the caller should skip its GPU work.
+
+    There is no queue: when a slot frees, whichever waiting child polls first
+    takes it, so phases get no fairness or ordering guarantee. The wait log
+    reports how many other children wait for the same GPU.
     """
     config = config_from_env(env)
     if config is None:
         return GpuPhaseLease(label, active=False, acquired=False)
-    with _state_lock:
-        if _held["depth"] > 0:
-            _held["depth"] += 1
-            return GpuPhaseLease(label, active=True, acquired=True)
+    if _join_held_phase():
+        return GpuPhaseLease(label, active=True, acquired=True)
     started = time.monotonic()
-    waited = False
-    while True:
-        got = _try_acquire_any(config)
-        if got is not None:
-            break
-        if not waited:
-            waited = True
-            logger.info(
-                "GPU phase '%s': all %d slot(s) on GPU %s are busy; waiting...",
-                label,
-                config.slots,
-                config.gpu,
-            )
-        if should_stop is not None and should_stop():
-            logger.info("GPU phase '%s': stop requested while waiting.", label)
-            return GpuPhaseLease(label, active=True, acquired=False)
-        time.sleep(max(0.01, float(poll_s)))
-    slot, fd = got
-    with _state_lock:
-        _held.update(depth=1, fd=fd, slot=slot, label=label)
+    waiter: Optional[_WaiterMark] = None
+    next_log = 0.0
+    try:
+        while True:
+            got = _try_acquire_any(config)
+            if got is not None:
+                slot, fd = got
+                with _state_lock:
+                    if _held["depth"] > 0:
+                        # Another thread of this process took a slot while we
+                        # polled: join its phase, never hold a second slot.
+                        _held["depth"] += 1
+                        joined = True
+                    else:
+                        _held.update(depth=1, fd=fd, slot=slot, label=label)
+                        joined = False
+                if joined:
+                    _unlock(fd)
+                    os.close(fd)
+                    return GpuPhaseLease(label, active=True, acquired=True)
+                break
+            if _join_held_phase():
+                return GpuPhaseLease(label, active=True, acquired=True)
+            now = time.monotonic()
+            if waiter is None:
+                waiter = _WaiterMark(config)
+            if now >= next_log:
+                others = waiter.others_waiting()
+                logger.info(
+                    "GPU phase '%s': all %d slot(s) on GPU %s are busy; waiting "
+                    "(%d other child(ren) also waiting; no queue order)%s...",
+                    label,
+                    config.slots,
+                    config.gpu,
+                    others,
+                    f", {now - started:.0f}s so far" if next_log else "",
+                )
+                next_log = now + DEFAULT_WAIT_LOG_S
+            if should_stop is not None and should_stop():
+                logger.info("GPU phase '%s': stop requested while waiting.", label)
+                return GpuPhaseLease(label, active=True, acquired=False)
+            time.sleep(max(0.01, float(poll_s)))
+    finally:
+        if waiter is not None:
+            waiter.close()
+    waited = waiter is not None
     logger.info(
         "GPU phase '%s': acquired slot %d/%d on GPU %s%s.",
         label,
@@ -268,6 +367,15 @@ def acquire_gpu_phase(
         f" after waiting {time.monotonic() - started:.1f}s" if waited else "",
     )
     return GpuPhaseLease(label, active=True, acquired=True)
+
+
+def _join_held_phase() -> bool:
+    """Join this process's held phase (re-entrancy); True if one is held."""
+    with _state_lock:
+        if _held["depth"] > 0:
+            _held["depth"] += 1
+            return True
+    return False
 
 
 @contextmanager
@@ -280,10 +388,17 @@ def gpu_phase(
     """Hold one of this GPU's K phase slots for the ``with`` body.
 
     No-op without the fan-out env. On exit the slot is freed after returning
-    torch's cached CUDA memory to the driver.
+    torch's cached CUDA memory to the driver. If a stop arrives while waiting,
+    the body still runs with ``lease.acquired`` False -- check
+    :func:`phase_skipped` and skip the GPU work.
     """
     lease = acquire_gpu_phase(label, should_stop=should_stop, poll_s=poll_s)
     try:
         yield lease
     finally:
         lease.release()
+
+
+def phase_skipped(lease: GpuPhaseLease) -> bool:
+    """True when a configured phase was abandoned (stop while waiting)."""
+    return bool(lease.active and not lease.acquired)

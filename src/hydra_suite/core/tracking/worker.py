@@ -62,6 +62,7 @@ from hydra_suite.core.tracking.features.tag_features import (
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
 from hydra_suite.runtime.cpu_budget import bind_thread_cpu_cap
+from hydra_suite.runtime.gpu_phase_lock import acquire_gpu_phase, gpu_phase_enabled
 from hydra_suite.utils.arena_overlay_style import (
     BOUNDARY_COLOR_BGR,
     boundary_line_width_px,
@@ -563,12 +564,54 @@ class TrackingEngineCore:
 
     def _begin_gpu_phase(self, label: str) -> None:
         """Wait for this GPU's phase slot (fan-out ``--max-jobs``; else no-op)."""
-        from hydra_suite.runtime.gpu_phase_lock import acquire_gpu_phase
-
         if self._gpu_phase_lease is None:
             self._gpu_phase_lease = acquire_gpu_phase(
                 label, should_stop=self._is_stop_requested
             )
+
+    def _acquire_gpu_phase_or_stop(self, label: str) -> bool:
+        """Hold the GPU phase slot; False if a stop arrived while waiting."""
+        self._begin_gpu_phase(label)
+        lease = self._gpu_phase_lease
+        if lease is not None and lease.active and not lease.acquired:
+            self._end_gpu_phase()
+            return False
+        return True
+
+    def _forward_cache_complete(
+        self, cfg, cache_dir, roi_mask, identity_evidence, start_frame, end_frame
+    ) -> bool:
+        """Whether a forward pass could reuse its caches without any model.
+
+        Probed through a model-free ``cache_only`` runner; any error means
+        "no" (the pass then loads its models as usual).
+        """
+        try:
+            probe = InferenceRunner(
+                cfg,
+                cache_dir=cache_dir,
+                video_path=self.video_path,
+                cache_only=True,
+                roi_mask=roi_mask,
+                identity_evidence=identity_evidence,
+                runtime_overlay=self.inference_autotune_overlay,
+            )
+        except Exception:
+            logger.debug("Forward cache probe failed", exc_info=True)
+            return False
+        try:
+            return bool(
+                probe.caches_all_valid()
+                and probe.detection_cache_covers_range(start_frame, end_frame)
+            )
+        except Exception:
+            logger.debug("Forward cache probe failed", exc_info=True)
+            return False
+        finally:
+            try:
+                probe.close()
+            except Exception:
+                pass
 
     def _end_gpu_phase(self) -> None:
         """Free this pass's GPU phase slot, if held. Idempotent."""
@@ -1189,20 +1232,6 @@ class TrackingEngineCore:
             else None
         )
 
-        # Fan-out --max-jobs: a forward pass holds one of its GPU's phase slots
-        # from model loading until its last GPU work (released right after
-        # the batch pass when the loop only replays the cache). A no-op unless
-        # the fan-out parent configured the semaphore for this child.
-        if not (self.backward_mode or self.cache_read_only_replay or self.preview_mode):
-            self._begin_gpu_phase("inference")
-            _lease = self._gpu_phase_lease
-            if _lease is not None and _lease.active and not _lease.acquired:
-                # Stopped while waiting for a slot: never touch the GPU.
-                self._end_gpu_phase()
-                cap.release()
-                self._emit_finished(False, [], [])
-                return
-
         if detection_method == "yolo_obb":
             # ── YOLO OBB: InferenceRunner path ──────────────────────────────
             if self.backward_mode and not self.detection_cache_path:
@@ -1388,10 +1417,43 @@ class TrackingEngineCore:
                         _replay_vector.effective.to_dict(),
                         _replay_vector.status,
                     )
+            # Fan-out --max-jobs: a forward pass holds one of its GPU's phase
+            # slots from model loading until its last GPU work (released right
+            # after the batch pass when the loop only replays the cache). In a
+            # phase-locked child, a forward pass whose caches are already
+            # complete defers its models and never takes a slot. Backward /
+            # replay passes load no model at all. Outside a phase-locked
+            # fan-out child none of this changes anything.
+            _defer_models = False
+            if (
+                not (
+                    self.backward_mode
+                    or self.cache_read_only_replay
+                    or self.preview_mode
+                )
+                and gpu_phase_enabled()
+            ):
+                _defer_models = (
+                    not effective_realtime_tracking_mode
+                    and bool(self.use_cached_detections)
+                    and self._forward_cache_complete(
+                        _inference_cfg,
+                        _cache_dir,
+                        p.get("ROI_MASK"),
+                        _identity_evidence_run_config,
+                        int(start_frame),
+                        int(end_frame),
+                    )
+                )
+                if not _defer_models and not self._acquire_gpu_phase_or_stop(
+                    "inference"
+                ):
+                    cap.release()
+                    self._emit_finished(False, [], [])
+                    return
             # Backward (replay) passes only call load_frame / caches_all_valid —
-            # they never invoke run_realtime or run_batch_pass.  Skip loading
-            # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
-            # mode to avoid the ~8 s per-session SLEAP/ORT-TRT-EP init cost.
+            # they never invoke run_realtime or run_batch_pass, so they load no
+            # model (no detector engine, no SLEAP/ORT-TRT-EP init).
             inference_runner = InferenceRunner(
                 _inference_cfg,
                 cache_dir=_cache_dir,
@@ -1410,6 +1472,7 @@ class TrackingEngineCore:
                 # replays; one admitting a detection the superset lacks raises
                 # a clear DownstreamCacheError (not a key-mismatch rejection).
                 cache_filter_config=_written_filter_cfg,
+                **({"load_models": False} if _defer_models else {}),
             )
             if not (self.backward_mode or self.cache_read_only_replay):
                 # Realtime keeps cached detections only when reuse is allowed;
@@ -1706,6 +1769,16 @@ class TrackingEngineCore:
                     window=(int(start_frame), int(end_frame)),
                     reuse_detections=bool(self.use_cached_detections),
                 )
+                if (
+                    not self.preview_mode
+                    and gpu_phase_enabled()
+                    and bgsub_runner.holds_gpu_models()
+                    and not self._acquire_gpu_phase_or_stop("inference")
+                ):
+                    bgsub_runner.close()
+                    cap.release()
+                    self._emit_finished(False, [], [])
+                    return
                 if _fwd_cache_dir is not None:
                     logger.info(
                         "Forward pass caching bg-sub detections via InferenceRunner "
@@ -1737,6 +1810,15 @@ class TrackingEngineCore:
             and not use_cached_detections
             and not effective_realtime_tracking_mode
         ):
+            if not (
+                self.backward_mode or self.cache_read_only_replay or self.preview_mode
+            ) and not self._acquire_gpu_phase_or_stop("inference"):
+                inference_runner.close()
+                cap.release()
+                if self.video_writer:
+                    self.video_writer.release()
+                self._emit_finished(False, [], [])
+                return
             profiler.phase_start("batched_detection")
             logger.info("=" * 80)
             logger.info("PHASE 1: InferenceRunner batch pass")
@@ -1813,9 +1895,9 @@ class TrackingEngineCore:
         elif (
             self._gpu_phase_lease is not None
             and bgsub_runner is not None
-            and str(getattr(bgsub_runner.runtime, "device", "")) == "cpu"
+            and not bgsub_runner.holds_gpu_models()
         ):
-            # A CPU bg-sub run never touches the GPU.
+            # No detector / per-animal network on the GPU: nothing to guard.
             self._end_gpu_phase()
 
         # === COMPUTE CONFIDENCE DENSITY MAP ===
