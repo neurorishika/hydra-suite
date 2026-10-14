@@ -16,7 +16,7 @@ import pandas as pd
 from hydra_suite.core.individual.identity import columns as C
 from hydra_suite.core.individual.identity.offline import (
     _iterative_assign,
-    _unlabel_shared_label_rows,
+    _split_off_shared_label_rows,
     handoff_limits,
 )
 
@@ -107,16 +107,11 @@ class _Catalog:
     unknown_index = 0
 
 
-def test_shared_frames_keep_the_label_on_one_row_only():
+def _handoff_df():
     rows = []
     for f in range(0, 10):
-        rows.append(
-            dict(
-                TrajectoryID=0,
-                FrameID=f,
-                DetectionID=float(f) if f < 7 else float("nan"),
-            )
-        )
+        det = float(f) if f < 7 else float("nan")
+        rows.append(dict(TrajectoryID=0, FrameID=f, DetectionID=det))
     for f in range(6, 20):
         rows.append(dict(TrajectoryID=1, FrameID=f, DetectionID=100.0 + f))
     df = pd.DataFrame(rows)
@@ -124,16 +119,40 @@ def test_shared_frames_keep_the_label_on_one_row_only():
     df[C.FINAL_ID] = 1
     df[C.FINAL_CONFIDENCE] = 0.9
     df[C.FINAL_FRAGMENT_SCORE] = [0.5] * 10 + [0.8] * 14
-    df[C.FINAL_SOURCE] = "offline"
-    out = _unlabel_shared_label_rows(df, _Catalog())
+    df[C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
+    return df
+
+
+def test_shared_frames_keep_the_label_on_one_trajectory_per_frame():
+    out = _split_off_shared_label_rows(_handoff_df(), _Catalog())
     labelled = out[out[C.FINAL_LABEL] == "a"]
     assert not labelled.duplicated(["FrameID", C.FINAL_LABEL]).any()
-    # Frames 7-9: track 0 only coasts there, so the detection row keeps "a".
-    assert (
-        out[(out.TrajectoryID == 0) & (out.FrameID >= 7)][C.FINAL_LABEL] == "unknown"
-    ).all()
-    # Frame 6: both detected; the higher fragment score (track 1) keeps it.
-    assert (
-        out[(out.TrajectoryID == 1) & (out.FrameID == 6)][C.FINAL_LABEL].item() == "a"
+    # Frames 7-9: track 0 only coasts there; frame 6: both detected and the
+    # higher fragment score (track 1) keeps it. Track 0's losing rows 6-9 are
+    # one split-off unknown trajectory that remembers its parent.
+    lost = out[(out.OriginalTrajectoryID == 0) & (out.FrameID >= 6)]
+    assert lost.TrajectoryID.nunique() == 1 and lost.TrajectoryID.iloc[0] not in (0, 1)
+    assert lost[C.FINAL_LABEL].eq("unknown").all()
+    assert out[(out.TrajectoryID == 0)][C.FINAL_LABEL].eq("a").all()
+
+
+def test_split_off_survives_the_one_identity_per_trajectory_guard():
+    from hydra_suite.core.post.identity_postprocess import (
+        assert_one_identity_per_trajectory,
+        collapse_to_majority_identity,
     )
-    assert out[(out.TrajectoryID == 0) & (out.FrameID < 6)][C.FINAL_LABEL].eq("a").all()
+
+    out = _split_off_shared_label_rows(_handoff_df(), _Catalog())
+    offenders = assert_one_identity_per_trajectory(out)
+    assert offenders == []
+    out = collapse_to_majority_identity(out, offenders)
+    labelled = out[out[C.FINAL_LABEL] == "a"]
+    assert not labelled.duplicated(["FrameID", C.FINAL_LABEL]).any()
+
+
+def test_zero_handoff_restores_strict_conflicts():
+    frags = pd.DataFrame([_frag(0, 0, 300), _frag(1, 290, 700)])
+    detected = [_span(0, 295), _span(290, 700)]
+    strict = dict(PARAMS, IDENTITY_HANDOFF_MAX_SECONDS=0)
+    out = _iterative_assign(frags, LABELS, strict, detected_frames=detected)
+    assert sorted(v for v in out.values() if v) == ["a"]

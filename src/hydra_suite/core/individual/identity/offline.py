@@ -448,17 +448,20 @@ def handoff_limits(params: dict[str, Any]) -> tuple[int, float]:
     (default 0.25) of the shorter fragment's detection-backed frames.
     """
 
-    def _positive(key, default):
+    def _value(key, default):
+        raw = params.get(key)
+        if raw is None:
+            return default
         try:
-            value = float(params.get(key) or 0.0)
+            value = float(raw)
         except (TypeError, ValueError):
             return default
-        return value if value > 0 else default
+        return value if value >= 0 else default
 
-    seconds = _positive("IDENTITY_HANDOFF_MAX_SECONDS", 1.5)
-    fps = _positive("FPS", 0.0)
-    frames = int(round(seconds * fps)) if fps else 15
-    return max(0, frames), _positive("IDENTITY_HANDOFF_MAX_FRACTION", 0.25)
+    seconds = _value("IDENTITY_HANDOFF_MAX_SECONDS", 1.5)
+    fps = _value("FPS", 0.0)
+    frames = int(round(seconds * fps)) if fps > 0 else int(round(10 * seconds))
+    return max(0, frames), _value("IDENTITY_HANDOFF_MAX_FRACTION", 0.25)
 
 
 def _iterative_assign(
@@ -610,8 +613,11 @@ def _iterative_assign(
             a, b = detected_frames[i], detected_frames[j]
             shared = len(a & b)
             shorter = min(len(a), len(b))
+            # A fragment with no detection at all gives no hand-off evidence.
             conflict_cache[key] = (
-                shared > handoff_frames or shared > handoff_fraction * shorter
+                shorter == 0
+                or shared > handoff_frames
+                or shared > handoff_fraction * shorter
             )
         return conflict_cache[key]
 
@@ -1211,7 +1217,7 @@ def solve_global_assignment(
         out.loc[mask, C.FINAL_FRAGMENT_SCORE] = assigned_scores[i]
         out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
 
-    return _unlabel_shared_label_rows(out, catalog)
+    return _split_off_shared_label_rows(out, catalog)
 
 
 def _detection_backed(df: pd.DataFrame) -> pd.Series:
@@ -1235,15 +1241,17 @@ def _detected_frames_by_traj(
     return [by_traj.get(tid, frozenset()) for tid in summaries["TrajectoryID"]]
 
 
-def _unlabel_shared_label_rows(
+def _split_off_shared_label_rows(
     out: pd.DataFrame, catalog: IdentityCatalog
 ) -> pd.DataFrame:
     """Keep each label on at most one trajectory per frame.
 
     The solver tolerates brief hand-off overlaps between same-label
-    trajectories; on those frames the label stays on one row -- a detection
+    trajectories. On those frames the label stays on one row -- a detection
     over a prediction, then the higher fragment score, then the longer
-    trajectory -- and the other rows become ``unknown``.
+    trajectory -- and each run of the other rows is split off into its own
+    ``unknown`` trajectory (``OriginalTrajectoryID`` keeps the parent), so
+    every trajectory still carries one identity.
     """
     labelled = out[~out[C.FINAL_LABEL].astype(str).str.lower().isin(_UNKNOWN_VALUES)]
     if labelled.empty:
@@ -1261,12 +1269,26 @@ def _unlabel_shared_label_rows(
         ascending=[True, True, False, False, False, True],
         kind="stable",
     )
-    losers = ranked.index[ranked.duplicated(["FrameID", C.FINAL_LABEL], keep="first")]
-    out.loc[losers, C.FINAL_LABEL] = "unknown"
-    out.loc[losers, C.FINAL_ID] = catalog.unknown_index
-    out.loc[losers, C.FINAL_CONFIDENCE] = 0.0
-    out.loc[losers, C.FINAL_FRAGMENT_SCORE] = 0.0
-    out.loc[losers, C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
+    losers = ranked[ranked.duplicated(["FrameID", C.FINAL_LABEL], keep="first")]
+    if "OriginalTrajectoryID" not in out.columns:
+        out["OriginalTrajectoryID"] = out["TrajectoryID"]
+    next_id = int(pd.to_numeric(out["TrajectoryID"], errors="coerce").max()) + 1
+    for _tid, rows in losers.sort_values(["TrajectoryID", "FrameID"]).groupby(
+        "TrajectoryID", sort=True
+    ):
+        frames = rows["FrameID"].to_numpy()
+        run_starts = np.r_[0, np.flatnonzero(np.diff(frames) > 1) + 1]
+        for k, start in enumerate(run_starts):
+            stop = run_starts[k + 1] if k + 1 < len(run_starts) else len(frames)
+            idx = rows.index[start:stop]
+            out.loc[idx, "TrajectoryID"] = next_id
+            next_id += 1
+    idx = losers.index
+    out.loc[idx, C.FINAL_LABEL] = "unknown"
+    out.loc[idx, C.FINAL_ID] = catalog.unknown_index
+    out.loc[idx, C.FINAL_CONFIDENCE] = 0.0
+    out.loc[idx, C.FINAL_FRAGMENT_SCORE] = 0.0
+    out.loc[idx, C.FINAL_SOURCE] = C.IdentityFinalSource.NONE
     return out
 
 

@@ -17,6 +17,7 @@ the jump of a swap.
 
 from __future__ import annotations
 
+import heapq
 import math
 from typing import Sequence
 
@@ -30,32 +31,14 @@ def _real_rows(traj: pd.DataFrame) -> pd.DataFrame:
     return traj[traj["DetectionID"].notna()]
 
 
-def _shared_index(trajs: Sequence[pd.DataFrame]) -> dict:
-    """(frame, detection id) -> sorted trajectory indices holding it, if > 1."""
-    parts = []
-    for i, traj in enumerate(trajs):
-        real = _real_rows(traj)
-        if not real.empty:
-            parts.append(
-                pd.DataFrame(
-                    {
-                        "f": real["FrameID"].to_numpy(dtype=np.int64),
-                        "d": real["DetectionID"].to_numpy(dtype=np.float64),
-                        "t": i,
-                    }
-                )
-            )
-    if not parts:
-        return {}
-    rows = pd.concat(parts, ignore_index=True)
-    dup = rows[rows.duplicated(["f", "d"], keep=False)]
-    if dup.empty:
-        return {}
-    return {
-        (int(f), float(d)): sorted(set(g["t"].tolist()))
-        for (f, d), g in dup.groupby(["f", "d"], sort=False)
-        if g["t"].nunique() > 1
-    }
+def _keys(traj: pd.DataFrame) -> list[tuple[int, float]]:
+    real = _real_rows(traj)
+    return list(
+        zip(
+            real["FrameID"].to_numpy(dtype=np.int64).tolist(),
+            real["DetectionID"].to_numpy(dtype=np.float64).tolist(),
+        )
+    )
 
 
 def _row_at(traj: pd.DataFrame, frame: int):
@@ -74,27 +57,38 @@ def _same_place(rows) -> bool:
     return False
 
 
-def _run_end(trajs, members, start, shared) -> int:
+def _run_end(trajs, members, start, owners) -> int:
     """Last frame of the run of frames ``members`` share, starting at ``start``."""
     frame = start
+    member_set = set(members)
     while True:
         nxt = frame + 1
         rows = [_row_at(trajs[i], nxt) for i in members]
         if any(r is None for r in rows) or not _same_place(rows):
             return frame
         det = rows[0]["DetectionID"]
-        if pd.notna(det) and shared.get((nxt, float(det))) != members:
+        if pd.notna(det) and owners.get((nxt, float(det))) != member_set:
             return frame  # another trajectory joins or leaves: a new run
         frame = nxt
 
 
-def _endpoint(piece: pd.DataFrame, last: bool):
+def _detection_endpoint(piece: pd.DataFrame, last: bool):
+    """Last/first detection-backed (frame, x, y) of a piece, else None.
+
+    Predicted rows cannot decide continuity: a coasting prediction next to a
+    shared run is not evidence that the animal continues there.
+    """
     real = _real_rows(piece)
-    if real.empty:
-        real = piece[piece["X"].notna()]
+    real = real[real["X"].notna()]
     if real.empty:
         return None
     row = real.iloc[-1] if last else real.iloc[0]
+    return int(row["FrameID"]), float(row["X"]), float(row["Y"])
+
+
+def _run_endpoint(rows: pd.DataFrame, last: bool):
+    rows = rows[rows["X"].notna()]
+    row = rows.iloc[-1] if last else rows.iloc[0]
     return int(row["FrameID"]), float(row["X"]), float(row["Y"])
 
 
@@ -104,35 +98,33 @@ def _speed(a, b) -> float:
 
 
 def _best(pieces, anchor, last, join_step_px):
-    """Index of the piece most continuous with ``anchor``, or None."""
+    """Key of the piece most continuous with ``anchor``, or None."""
     best, best_speed = None, math.inf
-    for idx, piece in pieces:
-        end = _endpoint(piece, last=last)
+    for key, piece in pieces:
+        end = _detection_endpoint(piece, last=last)
         if end is None:
             continue
         speed = _speed(end, anchor)
         if speed < best_speed:
-            best, best_speed = idx, speed
+            best, best_speed = key, speed
     if best is not None and join_step_px is not None and best_speed > join_step_px:
         return None
     return best
 
 
 def _resolve_run(trajs, members, start, end, join_step_px):
-    frames = trajs[members[0]]["FrameID"]
+    first = trajs[members[0]]
+    run0 = first[(first["FrameID"] >= start) & (first["FrameID"] <= end)]
     pre = [(i, trajs[i][trajs[i]["FrameID"] < start]) for i in members]
     post = [(i, trajs[i][trajs[i]["FrameID"] > end]) for i in members]
-    run_first = _endpoint(trajs[members[0]][frames == start], last=False)
-    run_last = _endpoint(trajs[members[0]][frames == end], last=True)
-    pre_i = _best([p for p in pre if not p[1].empty], run_first, True, join_step_px)
-    post_i = _best([p for p in post if not p[1].empty], run_last, False, join_step_px)
+    pre_i = _best(pre, _run_endpoint(run0, last=False), True, join_step_px)
+    post_i = _best(post, _run_endpoint(run0, last=True), False, join_step_px)
 
     owner = (
         pre_i if pre_i is not None else (post_i if post_i is not None else members[0])
     )
     src = trajs[owner]
-    run_rows = src[(src["FrameID"] >= start) & (src["FrameID"] <= end)]
-    chain = [run_rows]
+    chain = [src[(src["FrameID"] >= start) & (src["FrameID"] <= end)]]
     if pre_i is not None:
         chain.insert(0, dict(pre)[pre_i])
     if post_i is not None:
@@ -169,21 +161,43 @@ def enforce_detection_exclusivity(
         otherwise the re-cut trajectories, sorted by frame within each.
     """
     trajs = list(trajs)
-    shared = _shared_index(trajs)
-    if not shared:
+    owners: dict[tuple[int, float], set[int]] = {}
+    for i, traj in enumerate(trajs):
+        for key in _keys(traj):
+            owners.setdefault(key, set()).add(i)
+    heap = [key for key, held in owners.items() if len(held) > 1]
+    if not heap:
         return trajs
-    trajs = [
-        t.sort_values("FrameID", kind="stable").reset_index(drop=True) for t in trajs
-    ]
-    limit = sum(len(t) for t in trajs) + 1
-    for _ in range(limit):
-        if not shared:
-            return trajs
-        frame, det = min(shared)
-        members = shared[(frame, det)]
-        end = _run_end(trajs, members, frame, shared)
-        replacement = _resolve_run(trajs, members, frame, end, join_step_px)
-        keep = [t for i, t in enumerate(trajs) if i not in set(members)]
-        trajs = keep[: min(members)] + replacement + keep[min(members) :]
-        shared = _shared_index(trajs)
-    raise RuntimeError("detection exclusivity did not converge")
+
+    # Stable integer handles: replaced trajectories get fresh handles, and the
+    # output keeps each replacement at its parents' position.
+    live: dict[int, pd.DataFrame] = {
+        i: t.sort_values("FrameID", kind="stable").reset_index(drop=True)
+        for i, t in enumerate(trajs)
+    }
+    rank: dict[int, tuple] = {i: (i,) for i in live}
+    next_handle = len(trajs)
+    heapq.heapify(heap)
+    while heap:
+        key = heapq.heappop(heap)
+        held = owners.get(key)
+        if held is None or len(held) < 2:
+            continue  # resolved by an earlier re-cut
+        members = sorted(held, key=lambda h: rank[h])
+        end = _run_end(live, members, key[0], owners)
+        replacement = _resolve_run(live, members, key[0], end, join_step_px)
+        base = min(rank[h] for h in members)
+        for h in members:
+            for k in _keys(live.pop(h)):
+                owners[k].discard(h)
+            del rank[h]
+        for n, piece in enumerate(replacement):
+            handle, next_handle = next_handle, next_handle + 1
+            live[handle] = piece
+            rank[handle] = base + (n,)
+            for k in _keys(piece):
+                held_k = owners.setdefault(k, set())
+                held_k.add(handle)
+                if len(held_k) == 2:
+                    heapq.heappush(heap, k)
+    return [live[h] for h in sorted(live, key=lambda h: rank[h])]

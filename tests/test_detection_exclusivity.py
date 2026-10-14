@@ -98,3 +98,33 @@ def test_implausible_attachment_is_not_made_without_a_continuous_neighbour():
     out = enforce_detection_exclusivity([t1, t2], join_step_px=50.0)
     assert _shared_rows(out) == 0
     assert all(_max_step(t) <= 50.0 for t in out)
+
+
+def test_predicted_row_inside_a_crossing_does_not_cut_an_animal():
+    # Both trajectories predict (no detection) at frame 21, a pixel apart.
+    a, b = _ant(range(40), 0, 1), _ant(range(40), 120, 2)
+    t1 = pd.concat([a[a.FrameID <= 22], b[b.FrameID >= 23]], ignore_index=True)
+    t2 = pd.concat([b[b.FrameID <= 19], a[a.FrameID >= 20]], ignore_index=True)
+    for t, x in ((t1, 209.0), (t2, 211.0)):
+        t.loc[t.FrameID == 21, ["DetectionID", "State", "X"]] = [np.nan, "occluded", x]
+    out = enforce_detection_exclusivity([t1, t2], join_step_px=50.0)
+    assert _shared_rows(out) == 0
+    a_frames = [t for t in out if (t[t.DetectionID.notna()].Y == 0).all() and len(t)]
+    assert max(len(t) for t in a_frames) >= 39
+
+
+def test_many_crossings_resolve_quickly():
+    import time
+
+    rng = np.random.default_rng(0)
+    trajs = []
+    for k in range(200):
+        base = _ant(range(400), 120 * k, k)
+        trajs.append(base)
+        # A short duplicate fragment sharing 3 detections with each animal.
+        s = int(rng.integers(10, 380))
+        trajs.append(base[(base.FrameID >= s) & (base.FrameID < s + 3)].copy())
+    t0 = time.perf_counter()
+    out = enforce_detection_exclusivity(trajs, join_step_px=50.0)
+    assert _shared_rows(out) == 0
+    assert time.perf_counter() - t0 < 20.0
