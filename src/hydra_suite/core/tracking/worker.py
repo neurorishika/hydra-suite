@@ -265,6 +265,9 @@ class TrackingEngineCore:
         self._inference_progress_start_time = None
         self._inference_progress_times = deque(maxlen=30)
         self._stop_requested = False
+        # Fan-out --max-jobs GPU phase slot (runtime.gpu_phase_lock); None
+        # when not held. Outside a phase-locked fan-out child it is a no-op.
+        self._gpu_phase_lease = None
         self.inference_autotune_overlay = None
         self.inference_autotune_result = None
         self.inference_runtime_artifact_ids = ()
@@ -557,6 +560,21 @@ class TrackingEngineCore:
                 prefetcher.stop()
             except Exception:
                 logger.debug("Failed to stop frame prefetcher", exc_info=True)
+
+    def _begin_gpu_phase(self, label: str) -> None:
+        """Wait for this GPU's phase slot (fan-out ``--max-jobs``; else no-op)."""
+        from hydra_suite.runtime.gpu_phase_lock import acquire_gpu_phase
+
+        if self._gpu_phase_lease is None:
+            self._gpu_phase_lease = acquire_gpu_phase(
+                label, should_stop=self._is_stop_requested
+            )
+
+    def _end_gpu_phase(self) -> None:
+        """Free this pass's GPU phase slot, if held. Idempotent."""
+        lease, self._gpu_phase_lease = self._gpu_phase_lease, None
+        if lease is not None:
+            lease.release()
 
     def _is_stop_requested(self) -> bool:
         """Return cooperative stop state, including a replay cancellation token."""
@@ -1171,6 +1189,20 @@ class TrackingEngineCore:
             else None
         )
 
+        # Fan-out --max-jobs: a forward pass holds one of its GPU's phase slots
+        # from model loading until its last GPU work (released right after
+        # the batch pass when the loop only replays the cache). A no-op unless
+        # the fan-out parent configured the semaphore for this child.
+        if not (self.backward_mode or self.cache_read_only_replay or self.preview_mode):
+            self._begin_gpu_phase("inference")
+            _lease = self._gpu_phase_lease
+            if _lease is not None and _lease.active and not _lease.acquired:
+                # Stopped while waiting for a slot: never touch the GPU.
+                self._end_gpu_phase()
+                cap.release()
+                self._emit_finished(False, [], [])
+                return
+
         if detection_method == "yolo_obb":
             # ── YOLO OBB: InferenceRunner path ──────────────────────────────
             if self.backward_mode and not self.detection_cache_path:
@@ -1757,6 +1789,34 @@ class TrackingEngineCore:
             logger.info("=" * 80)
             logger.info("PHASE 2: Tracking and Visualization")
             logger.info("=" * 80)
+
+        if (
+            self._gpu_phase_lease is not None
+            and inference_runner is not None
+            and use_cached_detections
+        ):
+            # The tracking loop below only replays the cache (load_frame), so
+            # the GPU phase is over. Drop the stage models first -- including
+            # the SLEAP service -- so the CPU-only remainder of this child does
+            # not pin GPU memory that the next phase on this GPU needs. Only
+            # in a phase-locked fan-out child: elsewhere nothing changes.
+            if self._gpu_phase_lease.active:
+                try:
+                    inference_runner.release_models()
+                except Exception:
+                    logger.warning(
+                        "Could not release inference models after the batch "
+                        "pass (continuing)",
+                        exc_info=True,
+                    )
+            self._end_gpu_phase()
+        elif (
+            self._gpu_phase_lease is not None
+            and bgsub_runner is not None
+            and str(getattr(bgsub_runner.runtime, "device", "")) == "cpu"
+        ):
+            # A CPU bg-sub run never touches the GPU.
+            self._end_gpu_phase()
 
         # === COMPUTE CONFIDENCE DENSITY MAP ===
         # Runs for BOTH fresh and cached detections. Normal backward tracking
@@ -4927,6 +4987,8 @@ class TrackingEngineCore:
         # release / no-op flush.
         if bgsub_runner is not None:
             bgsub_runner.close()
+        # Realtime / bg-sub inference ran inside the loop: its phase ends here.
+        self._end_gpu_phase()
 
         # Finalize individual dataset if enabled
         if individual_generator is not None and not stop_requested:

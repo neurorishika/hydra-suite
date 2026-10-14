@@ -48,6 +48,7 @@ from hydra_suite.core.tracking.session_policy import (
     should_run_interpolated_postpass,
 )
 from hydra_suite.core.tracking.session_summary import build_session_summary_lines
+from hydra_suite.runtime.gpu_phase_lock import gpu_phase
 from hydra_suite.utils import profiling_names as N
 from hydra_suite.utils.profiling import span
 from hydra_suite.utils.video_artifacts import build_inference_cache_dir
@@ -399,15 +400,18 @@ class TrackingSessionCore:
         if not session_policy.should_run_interpolated_postpass(self.config):
             return
 
-        payload = run_interpolated_crops(
-            final_csv,
-            self.video_path,
-            self.pose_state.detection_cache_path,
-            self.params,
-            enable_profiling=bool(self.params.get("ENABLE_PROFILING", False)),
-            progress=self.callbacks.progress,
-            should_stop=self.callbacks.should_stop,
-        )
+        # Loads pose/CNN/head-tail/AprilTag models and runs them on the GPU:
+        # in a fan-out --max-jobs child this waits for a GPU phase slot.
+        with gpu_phase("interpolated_crops", should_stop=self.callbacks.should_stop):
+            payload = run_interpolated_crops(
+                final_csv,
+                self.video_path,
+                self.pose_state.detection_cache_path,
+                self.params,
+                enable_profiling=bool(self.params.get("ENABLE_PROFILING", False)),
+                progress=self.callbacks.progress,
+                should_stop=self.callbacks.should_stop,
+            )
 
         # The interpolated ROI npz feeds the final-media exporter so occluded /
         # interpolated frames still get crops. It used to be captured by the GUI
@@ -539,6 +543,16 @@ class TrackingSessionCore:
             )
 
         self.callbacks.stage_changed("dataset_generation")
+        # Builds a detection InferenceRunner (detector on the GPU for frames
+        # the cache lacks): a GPU phase in a fan-out --max-jobs child.
+        with gpu_phase("dataset_generation", should_stop=self.callbacks.should_stop):
+            return self._generate_active_learning_dataset(
+                video_path, csv_path, output_dir, class_name, levels
+            )
+
+    def _generate_active_learning_dataset(
+        self, video_path, csv_path, output_dir, class_name, levels
+    ):
         return dataset_export.generate_active_learning_dataset(
             video_path=video_path,
             csv_path=csv_path,

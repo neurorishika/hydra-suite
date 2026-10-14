@@ -4,7 +4,10 @@ Each job is the ordinary CLI child ``python -m hydra_suite.trackerkit.app track
 <video> --config <json>`` -- the exact sequential path -- pinned to one GPU
 with ``CUDA_VISIBLE_DEVICES=<uuid>``. A GPU may host ``jobs_per_gpu`` children
 at once; each is still its own process and session group. The SLEAP service the child spawns
-inherits that mask, so pose runs on the same GPU. This module owns
+inherits that mask, so pose runs on the same GPU. With ``max_jobs`` above
+GPUs x ``jobs_per_gpu`` more children run than there are GPU slots; each child
+then takes a slot only around its GPU phases (see
+:mod:`hydra_suite.runtime.gpu_phase_lock`). This module owns
 scheduling, log capture, progress parsing, failure policy and cancellation;
 it changes nothing about how a video is tracked.
 """
@@ -35,6 +38,8 @@ from hydra_suite.runtime.cpu_budget import (
     resolve_cpu_budget,
 )
 from hydra_suite.runtime.cuda_devices import CudaDevice, resolve_gpu_selectors
+from hydra_suite.runtime.gpu_phase_lock import ENV_VARS as _GPU_PHASE_ENV_VARS
+from hydra_suite.runtime.gpu_phase_lock import phase_lock_env
 from hydra_suite.trackerkit.batch_plan import BatchJobSpec
 from hydra_suite.utils.video_artifacts import (
     build_video_log_dir,
@@ -89,8 +94,15 @@ class FanoutOptions:
     # ``None`` means "unspecified": every GPU slot when ``gpus`` is set,
     # otherwise a single slot.
     jobs: Optional[int] = None
-    # Concurrent children per selected GPU; ignored without ``gpus``.
+    # Concurrent children per selected GPU; ignored without ``gpus``. With
+    # ``max_jobs`` it is the number of concurrent GPU *phases* per GPU instead.
     jobs_per_gpu: int = 1
+    # Total concurrent children (needs ``gpus``). ``None`` keeps the slot
+    # layout above. Above GPUs x jobs_per_gpu, children share a GPU's
+    # jobs_per_gpu phase slots through a file-lock semaphore.
+    max_jobs: Optional[int] = None
+    # Keep launching queued videos after a child fails (default: halt).
+    keep_going: bool = False
     # Launch the longest videos first (see :func:`order_longest_first`);
     # ``video_frames`` overrides the frame-count probe (tests).
     longest_first: bool = False
@@ -300,6 +312,38 @@ def build_gpu_slots(
     return slots[: max(1, min(requested, len(slots)))]
 
 
+def scheduler_slots(options: FanoutOptions) -> list[Optional[CudaDevice]]:
+    """The child slots :func:`run_batch_fanout` opens for ``options``.
+
+    Without ``max_jobs`` (or without GPUs) this is exactly
+    :func:`build_gpu_slots`. With it, ``max_jobs`` slots go round-robin over
+    the GPUs, so each GPU hosts an even share of the children; past GPUs x
+    ``jobs_per_gpu`` that share exceeds ``jobs_per_gpu`` and the GPU phase
+    semaphore (see :func:`phase_lock_slots`) keeps the GPU work bounded.
+    """
+    k = int(options.jobs_per_gpu)
+    if options.gpus and options.max_jobs is not None:
+        m = max(1, int(options.max_jobs))
+        stride = max(k, -(-m // len(options.gpus)))
+        return build_gpu_slots(options.gpus, jobs=m, jobs_per_gpu=stride)
+    return build_gpu_slots(options.gpus, jobs=options.jobs, jobs_per_gpu=k)
+
+
+def phase_lock_slots(
+    options: FanoutOptions, slots: Sequence[Optional[CudaDevice]]
+) -> Optional[int]:
+    """Per-GPU phase slots K when children must share them, else None.
+
+    Only when more children are open than GPUs x ``jobs_per_gpu``: at or
+    below that every child already has a slot of its own, and the children
+    get no lock env at all (the default path stays byte-identical).
+    """
+    k = max(1, int(options.jobs_per_gpu))
+    if options.gpus and len(slots) > len(options.gpus) * k:
+        return k
+    return None
+
+
 def video_frame_count(video_path: str) -> Optional[int]:
     """The container's frame count, or ``None`` when it cannot be read."""
     try:
@@ -392,15 +436,12 @@ def build_child_env(
 def resolve_slot_count(options: FanoutOptions) -> int:
     """Concurrent child slots the scheduler opens for ``options``.
 
-    Delegates to :func:`build_gpu_slots` (the single slot authority), so
+    Delegates to :func:`scheduler_slots` (the single slot authority), so
     ``jobs_per_gpu`` is counted: unspecified jobs -> GPUs x K, an explicit
-    jobs is clamped to it; without GPUs, ``jobs`` unpinned slots.
+    jobs is clamped to it; without GPUs, ``jobs`` unpinned slots; with
+    ``max_jobs`` and GPUs, ``max_jobs``.
     """
-    return len(
-        build_gpu_slots(
-            options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
-        )
-    )
+    return len(scheduler_slots(options))
 
 
 def plan_fanout_cpu(
@@ -420,6 +461,17 @@ def plan_fanout_cpu(
         gpu_bound=bool(options.gpus),
         threads_per_job=options.threads_per_job,
     )
+    if options.gpus and options.max_jobs is not None:
+        # max_jobs is the slot authority here; the CPU clamp applies to it.
+        return (
+            replace(
+                options,
+                max_jobs=plan.jobs,
+                jobs=min(plan.jobs, int(options.jobs or plan.jobs)),
+                threads_per_job=plan.threads_per_job,
+            ),
+            plan,
+        )
     return replace(options, jobs=plan.jobs, threads_per_job=plan.threads_per_job), plan
 
 
@@ -524,6 +576,7 @@ def _launch(
     timestamp: str,
     events: FanoutEvents,
     child_registry: Optional["LiveChildRegistry"] = None,
+    phase_lock: Optional[tuple[Path, int]] = None,
 ) -> _Live:
     config_json = run_dir / f"job_{spec.index}_config.json"
     config_json.write_text(json.dumps(spec.config, indent=2), encoding="utf-8")
@@ -532,12 +585,19 @@ def _launch(
         or (lambda s, c: default_child_command(s, c, log_level=options.log_level))
     )(spec, config_json)
     env = build_child_env(os.environ, gpu=gpu, threads_per_job=options.threads_per_job)
+    if phase_lock is not None and gpu is not None:
+        # Children outnumber this GPU's slots: they take a slot only around
+        # their GPU phases. Never inherit a stale semaphore from our own env.
+        for var in _GPU_PHASE_ENV_VARS:
+            env.pop(var, None)
+        env.update(phase_lock_env(phase_lock[0], gpu.uuid, phase_lock[1]))
     log_path = _job_log_path(spec, timestamp)
     log_handle = log_path.open("a", encoding="utf-8")
     log_handle.write(
         f"# trackerkit fan-out job {spec.index}: {spec.video_path}\n"
         f"# gpu={gpu.uuid if gpu else '<inherited>'} "
-        f"command={_command_for_log(command)}\n"
+        + (f"gpu_phase_slots={phase_lock[1]} " if phase_lock and gpu else "")
+        + f"command={_command_for_log(command)}\n"
     )
     log_handle.flush()
     popen_kwargs: dict = dict(
@@ -773,9 +833,8 @@ def run_batch_fanout(
 
     # Unspecified jobs -> every GPU slot; an explicit jobs is clamped to
     # GPUs x jobs_per_gpu, so a device is shared only when asked for.
-    slots = build_gpu_slots(
-        options.gpus, jobs=options.jobs, jobs_per_gpu=options.jobs_per_gpu
-    )
+    slots = scheduler_slots(options)
+    lock_k = phase_lock_slots(options, slots)
     # Keyed on the slots actually opened: a --jobs cap can leave one child
     # per GPU even at jobs_per_gpu > 1, and then nothing is shared.
     if options.gpus and len(slots) > len(options.gpus) and not options.threads_per_job:
@@ -799,6 +858,19 @@ def run_batch_fanout(
     # Microseconds, not seconds: two fan-outs launched from the same GUI within
     # one second would otherwise share (and append to) one per-job log file.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    phase_lock: Optional[tuple[Path, int]] = None
+    if lock_k is not None:
+        lock_dir = run_dir / "gpu_phase_locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        phase_lock = (lock_dir, lock_k)
+        logger.info(
+            "Fan-out: %d children on %d GPU(s); each GPU runs at most %d GPU "
+            "phase(s) at once (locks in %s)",
+            len(slots),
+            len(options.gpus),
+            lock_k,
+            lock_dir,
+        )
 
     pending = list(specs)
     if options.longest_first:
@@ -853,12 +925,21 @@ def run_batch_fanout(
                     finished[live.spec.index] = res
                     events.job_finished(res)
                     if not res.success:
-                        halted = True
-                        logger.error(
-                            "Fan-out: job %d failed (%s); no further jobs will launch",
-                            live.spec.index,
-                            res.error,
-                        )
+                        if options.keep_going:
+                            logger.error(
+                                "Fan-out: job %d failed (%s); continuing with the "
+                                "queue (--keep-going)",
+                                live.spec.index,
+                                res.error,
+                            )
+                        else:
+                            halted = True
+                            logger.error(
+                                "Fan-out: job %d failed (%s); no further jobs "
+                                "will launch",
+                                live.spec.index,
+                                res.error,
+                            )
 
             # launch
             while pending and free_slots and not halted:
@@ -874,6 +955,7 @@ def run_batch_fanout(
                             timestamp,
                             events,
                             child_registry=child_registry,
+                            phase_lock=phase_lock,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -902,7 +984,8 @@ def run_batch_fanout(
                     )
                     finished[spec.index] = res
                     events.job_finished(res)
-                    halted = True
+                    if not options.keep_going:
+                        halted = True
 
             if not running and (halted or not pending):
                 break

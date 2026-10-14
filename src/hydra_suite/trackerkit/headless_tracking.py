@@ -108,6 +108,15 @@ def _run_engine_pass(
             logger.exception("Tracking engine crashed during %s pass", direction)
             if not captured["finished"]:
                 _on_finished(False, [], [])
+        finally:
+            # An early return or crash mid-pass must not keep this child's
+            # GPU phase slot (fan-out --max-jobs) through post-processing.
+            end_phase = getattr(engine, "_end_gpu_phase", None)
+            if callable(end_phase):
+                try:
+                    end_phase()
+                except Exception:
+                    logger.debug("Could not release the GPU phase", exc_info=True)
 
     thread = threading.Thread(target=_target, name=f"tracking-engine-{direction}")
     thread.start()

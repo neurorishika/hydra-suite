@@ -2545,6 +2545,29 @@ class InferenceRunner:
             at_result,
         )
 
+    def release_models(self) -> None:
+        """Close and drop the stage models, keeping the caches readable.
+
+        For a runner that has finished its batch pass and will only replay
+        (``load_frame`` and the identity-evidence sidecar run no stage model):
+        frees the GPU memory the models hold -- including the SLEAP service
+        process behind a pose model -- for the rest of a long CPU-only run.
+        After this, ``run_realtime`` / ``run_batch_pass`` cannot be used, and
+        :meth:`close` will not close the models a second time. The bg-sub model
+        is kept (it is the background state, not a GPU network).
+        """
+        models = self._models
+        for mdl in (models.obb, models.headtail, models.pose, models.apriltag):
+            if mdl is not None:
+                mdl.close()
+        for mdl in models.cnn:
+            mdl.close()
+        models.obb = None
+        models.headtail = None
+        models.pose = None
+        models.apriltag = None
+        models.cnn = []
+
     def close(self) -> None:
         # Flush realtime-written caches to disk so a later backward pass can
         # replay them. Only when writable: a read-only (load_frame/backward)

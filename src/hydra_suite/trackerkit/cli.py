@@ -69,6 +69,8 @@ def run_tracking_cli(
     jobs: int | None = None,
     jobs_per_gpu: int = 1,
     longest_first: bool = False,
+    max_jobs: int | None = None,
+    keep_going: bool = False,
     threads_per_job: int | None = None,
     log_level: str = "INFO",
     apply_tuned_inference: bool | None = None,
@@ -83,6 +85,13 @@ def run_tracking_cli(
         raise ValueError("--jobs-per-gpu needs --gpus")
     if longest_first and not fanout_requested(gpus, jobs):
         raise ValueError("--longest-first needs fan-out (--gpus or --jobs > 1)")
+    if max_jobs is not None:
+        if int(max_jobs) < 1:
+            raise ValueError(f"max_jobs must be >= 1, got {max_jobs}")
+        if not str(gpus or "").strip():
+            raise ValueError("--max-jobs needs --gpus")
+        if jobs is not None:
+            raise ValueError("use either --jobs or --max-jobs, not both")
     videos = [str(path).strip() for path in video_paths if str(path).strip()]
     if not videos:
         raise ValueError("At least one video path is required.")
@@ -114,6 +123,8 @@ def run_tracking_cli(
         if cap is not None:
             set_process_cpu_cap(cap)
             bind_thread_cpu_cap()
+        if keep_going:
+            return _run_sequential(specs, keep_going=True)
         return _run_sequential(specs)
     devices = (
         decide_gpu_slots(
@@ -126,6 +137,14 @@ def run_tracking_cli(
     # 1 with no GPUs); an explicit --jobs is honoured but never exceeds the
     # slot count, so a GPU is shared only when --jobs-per-gpu asks for it.
     effective_jobs = len(build_gpu_slots(devices, jobs=jobs, jobs_per_gpu=jobs_per_gpu))
+    if max_jobs is not None and not devices:
+        logger.warning(
+            "--max-jobs %d ignored: --gpus %s resolved to no CUDA device, so the "
+            "batch runs unpinned with %d job(s).",
+            int(max_jobs),
+            gpus,
+            effective_jobs,
+        )
     if int(jobs_per_gpu) > 1 and not devices:
         logger.warning(
             "--jobs-per-gpu %d ignored: --gpus %s resolved to no CUDA device, "
@@ -156,6 +175,8 @@ def run_tracking_cli(
             jobs=effective_jobs,
             jobs_per_gpu=int(jobs_per_gpu) if devices else 1,
             longest_first=bool(longest_first),
+            max_jobs=int(max_jobs) if (max_jobs is not None and devices) else None,
+            keep_going=bool(keep_going),
             threads_per_job=threads_per_job,
             log_level=log_level,
         ),
@@ -172,8 +193,11 @@ def run_tracking_cli(
     return _run_fanout(specs, options)
 
 
-def _run_sequential(specs: Sequence[BatchJobSpec]) -> int:
-    """The in-process path: one session after another on this process."""
+def _run_sequential(specs: Sequence[BatchJobSpec], *, keep_going: bool = False) -> int:
+    """The in-process path: one session after another on this process.
+
+    A failed video stops the batch unless ``keep_going``.
+    """
     exit_code = 0
     with tempfile.TemporaryDirectory(prefix="trackerkit-cli-") as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -215,7 +239,8 @@ def _run_sequential(specs: Sequence[BatchJobSpec]) -> int:
                     error_message,
                 )
                 exit_code = 1
-                break
+                if not keep_going:
+                    break
 
     return exit_code
 
@@ -306,6 +331,14 @@ def _run_fanout(specs: Sequence[BatchJobSpec], options: FanoutOptions) -> int:
                 + (
                     f" x {options.jobs_per_gpu} jobs per GPU"
                     if resolve_slot_count(options) > len(options.gpus)
+                    and options.max_jobs is None
+                    else ""
+                )
+                + (
+                    f", at most {options.jobs_per_gpu} GPU phase(s) per GPU"
+                    if options.max_jobs is not None
+                    and resolve_slot_count(options)
+                    > len(options.gpus) * int(options.jobs_per_gpu)
                     else ""
                 )
                 if options.gpus

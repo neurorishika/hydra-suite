@@ -78,6 +78,8 @@ trackerkit track --video-list batch.txt --gpus 0-3           # four GPUs
 trackerkit track --video-list batch.txt --gpus 0,2,GPU-8f1a  # ordinals or UUID prefixes
 trackerkit track --video-list batch.txt --jobs 3             # three children sharing the current device (CPU / Apple Silicon)
 trackerkit track --video-list batch.txt --gpus 0-3 --jobs-per-gpu 2  # two children per GPU, CPU budget split 8 ways
+trackerkit track --video-list batch.txt --gpus 0-3 --max-jobs 8      # 8 children, at most 1 doing GPU work per GPU
+trackerkit track --video-list batch.txt --gpus 0-3 --keep-going      # a failed video does not stop the batch
 ```
 
 Each video becomes a child process `trackerkit track <video> --config <effective.json>`
@@ -108,9 +110,12 @@ rendered videos). Rules:
   the end of the batch; videos whose length cannot be read go first. The
   per-video table stays in input order. It changes only scheduling, never a
   video's output.
-- A failed video stops new launches; running videos finish. Exit code is 1
-  if any video failed or the run was cancelled; the per-video table still
-  shows which videos completed.
+- A failed video stops new launches; running videos finish. With
+  `--keep-going` the failure is logged and the rest of the queue still runs
+  (a child that could not even be launched counts as a failure too). Exit
+  code is 1 if any video failed or the run was cancelled; the per-video table
+  still shows which videos completed. `--keep-going` also applies to the
+  sequential (non-fan-out) path.
 - Ctrl-C asks every child to stop cleanly, then terminates stragglers.
 - Per-child logs: `<video dir>/<stem>_logs/<stem>_fanout_<timestamp>.log`.
 - Every child gets a CPU thread cap (`budget // jobs` threads), so N children
@@ -133,6 +138,37 @@ threads, and if the budget cannot give each child its minimum, fewer run at a
 time (with a warning). `--threads-per-job N` overrides the split.
 Thread caps can change floating-point reduction order, so compare against a
 sequential run under the same caps when checking byte-identity.
+
+### More children than GPU slots (`--max-jobs`)
+
+A child does not use its GPU for its whole life. A crowded video can spend
+hours in the GPU inference pass and then hours more in CPU-only tracking and
+post-processing, while the GPU sits idle. `--max-jobs M` (requires `--gpus`;
+use it instead of `--jobs`) keeps M children running in total, spread
+round-robin over the GPUs, and lets them share each GPU through a per-GPU
+semaphore: at most `--jobs-per-gpu` K children per GPU are in a *GPU phase*
+at once. The others wait (`GPU phase 'inference': all 1 slot(s) on GPU ... are
+busy; waiting...` in their log) or do CPU work. A GPU phase is:
+
+- model loading plus the batched inference pass. When the tracking loop then
+  only replays the detection cache, the child releases its stage models
+  (including the SLEAP service) and returns PyTorch's cached CUDA memory
+  before handing the slot on. In realtime mode, and for GPU background
+  subtraction, inference runs inside the tracking loop, so the phase lasts for
+  the whole forward pass;
+- the interpolated-crops pass (pose/CNN/head-tail on gaps);
+- active-learning dataset generation, which may run the detector.
+
+The semaphore is a set of lock files under the run directory; the OS releases
+a slot when its child dies, so a crash cannot wedge a GPU. The default
+(`--max-jobs` unset, i.e. GPUs × K) launches children exactly as before and
+gives them no lock settings at all; the same holds for any M ≤ GPUs × K.
+
+M counts against the [CPU budget](#cpu-budget) like any other job count:
+threads per child are `budget // M`, and M is reduced (with a warning) when
+the budget cannot feed it. Choose M from the time split: if a video spends
+roughly as long on the CPU as on the GPU, M ≈ 2 × GPUs × K keeps the GPUs
+busy. More children also means more host RAM.
 
 ### On a shared machine
 
