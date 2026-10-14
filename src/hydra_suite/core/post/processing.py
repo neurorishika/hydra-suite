@@ -4199,12 +4199,11 @@ def _build_relink_fragment_summaries(
     fragments = []
     fragment_frames = {}
 
-    for traj_id in sorted(trajectories_df["TrajectoryID"].dropna().unique()):
+    # One group-by instead of filtering the whole table per trajectory
+    # (quadratic on crowded clips); same sorted ids, same rows in table order.
+    for traj_id, group in trajectories_df.groupby("TrajectoryID", sort=True):
         frag_df = (
-            trajectories_df[trajectories_df["TrajectoryID"] == traj_id]
-            .copy()
-            .sort_values("FrameID", kind="stable")
-            .reset_index(drop=True)
+            group.copy().sort_values("FrameID", kind="stable").reset_index(drop=True)
         )
         if frag_df.empty:
             continue
@@ -4474,6 +4473,53 @@ def _assemble_relinked_chains(chains, fragment_frames):
     return relinked_parts
 
 
+def _relink_candidates(
+    fragments,
+    max_gap,
+    max_vel_break,
+    agreement_distance,
+    pose_max_distance,
+    min_pose_quality,
+    heading_gate,
+    min_motion_speed,
+):
+    """Scored (src, dst) relink candidates, in all-pairs iteration order.
+
+    ``_score_relink_candidate`` rejects every pair whose gap is outside
+    ``1..max_gap`` frames, so each source only needs the fragments starting
+    ``end_frame + 2 .. end_frame + 1 + max_gap``; they are visited in their
+    original list order, giving exactly the all-pairs candidate list. The
+    all-pairs loop was quadratic (8.5k fragments = 72M pair scorings).
+    """
+    import bisect
+
+    starts = sorted((int(f["start_frame"]), i) for i, f in enumerate(fragments))
+    start_frames = [s for s, _ in starts]
+    candidates = []
+    for src in fragments:
+        end = int(src["end_frame"])
+        lo = bisect.bisect_left(start_frames, end + 2)
+        hi = bisect.bisect_right(start_frames, end + 1 + int(max_gap))
+        for j in sorted(i for _, i in starts[lo:hi]):
+            dst = fragments[j]
+            if src["traj_id"] == dst["traj_id"]:
+                continue
+            result = _score_relink_candidate(
+                src,
+                dst,
+                max_gap,
+                max_vel_break,
+                agreement_distance,
+                pose_max_distance,
+                min_pose_quality,
+                heading_gate,
+                min_motion_speed,
+            )
+            if result is not None:
+                candidates.append(result)
+    return candidates
+
+
 def relink_trajectories_with_pose(
     trajectories_df: pd.DataFrame, params: dict
 ) -> pd.DataFrame:
@@ -4502,27 +4548,16 @@ def relink_trajectories_with_pose(
     heading_gate = float(np.pi / 3.0)
     min_motion_speed = 1e-3
 
-    candidates = []
-    for src in fragments:
-        for dst in fragments:
-            if src["traj_id"] == dst["traj_id"]:
-                continue
-            if dst["start_frame"] <= src["end_frame"]:
-                continue
-
-            result = _score_relink_candidate(
-                src,
-                dst,
-                max_gap,
-                max_vel_break,
-                agreement_distance,
-                pose_max_distance,
-                min_pose_quality,
-                heading_gate,
-                min_motion_speed,
-            )
-            if result is not None:
-                candidates.append(result)
+    candidates = _relink_candidates(
+        fragments,
+        max_gap,
+        max_vel_break,
+        agreement_distance,
+        pose_max_distance,
+        min_pose_quality,
+        heading_gate,
+        min_motion_speed,
+    )
 
     if not candidates:
         return trajectories_df.copy()

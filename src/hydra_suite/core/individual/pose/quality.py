@@ -676,31 +676,46 @@ def normalize_pose_keypoints_for_relink(
     valid_points = []
     valid_weights = []
 
-    for idx, label in enumerate(pose_labels):
-        x_col = f"PoseKpt_{label}_X"
-        y_col = f"PoseKpt_{label}_Y"
-        c_col = f"PoseKpt_{label}_Conf"
-        if (
-            x_col not in window_df.columns
-            or y_col not in window_df.columns
-            or c_col not in window_df.columns
-        ):
-            continue
-
-        vals = window_df[[x_col, y_col, c_col]].copy()
-        vals = vals.replace([np.inf, -np.inf], np.nan).dropna()
-        if vals.empty:
-            continue
-        vals = vals[vals[c_col] >= float(min_valid_conf)]
-        if vals.empty:
-            continue
-
-        x = float(vals[x_col].median())
-        y = float(vals[y_col].median())
-        conf = float(vals[c_col].median())
-        keypoints[idx] = np.array([x, y, conf], dtype=np.float32)
-        valid_points.append((x, y))
-        valid_weights.append(max(1e-6, conf))
+    # One numpy block per window: this runs twice per trajectory during pose
+    # relinking, and per-keypoint pandas operations dominated post-processing
+    # on crowded clips. Same rule as before: a row counts for a keypoint when
+    # x, y and conf are all finite and conf >= min_valid_conf; the keypoint is
+    # the per-column median of those rows.
+    columns = set(window_df.columns)
+    present = [
+        (idx, label)
+        for idx, label in enumerate(pose_labels)
+        if {
+            f"PoseKpt_{label}_X",
+            f"PoseKpt_{label}_Y",
+            f"PoseKpt_{label}_Conf",
+        }
+        <= columns
+    ]
+    if present:
+        block = window_df[
+            [
+                col
+                for _, label in present
+                for col in (
+                    f"PoseKpt_{label}_X",
+                    f"PoseKpt_{label}_Y",
+                    f"PoseKpt_{label}_Conf",
+                )
+            ]
+        ].to_numpy(dtype=np.float64)
+        block = block.reshape(len(block), len(present), 3)
+        min_conf = float(min_valid_conf)
+        for slot, (idx, _label) in enumerate(present):
+            vals = block[:, slot, :]
+            vals = vals[np.isfinite(vals).all(axis=1)]
+            vals = vals[vals[:, 2] >= min_conf]
+            if not len(vals):
+                continue
+            x, y, conf = (float(v) for v in np.median(vals, axis=0))
+            keypoints[idx] = np.array([x, y, conf], dtype=np.float32)
+            valid_points.append((x, y))
+            valid_weights.append(max(1e-6, conf))
 
     if not valid_points:
         return None, 0.0
