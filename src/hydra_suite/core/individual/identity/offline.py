@@ -470,6 +470,7 @@ def _iterative_assign(
     params: dict[str, Any],
     _debug_counts: dict[str, Any] | None = None,
     detected_frames: list[frozenset] | None = None,
+    _whole_schedule_objective: bool = False,
 ) -> dict[int, str | None]:
     """Mass-first seeding + doubt-ordered refinement with exact-objective
     multi-blocker displacement.
@@ -566,7 +567,11 @@ def _iterative_assign(
     if n == 0:
         return {}
 
-    rows = [frags.iloc[i] for i in range(n)]
+    # Plain dicts and arrays: pandas row access dominated the run time on
+    # clips with thousands of fragments.
+    rows = frags.to_dict("records")
+    starts = np.array([int(r["StartFrame"]) for r in rows], dtype=np.int64)
+    ends = np.array([int(r["EndFrame"]) for r in rows], dtype=np.int64)
     durations = np.array(
         [max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1) for r in rows],
         dtype=np.float64,
@@ -601,10 +606,7 @@ def _iterative_assign(
     conflict_cache: dict[tuple[int, int], bool] = {}
 
     def _overlaps(i: int, j: int) -> bool:
-        if not (
-            int(rows[i]["StartFrame"]) <= int(rows[j]["EndFrame"])
-            and int(rows[j]["StartFrame"]) <= int(rows[i]["EndFrame"])
-        ):
+        if not (starts[i] <= ends[j] and starts[j] <= ends[i]):
             return False
         if detected_frames is None:
             return True
@@ -672,30 +674,28 @@ def _iterative_assign(
 
     def _try_displacement(i: int, c: str) -> bool:
         """Tentatively give ``c`` to fragment i, evicting and re-homing its
-        blocker(s). Accept iff the exact objective, evaluated over a FIXED
-        touched set computed before the move is attempted, rises by
-        >= monotone_eps between the pre-move and post-move states.
+        blocker(s). Accept iff the exact objective rises by >= monotone_eps
+        between the pre-move and post-move states, evaluated over one FIXED
+        touched set for both states.
 
-        The touched set must be fixed before either state is scored, or the
-        comparison is between two different objectives (asymmetric, and not
-        actually a proof of monotone improvement). Precisely characterising
-        the minimal closure requires knowing the post-move re-homing
-        (``best_alt_for_j`` for each evicted blocker j), which isn't known
-        until the move is tentatively applied -- so, since the fragment
-        count here is at most a few dozen, we just use the whole schedule
-        (every fragment) as the touched set. That's trivially a superset of
-        any minimal closure, still cheap at this scale, and guarantees ``i``
-        itself (the mover) is always included even when it starts
-        unassigned (``current[i] is None``), which a schedule-membership-only
-        closure would silently drop.
+        A fragment's score depends only on the schedule of its own label, so
+        a move can change scores only for fragments holding one of the labels
+        it touches: ``c``, the mover's and blockers' old labels, and the
+        blockers' new labels (known once the move is tentatively applied).
+        The touched set is every fragment holding any of those labels in
+        either state, plus the mover and blockers -- exact, and independent
+        of the clip's fragment count. ``_whole_schedule_objective`` scores
+        every fragment instead (the original formulation; tests compare the
+        two).
         """
         blockers = _blockers(i, c)
         if not blockers or len(blockers) > max_blockers:
             return False
-        before_assign = {j: current[j] for j in blockers}
-        before_assign[i] = current[i]
-        touched = set(range(n))
-        j_before = _objective(touched)
+        # Exact snapshots, so restoring a state also restores list order
+        # (later blocker iteration order depends on it).
+        before_state = ({k: list(v) for k, v in schedule.items()}, list(current))
+        labels = {c, current[i], *(current[j] for j in blockers)}
+        members_before = {j for lbl in labels if lbl is not None for j in schedule[lbl]}
 
         for j in blockers:
             _commit(j, None)
@@ -705,25 +705,36 @@ def _iterative_assign(
             _, alt = _best_alternative(j, c)
             new_labels[j] = alt
             _commit(j, alt)
+        labels.update(new_labels.values())
+        if _whole_schedule_objective:
+            touched = set(range(n))
+        else:
+            touched = members_before | {i, *blockers}
+            for lbl in labels:
+                if lbl is not None:
+                    touched.update(schedule[lbl])
         j_after = _objective(touched)
+        accepted_score = _score(i, c)
+        after_state = ({k: list(v) for k, v in schedule.items()}, list(current))
 
-        if j_after - j_before >= monotone_eps and _score(i, c) > 0.0:
+        def _restore(state) -> None:
+            sched_copy, current_copy = state
+            for k, v in sched_copy.items():
+                schedule[k][:] = v
+            current[:] = current_copy
+
+        # Score the pre-move state over the same touched set.
+        _restore(before_state)
+        j_before = _objective(touched)
+
+        if j_after - j_before >= monotone_eps and accepted_score > 0.0:
+            _restore(after_state)
             if _debug_counts is not None:
                 _debug_counts["displacements"] = (
                     _debug_counts.get("displacements", 0) + 1
                 )
-                # touched is already the whole schedule here, so this IS the
-                # true whole-schedule objective delta -- record it for
-                # external monotonicity stress-checking.
                 _debug_counts.setdefault("gains", []).append(j_after - j_before)
             return True
-
-        # Revert: undo the re-homing, then restore the original assignment.
-        for j in new_labels:
-            _commit(j, None)
-        _commit(i, None)
-        for j, lbl in before_assign.items():
-            _commit(j, lbl)
         return False
 
     # --- 1. mass-first seeding ---
