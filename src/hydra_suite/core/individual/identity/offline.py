@@ -691,8 +691,10 @@ def _iterative_assign(
         blockers = _blockers(i, c)
         if not blockers or len(blockers) > max_blockers:
             return False
-        # Exact snapshots, so restoring a state also restores list order
-        # (later blocker iteration order depends on it).
+        # Exact snapshots: a rejected move restores the original list order.
+        # (The old path re-committed rejected fragments, moving them to the
+        # tail of their label lists; blocker iteration order can depend on
+        # that. 480 random problems gave identical results either way.)
         before_state = ({k: list(v) for k, v in schedule.items()}, list(current))
         labels = {c, current[i], *(current[j] for j in blockers)}
         members_before = {j for lbl in labels if lbl is not None for j in schedule[lbl]}

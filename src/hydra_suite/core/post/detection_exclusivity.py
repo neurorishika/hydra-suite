@@ -226,11 +226,11 @@ def trim_coasting_ends(trajs: Sequence[pd.DataFrame]) -> list[pd.DataFrame]:
             out.append(traj)
             continue
         real = traj["DetectionID"].notna().to_numpy()
-        if not real.any() or (real[0] and real[-1]):
-            out.append(traj)
-            continue
         order = np.argsort(traj["FrameID"].to_numpy(), kind="stable")
         real_sorted = real[order]
+        if not real_sorted.any() or (real_sorted[0] and real_sorted[-1]):
+            out.append(traj)
+            continue
         first = int(np.argmax(real_sorted))
         last = len(real_sorted) - 1 - int(np.argmax(real_sorted[::-1]))
         keep = order[first : last + 1]
