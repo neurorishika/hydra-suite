@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -310,6 +311,75 @@ def build_gpu_slots(
     slots: list[Optional[CudaDevice]] = list(gpus) * k
     requested = len(slots) if jobs is None else int(jobs)
     return slots[: max(1, min(requested, len(slots)))]
+
+
+# ``--max-jobs auto``: open this many times the GPU slots (GPUs x K) as
+# children, but never so many that a child gets fewer than this many threads.
+MAX_JOBS_AUTO = "auto"
+MAX_JOBS_AUTO_FACTOR = 1.5
+MAX_JOBS_AUTO_MIN_THREADS = 4
+
+
+def parse_max_jobs(value: object) -> int | str:
+    """``--max-jobs`` value: ``"auto"`` (any case) or an integer >= 1."""
+    text = str(value).strip()
+    if text.lower() == MAX_JOBS_AUTO:
+        return MAX_JOBS_AUTO
+    try:
+        number = int(text)
+    except ValueError:
+        raise ValueError(
+            f"--max-jobs must be an integer >= 1 or 'auto', got {value!r}"
+        ) from None
+    if number < 1:
+        raise ValueError(f"--max-jobs must be >= 1, got {number}")
+    return number
+
+
+def is_auto_max_jobs(value: object) -> bool:
+    """True when ``value`` is the ``--max-jobs auto`` sentinel."""
+    return isinstance(value, str) and value.strip().lower() == MAX_JOBS_AUTO
+
+
+def resolve_auto_max_jobs(
+    *,
+    n_gpus: int,
+    jobs_per_gpu: int,
+    budget_cores: int,
+    n_videos: int,
+    threads_per_job: Optional[int] = None,
+) -> tuple[int, str]:
+    """Resolve ``--max-jobs auto`` to a child count M, plus a one-line reason.
+
+    M = ceil(MAX_JOBS_AUTO_FACTOR x GPUs x K), capped so each child keeps at
+    least MAX_JOBS_AUTO_MIN_THREADS threads of the CPU budget (an explicit
+    ``threads_per_job`` replaces that floor as the per-child figure, so auto
+    never oversubscribes on its own), never below GPUs x K (the GPU phase lock
+    then simply does not engage), and never above the number of videos.
+    """
+    base = max(1, int(n_gpus)) * max(1, int(jobs_per_gpu))
+    ideal = math.ceil(MAX_JOBS_AUTO_FACTOR * base)
+    if threads_per_job is not None and int(threads_per_job) > 0:
+        per_child = int(threads_per_job)
+        threads_text = f"--threads-per-job {per_child}"
+    else:
+        per_child = MAX_JOBS_AUTO_MIN_THREADS
+        threads_text = f">={per_child} threads"
+    cap = max(1, int(budget_cores) // per_child)
+    m = max(base, min(ideal, cap))
+    reason = (
+        f"{MAX_JOBS_AUTO_FACTOR:g} x {int(n_gpus)} GPUs x {int(jobs_per_gpu)}; "
+        f"{int(budget_cores)}-core budget allows up to {cap} at {threads_text}"
+    )
+    if cap < base:
+        reason += f", floored at GPUs x K = {base}"
+    videos = max(1, int(n_videos))
+    if m > videos:
+        m = videos
+        reason += f"; capped to {videos} video(s)"
+    if m <= base:
+        reason += "; GPU phase lock not engaged"
+    return m, reason
 
 
 def scheduler_slots(options: FanoutOptions) -> list[Optional[CudaDevice]]:
