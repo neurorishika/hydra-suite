@@ -231,6 +231,28 @@ Examples:
         ),
     )
     track_parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=None,
+        metavar="M",
+        help=(
+            "Total concurrent children (requires --gpus; replaces --jobs). "
+            "Default GPUs x --jobs-per-gpu. Above that, children are spread "
+            "round-robin over the GPUs and share them through a per-GPU "
+            "semaphore: at most --jobs-per-gpu children per GPU run a GPU "
+            "phase (inference) at once, while the rest do CPU-only tracking "
+            "and post-processing. Clamped to fit --cpu-budget."
+        ),
+    )
+    track_parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help=(
+            "Keep running the rest of the batch after a video fails (default: "
+            "stop launching new videos). The exit code is still non-zero."
+        ),
+    )
+    track_parser.add_argument(
         "--longest-first",
         action="store_true",
         help=(
@@ -441,6 +463,8 @@ Examples:
     job_run.add_argument("--cpu-budget", type=int, default=None, metavar="N")
     job_run.add_argument("--jobs-per-gpu", type=int, default=None, metavar="K")
     job_run.add_argument("--longest-first", action="store_true")
+    job_run.add_argument("--max-jobs", type=int, default=None, metavar="M")
+    job_run.add_argument("--keep-going", action="store_true")
     job_run.add_argument("--detach", action="store_true")
     job_run.add_argument("--calibrate", action="store_true")
     job_run.add_argument("--allow-tier-fallback", action="store_true")
@@ -486,6 +510,20 @@ Examples:
     job_record_run.add_argument("argv", nargs=argparse.REMAINDER)
 
     return parser
+
+
+def _max_jobs_error(args) -> str | None:
+    """Why ``--max-jobs`` cannot be used with ``args``, or None (shared check)."""
+    max_jobs = getattr(args, "max_jobs", None)
+    if max_jobs is None:
+        return None
+    if int(max_jobs) < 1:
+        return "--max-jobs must be >= 1"
+    if not str(getattr(args, "gpus", None) or "").strip():
+        return "--max-jobs needs --gpus"
+    if getattr(args, "jobs", None) is not None:
+        return "use either --jobs or --max-jobs, not both"
+    return None
 
 
 def _subparser_choices(
@@ -539,6 +577,9 @@ def parse_arguments(argv: list[str] | None = None) -> object:
         cpu_budget = getattr(args, "cpu_budget", None)
         if cpu_budget is not None and int(cpu_budget) < 1:
             track_parser.error("--cpu-budget must be >= 1")
+        max_jobs_error = _max_jobs_error(args)
+        if max_jobs_error:
+            track_parser.error(max_jobs_error)
 
     if args.command == "job":
         # `job run` forwards these to `track` (and --cpu-budget to the
@@ -550,6 +591,7 @@ def parse_arguments(argv: list[str] | None = None) -> object:
             ("threads_per_job", "--threads-per-job"),
             ("cpu_budget", "--cpu-budget"),
             ("jobs_per_gpu", "--jobs-per-gpu"),
+            ("max_jobs", "--max-jobs"),
         ):
             value = getattr(args, attr, None)
             if value is not None and int(value) < 1:
@@ -567,6 +609,9 @@ def parse_arguments(argv: list[str] | None = None) -> object:
                 has_gpus or int(getattr(args, "jobs", None) or 1) > 1
             ):
                 job_run_parser.error("--longest-first needs --gpus or --jobs > 1")
+            max_jobs_error = _max_jobs_error(args)
+            if max_jobs_error:
+                job_run_parser.error(max_jobs_error)
 
     if args.command == "calibrate":
         cpu_budget = getattr(args, "cpu_budget", None)
@@ -721,6 +766,8 @@ def main(argv: list[str] | None = None) -> object:
                 jobs=getattr(args, "jobs", None),
                 jobs_per_gpu=int(getattr(args, "jobs_per_gpu", 1)),
                 longest_first=bool(getattr(args, "longest_first", False)),
+                max_jobs=getattr(args, "max_jobs", None),
+                keep_going=bool(getattr(args, "keep_going", False)),
                 threads_per_job=getattr(args, "threads_per_job", None),
                 cpu_budget=getattr(args, "cpu_budget", None),
                 log_level=str(args.log_level),

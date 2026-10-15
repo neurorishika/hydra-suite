@@ -496,12 +496,15 @@ def _fanout_flags(args) -> list[str]:
         ("threads_per_job", "--threads-per-job"),
         ("cpu_budget", "--cpu-budget"),
         ("jobs_per_gpu", "--jobs-per-gpu"),
+        ("max_jobs", "--max-jobs"),
     ):
         value = getattr(args, name, None)
         if value is not None and str(value) != "":
             flags += [flag, str(value)]
     if getattr(args, "longest_first", False):
         flags.append("--longest-first")
+    if getattr(args, "keep_going", False):
+        flags.append("--keep-going")
     return flags
 
 
