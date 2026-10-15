@@ -13,6 +13,7 @@ from hydra_suite.runtime.cpu_budget import (
     ENV_CPU_THREADS,
     bind_thread_cpu_cap,
     inherited_cpu_threads,
+    resolve_cpu_budget,
     set_process_cpu_cap,
     single_run_cpu_cap,
 )
@@ -23,7 +24,10 @@ from hydra_suite.trackerkit.batch_fanout import (
     build_gpu_slots,
     decide_gpu_slots,
     host_has_cuda,
+    is_auto_max_jobs,
+    parse_max_jobs,
     plan_fanout_cpu,
+    resolve_auto_max_jobs,
     resolve_slot_count,
     run_batch_fanout,
 )
@@ -58,6 +62,33 @@ def _single_run_cpu_cap(cpu_budget: Optional[int]) -> Optional[int]:
     return single_run_cpu_cap(cpu_budget, logger=logger)
 
 
+def _resolve_auto_max_jobs(
+    *,
+    n_gpus: int,
+    jobs_per_gpu: int,
+    cpu_budget: Optional[int],
+    n_videos: int,
+    threads_per_job: Optional[int],
+) -> Optional[int]:
+    """``--max-jobs auto`` -> M (logged), or None when M <= GPUs x K.
+
+    ``cpu_budget`` is the same figure :func:`plan_fanout_cpu` splits (flag /
+    HYDRA_CPU_BUDGET / usable cores, already bounded by an inherited cap). At
+    or below GPUs x K no child would wait on the GPU phase lock, so the run
+    takes the default (unset) path unchanged.
+    """
+    budget = resolve_cpu_budget(cpu_budget)
+    m, reason = resolve_auto_max_jobs(
+        n_gpus=n_gpus,
+        jobs_per_gpu=jobs_per_gpu,
+        budget_cores=budget.cores,
+        n_videos=n_videos,
+        threads_per_job=threads_per_job,
+    )
+    logger.info("--max-jobs auto -> %d (%s)", m, reason)
+    return m if m > n_gpus * jobs_per_gpu else None
+
+
 def run_tracking_cli(
     video_paths: Sequence[str],
     *,
@@ -69,7 +100,7 @@ def run_tracking_cli(
     jobs: int | None = None,
     jobs_per_gpu: int = 1,
     longest_first: bool = False,
-    max_jobs: int | None = None,
+    max_jobs: int | str | None = None,
     keep_going: bool = False,
     threads_per_job: int | None = None,
     log_level: str = "INFO",
@@ -86,8 +117,9 @@ def run_tracking_cli(
     if longest_first and not fanout_requested(gpus, jobs):
         raise ValueError("--longest-first needs fan-out (--gpus or --jobs > 1)")
     if max_jobs is not None:
-        if int(max_jobs) < 1:
-            raise ValueError(f"max_jobs must be >= 1, got {max_jobs}")
+        # An integer >= 1 or "auto" (resolved below, once the GPUs and the
+        # CPU budget are known).
+        max_jobs = parse_max_jobs(max_jobs)
         if not str(gpus or "").strip():
             raise ValueError("--max-jobs needs --gpus")
         if jobs is not None:
@@ -139,9 +171,9 @@ def run_tracking_cli(
     effective_jobs = len(build_gpu_slots(devices, jobs=jobs, jobs_per_gpu=jobs_per_gpu))
     if max_jobs is not None and not devices:
         logger.warning(
-            "--max-jobs %d ignored: --gpus %s resolved to no CUDA device, so the "
+            "--max-jobs %s ignored: --gpus %s resolved to no CUDA device, so the "
             "batch runs unpinned with %d job(s).",
-            int(max_jobs),
+            max_jobs,
             gpus,
             effective_jobs,
         )
@@ -168,6 +200,14 @@ def run_tracking_cli(
             ENV_CPU_THREADS,
             inherited,
             cpu_budget,
+        )
+    if is_auto_max_jobs(max_jobs) and devices:
+        max_jobs = _resolve_auto_max_jobs(
+            n_gpus=len(devices),
+            jobs_per_gpu=int(jobs_per_gpu),
+            cpu_budget=cpu_budget,
+            n_videos=len(specs),
+            threads_per_job=threads_per_job,
         )
     options, cpu_plan = plan_fanout_cpu(
         FanoutOptions(

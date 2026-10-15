@@ -18,6 +18,12 @@ from hydra_suite.core.inference.config import (
     MINIMUM_CALIBRATION_BUDGET_SECONDS,
 )
 from hydra_suite.core.inference.limits import DetectionLimitError
+from hydra_suite.trackerkit.batch_fanout import (
+    MAX_JOBS_AUTO_FACTOR,
+    MAX_JOBS_AUTO_MIN_THREADS,
+    is_auto_max_jobs,
+    parse_max_jobs,
+)
 from hydra_suite.trackerkit.cli import run_tracking_cli
 
 # Fix OpenMP conflict on macOS (PyTorch + OpenCV + NumPy can load multiple
@@ -232,16 +238,20 @@ Examples:
     )
     track_parser.add_argument(
         "--max-jobs",
-        type=int,
+        type=_max_jobs_type,
         default=None,
-        metavar="M",
+        metavar="M|auto",
         help=(
             "Total concurrent children (requires --gpus; replaces --jobs). "
             "Default GPUs x --jobs-per-gpu. Above that, children are spread "
             "round-robin over the GPUs and share them through a per-GPU "
             "semaphore: at most --jobs-per-gpu children per GPU run a GPU "
             "phase (inference) at once, while the rest do CPU-only tracking "
-            "and post-processing. Clamped to fit --cpu-budget."
+            "and post-processing. Clamped to fit --cpu-budget. 'auto' = "
+            f"{MAX_JOBS_AUTO_FACTOR:g} x GPUs x --jobs-per-gpu, capped so each "
+            f"child keeps >= {MAX_JOBS_AUTO_MIN_THREADS} CPU threads (or "
+            "--threads-per-job) and to the video count, "
+            "never below GPUs x --jobs-per-gpu."
         ),
     )
     track_parser.add_argument(
@@ -463,7 +473,9 @@ Examples:
     job_run.add_argument("--cpu-budget", type=int, default=None, metavar="N")
     job_run.add_argument("--jobs-per-gpu", type=int, default=None, metavar="K")
     job_run.add_argument("--longest-first", action="store_true")
-    job_run.add_argument("--max-jobs", type=int, default=None, metavar="M")
+    job_run.add_argument(
+        "--max-jobs", type=_max_jobs_type, default=None, metavar="M|auto"
+    )
     job_run.add_argument("--keep-going", action="store_true")
     job_run.add_argument("--detach", action="store_true")
     job_run.add_argument("--calibrate", action="store_true")
@@ -512,12 +524,20 @@ Examples:
     return parser
 
 
+def _max_jobs_type(value: str) -> int | str:
+    """argparse ``type`` for ``--max-jobs``: an integer >= 1 or ``auto``."""
+    try:
+        return parse_max_jobs(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def _max_jobs_error(args) -> str | None:
     """Why ``--max-jobs`` cannot be used with ``args``, or None (shared check)."""
     max_jobs = getattr(args, "max_jobs", None)
     if max_jobs is None:
         return None
-    if int(max_jobs) < 1:
+    if not is_auto_max_jobs(max_jobs) and int(max_jobs) < 1:
         return "--max-jobs must be >= 1"
     if not str(getattr(args, "gpus", None) or "").strip():
         return "--max-jobs needs --gpus"
@@ -594,6 +614,8 @@ def parse_arguments(argv: list[str] | None = None) -> object:
             ("max_jobs", "--max-jobs"),
         ):
             value = getattr(args, attr, None)
+            if is_auto_max_jobs(value):
+                continue
             if value is not None and int(value) < 1:
                 _subparser_choices(subcommands["job"])[job_command].error(
                     f"{flag} must be >= 1"

@@ -79,6 +79,7 @@ trackerkit track --video-list batch.txt --gpus 0,2,GPU-8f1a  # ordinals or UUID 
 trackerkit track --video-list batch.txt --jobs 3             # three children sharing the current device (CPU / Apple Silicon)
 trackerkit track --video-list batch.txt --gpus 0-3 --jobs-per-gpu 2  # two children per GPU, CPU budget split 8 ways
 trackerkit track --video-list batch.txt --gpus 0-3 --max-jobs 8      # 8 children, at most 1 doing GPU work per GPU
+trackerkit track --video-list batch.txt --gpus 0-3 --jobs-per-gpu 2 --max-jobs auto  # 12 children (1.5 x 4 x 2), CPU budget permitting
 trackerkit track --video-list batch.txt --gpus 0-3 --keep-going      # a failed video does not stop the batch
 ```
 
@@ -170,6 +171,13 @@ a slot when its child dies, so a crash cannot wedge a GPU. The default
 (`--max-jobs` unset, i.e. GPUs × K) launches children exactly as before and
 gives them no lock settings at all; the same holds for any M ≤ GPUs × K.
 
+M is the number of children running **at the same time**, not the number of
+videos. Videos beyond M wait in the queue and start as children finish, the
+same as without `--max-jobs`. A queued video holds no GPU slot, so it never
+competes for one. The semaphore matters only when more children are *running*
+than there are GPU slots (M > GPUs × K). At or below that, every running
+child already has a slot of its own and there is nothing to share.
+
 M counts against the [CPU budget](#cpu-budget) like any other job count:
 each child gets `threads_per_job = budget // min(M, videos)` threads (e.g.
 `--cpu-budget 64 --max-jobs 16` gives 4 threads per child, half of what
@@ -178,6 +186,26 @@ each child gets `threads_per_job = budget // min(M, videos)` threads (e.g.
 `--threads-per-job N` overrides the split. Choose M from the time split: if a video spends
 roughly as long on the CPU as on the GPU, M ≈ 2 × GPUs × K keeps the GPUs
 busy. More children also means more host RAM.
+
+This is a trade-off. Each extra child gives a GPU another video to work on
+while the others are in CPU phases. It also shrinks every child's share of
+the CPU, which slows the CPU phases that are the reason to go above
+GPUs × K in the first place. `--max-jobs auto` picks a moderate point:
+
+- M = ⌈1.5 × GPUs × K⌉, then
+- capped at `budget // 4`, so each child keeps at least 4 CPU threads (with
+  `--threads-per-job N` the cap is `budget // N` instead, so `auto` never
+  oversubscribes the budget on its own), then
+- never below GPUs × K (if the CPU cap would go lower, `auto` falls back to
+  GPUs × K and the semaphore does not engage), and
+- never above the number of videos.
+
+`budget` is the same figure the children's threads come from (`--cpu-budget`,
+else `HYDRA_CPU_BUDGET`, else the usable cores, bounded by an inherited
+`HYDRA_CPU_THREADS`). The run logs the result and the reason, for example
+`--max-jobs auto -> 15 (1.5 x 5 GPUs x 2; 96-core budget allows up to 24 at
+>=4 threads)`. Like an integer M, `auto` needs `--gpus` and cannot be combined
+with `--jobs`. An integer M is used exactly as given.
 
 ### On a shared machine
 
