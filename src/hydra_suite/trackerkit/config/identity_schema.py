@@ -112,6 +112,12 @@ _EVIDENCE_FIELD_KEYS: dict[str, str] = {
     "trust_split_min_confidence": "identity_trust_split_min_confidence",
 }
 
+# Persisted config keys that have no TrackerKit widget. The GUI carries their
+# values from the loaded file through build_config_dict (so GUI Save does not
+# erase them and GUI runs see the same values as `trackerkit track` on the
+# same file). See trackerkit.gui.orchestrators.config.CONFIG_ONLY_KEYS.
+CONFIG_ONLY_KEYS: tuple[str, ...] = tuple(_EVIDENCE_FIELD_KEYS.values())
+
 # PostHocIdentityConfig field -> engine-params key
 EVIDENCE_ENGINE_KEYS: dict[str, str] = {
     "noncatalog_to_unknown": "IDENTITY_NONCATALOG_TO_UNKNOWN",
