@@ -62,10 +62,78 @@ class PostHocIdentityConfig:
     # the fragment solver (which always smoothed when a cache was
     # present); unchecking it makes the solver use raw per-frame evidence.
     smoothing_enabled: bool = True
+    # Evidence honesty (2026-10 identity-evidence fixes). See
+    # docs/user-guide/post-processing.md "Honest identity evidence".
+    noncatalog_to_unknown: bool = True
+    fragment_min_absolute_posterior: float = 0.3
+    fragment_absolute_seeding: bool = True
+    # Evidence-trust layer (core/individual/identity/evidence_trust.py).
+    # Distances in body lengths, calibrated per video. No GUI controls yet.
+    evidence_trust_enabled: bool = False
+    trust_isolation_bl: float = 1.0
+    trust_prior_isolation_bl: float = 2.0
+    trust_area_tolerance: float = 0.35
+    trust_min_aspect_fraction: float = 0.65
+    trust_min_prior_detections: int = 200
+    trust_keypoint_conf: float = 0.5
+    trust_min_keypoint_fraction: float = 0.75
+    trust_view_move_bl: float = 0.5
+    trust_view_turn_deg: float = 30.0
+    trust_min_views: int = 1
+    trust_split_min_log_odds: float = 8.0
+    trust_split_min_views: int = 3
+    trust_split_min_confidence: float = 0.5
     # Reserved (Phase 6):
     changepoint_enabled: bool = False
     fragment_min_frames: int = 0
     ambiguity_margin: float = 0.0
+
+
+_EVIDENCE_FIELD_KEYS: dict[str, str] = {
+    # PostHocIdentityConfig field -> persisted snake_case config key
+    "noncatalog_to_unknown": "identity_noncatalog_to_unknown",
+    "fragment_min_absolute_posterior": "fragment_min_absolute_posterior",
+    "fragment_absolute_seeding": "fragment_absolute_seeding",
+    "evidence_trust_enabled": "identity_evidence_trust",
+    "trust_isolation_bl": "identity_trust_isolation_bl",
+    "trust_prior_isolation_bl": "identity_trust_prior_isolation_bl",
+    "trust_area_tolerance": "identity_trust_area_tolerance",
+    "trust_min_aspect_fraction": "identity_trust_min_aspect_fraction",
+    "trust_min_prior_detections": "identity_trust_min_prior_detections",
+    "trust_keypoint_conf": "identity_trust_keypoint_conf",
+    "trust_min_keypoint_fraction": "identity_trust_min_keypoint_fraction",
+    "trust_view_move_bl": "identity_trust_view_move_bl",
+    "trust_view_turn_deg": "identity_trust_view_turn_deg",
+    "trust_min_views": "identity_trust_min_views",
+    "trust_split_min_log_odds": "identity_trust_split_min_log_odds",
+    "trust_split_min_views": "identity_trust_split_min_views",
+    "trust_split_min_confidence": "identity_trust_split_min_confidence",
+}
+
+# PostHocIdentityConfig field -> engine-params key
+EVIDENCE_ENGINE_KEYS: dict[str, str] = {
+    "noncatalog_to_unknown": "IDENTITY_NONCATALOG_TO_UNKNOWN",
+    "fragment_min_absolute_posterior": "FRAGMENT_MIN_ABSOLUTE_POSTERIOR",
+    "fragment_absolute_seeding": "FRAGMENT_ABSOLUTE_SEEDING",
+    "evidence_trust_enabled": "IDENTITY_EVIDENCE_TRUST",
+    **{
+        f: "IDENTITY_" + f.upper()
+        for f in _EVIDENCE_FIELD_KEYS
+        if f.startswith("trust_")
+    },
+}
+
+
+def _evidence_fields_from_cfg(cfg: Any, cfg_get: Callable[..., Any]) -> dict:
+    """The evidence-honesty / trust fields of ``PostHocIdentityConfig``,
+    read from the persisted config with the dataclass defaults."""
+    defaults = PostHocIdentityConfig()
+    out: dict[str, Any] = {}
+    for fname, key in _EVIDENCE_FIELD_KEYS.items():
+        default = getattr(defaults, fname)
+        raw = cfg_get(cfg, key, default)
+        out[fname] = type(default)(raw) if raw is not None else default
+    return out
 
 
 @dataclass
@@ -179,6 +247,7 @@ class IdentityConfig:
             enabled=enable_postprocessing,
             smoothing_enabled=bool(cfg_get(cfg, "enable_identity_smoothing", True)),
             changepoint_enabled=bool(cfg_get(cfg, "enable_pelt_splitting", False)),
+            **_evidence_fields_from_cfg(cfg, cfg_get),
         )
         calibration_required = bool(cfg_get(cfg, "calibration_required", False))
         return cls(

@@ -2811,6 +2811,7 @@ class TrackingEngineCore:
                 return _identity_catalog.known_uniform_log_prior()
 
             from hydra_suite.core.individual.identity.phase_remap import (
+                noncatalog_to_unknown_enabled,
                 remap_phase_log_probs,
             )
 
@@ -2819,6 +2820,7 @@ class TrackingEngineCore:
                 labels,
                 _identity_catalog,
                 _phase_label_maps.get(str(source_name), {}),
+                noncatalog_to_unknown=noncatalog_to_unknown_enabled(p),
             )
 
         def _decoder_track_label(

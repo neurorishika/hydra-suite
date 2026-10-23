@@ -576,7 +576,10 @@ def derive_identity_keys(df: pd.DataFrame, params) -> pd.DataFrame:
 
 
 def resolve_identity(
-    with_pose_df: pd.DataFrame, params, identity_evidence_cache_path=None
+    with_pose_df: pd.DataFrame,
+    params,
+    identity_evidence_cache_path=None,
+    detection_cache_path=None,
 ) -> pd.DataFrame:
     """Run the fragment solver exactly once and finalize the Final family.
 
@@ -602,6 +605,12 @@ def resolve_identity(
     ``None``/unopenable degrades gracefully: the solver falls back to
     whatever CSV columns (if any) are present, matching pre-Phase-5
     behavior.
+
+    ``detection_cache_path``: this run's ``detection.npz``. Read only when
+    the evidence-trust layer (``IDENTITY_EVIDENCE_TRUST``) is on, for the
+    per-detection OBB geometry its isolation / shape checks need. The trust
+    calibration (body length, single-animal prior) is computed ONCE here
+    over the whole video, before the per-arena split.
     """
     if with_pose_df is None or with_pose_df.empty:
         return with_pose_df
@@ -632,6 +641,17 @@ def resolve_identity(
             try:
                 catalog = IdentityCatalog.from_spec(catalog_spec)
                 cache = _open_identity_evidence_cache(identity_evidence_cache_path)
+                evidence_trust = None
+                if params.get("IDENTITY_EVIDENCE_TRUST", False):
+                    from hydra_suite.core.individual.identity.evidence_trust import (
+                        build_evidence_trust,
+                    )
+
+                    evidence_trust = build_evidence_trust(
+                        with_pose_df,
+                        params,
+                        detection_cache_path=detection_cache_path,
+                    )
                 # The fragment solver performs an injective fragment->label
                 # assignment: globally, arena 0's "ant A" and arena 7's
                 # "ant A" would be forced to compete for one catalog entry,
@@ -652,6 +672,7 @@ def resolve_identity(
                             params,
                             cache=cache,
                             catalog_spec=catalog_spec,
+                            evidence_trust=evidence_trust,
                         )
                         for _, group in with_pose_df.groupby("arena_id", sort=True)
                     ]
@@ -663,6 +684,7 @@ def resolve_identity(
                         params,
                         cache=cache,
                         catalog_spec=catalog_spec,
+                        evidence_trust=evidence_trust,
                     )
                 logger.info("Fragment solver complete.")
             except Exception:
@@ -680,7 +702,7 @@ def resolve_identity(
 
 
 def apply_identity_postprocessing_to_df(
-    with_pose_df, params, identity_evidence_cache_path=None
+    with_pose_df, params, identity_evidence_cache_path=None, detection_cache_path=None
 ):
     """Run identity-aware split/join processing on the augmented dataframe.
 
@@ -698,4 +720,5 @@ def apply_identity_postprocessing_to_df(
         derive_identity_keys(with_pose_df, params),
         params,
         identity_evidence_cache_path,
+        detection_cache_path=detection_cache_path,
     )

@@ -12,6 +12,12 @@ This module owns that distribution. The semantics match
 entry the phase probability, then renormalize -- lifted one level up from
 within-model factors to across-model phases.
 
+Mass a classifier puts on a class that reaches no catalog entry (a declared
+non-identifying class, or anything out of vocabulary) is routed to the
+catalog's ``unknown`` slot by default, so the remapped vector is an absolute
+posterior rather than one renormalized over the identifying classes only --
+see :func:`remap_phase_log_probs`.
+
 Core: numpy + stdlib only.
 """
 
@@ -59,32 +65,61 @@ def remap_phase_log_probs(
     source_labels: Sequence[str],
     catalog: IdentityCatalog,
     phase_label_map: dict[str, list[int]],
+    *,
+    noncatalog_to_unknown: bool = True,
 ) -> np.ndarray:
     """Map one phase-basis log-prob vector into the global catalog basis.
 
     Unreachable entries keep the ``1e-300`` floor rather than a hard zero, so
     the single-model case is arithmetically identical to the exact-match
     implementation this replaced.
+
+    ``noncatalog_to_unknown`` (default True, ``IDENTITY_NONCATALOG_TO_UNKNOWN``)
+    decides what happens to the mass of a source class that reaches NO
+    catalog entry -- a declared non-identifying class (``notag``, a
+    whole-composite mark) or any out-of-vocabulary class. That mass is the
+    classifier saying "this crop carries no identity", so it is routed into
+    the catalog's ``unknown`` slot (index 0) and the vector stays a true,
+    absolute posterior: ``p(known label k)`` is what the classifier actually
+    put on ``k``. With ``False`` (the pre-2026-10 behaviour) that mass is
+    dropped and the rest renormalized, which inflates every known label by
+    ``1 / (1 - p_noncatalog)`` -- a crop that is 90 % ``notag`` and 10 % one
+    tag then reads as a confident tag.
     """
     arr = np.asarray(log_probs, dtype=np.float64)
     probs = np.exp(arr - np.max(arr))
     probs /= np.clip(probs.sum(), 1e-300, None)
 
     remapped = np.full(catalog.size, 1e-300, dtype=np.float64)
+    unknown_idx = catalog.unknown_index
     for src_idx, raw_label in enumerate(source_labels):
         label = str(raw_label)
         targets = phase_label_map.get(label)
         if targets is None:
             # "unknown" (and any label with no structured provenance, e.g. a
             # tag-sourced entry) still resolves by direct lookup.
-            if not catalog.contains(label):
+            if catalog.contains(label):
+                targets = [catalog.index_of(label)]
+            elif noncatalog_to_unknown:
+                targets = [unknown_idx]
+            else:
                 continue
-            targets = [catalog.index_of(label)]
         for idx in targets:
             remapped[idx] += float(probs[src_idx])
 
     remapped /= np.clip(remapped.sum(), 1e-300, None)
     return np.log(np.clip(remapped, 1e-300, None))
+
+
+def noncatalog_to_unknown_enabled(params: Mapping | None) -> bool:
+    """``IDENTITY_NONCATALOG_TO_UNKNOWN`` from an engine-params mapping.
+
+    The one place the default lives, shared by the live tracking worker and
+    the offline evidence loader so the two remap paths cannot disagree.
+    """
+    if not params:
+        return True
+    return bool(params.get("IDENTITY_NONCATALOG_TO_UNKNOWN", True))
 
 
 def phase_map_key(cfg: Mapping) -> str:

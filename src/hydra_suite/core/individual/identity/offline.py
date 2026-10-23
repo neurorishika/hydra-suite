@@ -169,6 +169,107 @@ def _combined_support(
     return _normalize_support_scores(known_labels, combined)
 
 
+_LENGTH_WEIGHT_WARNED: set[float] = set()
+
+
+def _length_weight(params: dict[str, Any]) -> float:
+    """``FRAGMENT_LENGTH_WEIGHT`` clamped to [0, 1] -- loudly.
+
+    The value has always been clamped; a configured value outside the range
+    used to be clamped silently, so a user setting 2.0 never learned it acted
+    as 1.0. Warns once per distinct out-of-range value.
+    """
+    raw = float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))
+    clamped = min(1.0, max(0.0, raw))
+    if clamped != raw and raw not in _LENGTH_WEIGHT_WARNED:
+        _LENGTH_WEIGHT_WARNED.add(raw)
+        log.warning(
+            "FRAGMENT_LENGTH_WEIGHT=%g is outside [0, 1] and is clamped to %g "
+            "(fragment_length_weight in the config).",
+            raw,
+            clamped,
+        )
+    return clamped
+
+
+def _min_absolute_posterior(params: dict[str, Any]) -> float:
+    """``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` (default 0.3; 0 disables)."""
+    try:
+        return max(0.0, float(params.get("FRAGMENT_MIN_ABSOLUTE_POSTERIOR", 0.3)))
+    except (TypeError, ValueError):
+        return 0.3
+
+
+def _is_trusted_tier(frag_row, params: dict[str, Any]) -> bool:
+    """True when the fragment has enough distinct trusted views to be seeded
+    from trusted evidence (only ever true when the trust layer ran)."""
+    n_views = frag_row.get("TrustedViews")
+    if n_views is None or not np.isfinite(float(n_views)):
+        return False
+    return int(n_views) >= max(1, int(params.get("IDENTITY_TRUST_MIN_VIEWS", 1)))
+
+
+def _fragment_support(
+    frag_row, known_labels: list[str], params: dict[str, Any]
+) -> dict[str, float]:
+    """Per-label support the solver scores a fragment with.
+
+    - Trusted tier (evidence-trust layer active and the fragment has at least
+      ``IDENTITY_TRUST_MIN_VIEWS`` distinct trusted views): the mean over
+      views of the ABSOLUTE posterior -- not renormalized over the known
+      labels, so mass the classifier put on ``unknown``/non-identifying
+      classes stays out of every label's support.
+    - Otherwise: the relative, known-label-renormalized
+      :func:`_combined_support`.
+
+    Either way, when the fragment has cache evidence, a label whose ABSOLUTE
+    mean posterior over the fragment (``MeanCNNProbs``, which keeps the
+    ``unknown`` mass in the denominator) is below
+    ``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` gets zero support. Relative
+    support alone cannot tell "0.9 of a 0.05 posterior" from "0.9 of a 0.95
+    posterior": renormalizing over the known labels makes a long fragment
+    whose every frame says "probably no identity" read as near-certain.
+    """
+    if _is_trusted_tier(frag_row, params):
+        support = dict(frag_row.get("TrustedSupport") or {})
+        absolute = support
+    else:
+        support = _combined_support(frag_row, known_labels, params)
+        absolute = frag_row.get("MeanCNNProbs") or {}
+    gate = _min_absolute_posterior(params)
+    if gate <= 0.0 or not absolute:
+        # No cache evidence at all (e.g. no sidecar, or rows with no
+        # DetectionID): there is no absolute posterior to gate on, and the
+        # fragment keeps whatever the online prior alone supports, as before.
+        return support
+    return {
+        lbl: (v if float(absolute.get(lbl, 0.0)) >= gate else 0.0)
+        for lbl, v in support.items()
+    }
+
+
+def _seed_mass(frag_row, support: dict[str, float], duration: float, params) -> float:
+    """Seeding / Unknown-rescue priority of one fragment (higher first).
+
+    Trusted tier: ``distinct trusted views x top support``. Otherwise
+    ``duration x top evidence``, where the evidence is the fragment's
+    ABSOLUTE mean posterior on its top-support label when
+    ``FRAGMENT_ABSOLUTE_SEEDING`` is on (default) -- so a long fragment
+    whose relative support saturated on weak absolute evidence does not
+    seed ahead of a shorter, genuinely identified one -- and the relative
+    top support otherwise (the historical key).
+    """
+    top_label = max(support, key=support.get) if support else None
+    top = float(support[top_label]) if top_label is not None else 0.0
+    if _is_trusted_tier(frag_row, params):
+        return float(frag_row.get("TrustedViews") or 0) * top
+    if top_label is not None and bool(params.get("FRAGMENT_ABSOLUTE_SEEDING", True)):
+        if top <= 0.0:
+            return 0.0
+        top = float((frag_row.get("MeanCNNProbs") or {}).get(top_label, 0.0))
+    return _evidence_mass(duration, top)
+
+
 def detect_identity_changepoints(
     smoothed_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
     catalog: IdentityCatalog,
@@ -261,6 +362,40 @@ def detect_identity_changepoints(
         if split_frames:
             result[traj_id] = split_frames
 
+    return result
+
+
+def detect_trusted_label_switches(
+    df: pd.DataFrame,
+    raw_evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
+    evidence_trust: Any,
+) -> dict[Any, list[int]]:
+    """``{TrajectoryID: [inclusive segment ends]}`` from TRUSTED evidence only.
+
+    The replacement for :func:`detect_identity_changepoints` when the
+    evidence-trust layer is active. PELT on every frame's smoothed posterior
+    splits on any distribution change -- including the ones crowding and
+    occlusion cause -- with a constant penalty. Here a trajectory is split
+    only where its distinct trusted views switch from confidently one label
+    to confidently another, by an evidence log-odds margin
+    (``IDENTITY_TRUST_SPLIT_*``, see ``evidence_trust.find_label_switches``).
+    """
+    from hydra_suite.core.individual.identity.evidence_trust import (
+        find_label_switches,
+        fragment_views,
+    )
+
+    result: dict[Any, list[int]] = {}
+    if not raw_evidence_by_traj or df is None or df.empty:
+        return result
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        seq = raw_evidence_by_traj.get(traj_id)
+        if not seq:
+            continue
+        views = fragment_views(grp, seq, evidence_trust)
+        cuts = find_label_switches(views, evidence_trust.settings)
+        if cuts:
+            result[traj_id] = cuts
     return result
 
 
@@ -487,9 +622,16 @@ def _iterative_assign(
     1. **Mass-first seeding**: fragments are visited in descending
        ``_evidence_mass`` (duration x top support) order and each greedily
        claims its best free, unvetoed label. A label is a *candidate* for a
-       fragment at all only if its normalised support clears
-       ``FRAGMENT_MIN_SUPPORT`` (an absolute posterior floor) and it ranks
-       in the fragment's top ``FRAGMENT_TOP_K`` labels by support. Seeding
+       fragment at all only if its support clears ``FRAGMENT_MIN_SUPPORT``
+       and it ranks in the fragment's top ``FRAGMENT_TOP_K`` labels by
+       support. For an untiered fragment that support is RELATIVE
+       (renormalized over the known labels, see ``_combined_support``), so
+       ``FRAGMENT_MIN_SUPPORT`` is a relative floor; the absolute floor is
+       ``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` (see ``_fragment_support``).
+       With the evidence-trust layer active, fragments with trusted views
+       (the trusted tier) all seed before any other fragment, and an
+       untrusted-tier fragment may never displace a trusted-tier one -- it
+       can only take labels the trusted tier left free. Seeding
        long/confident fragments first means a 700-frame 0.999-evidence
        track claims its label before a swarm of short noisy fragments ever
        gets a turn — the inverse of the old doubt-ordered-only walk, which
@@ -551,7 +693,7 @@ def _iterative_assign(
 
     Returns ``{frag_index: assigned_label_or_None}`` (None means Unknown).
     """
-    length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
+    length_w = _length_weight(params)
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
     max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
@@ -583,7 +725,12 @@ def _iterative_assign(
         else np.ones(n, dtype=np.float64)
     )
     length_factors = 1.0 - length_w * (1.0 - length_scales)
-    supports = [_combined_support(r, known_labels, params) for r in rows]
+    supports = [_fragment_support(r, known_labels, params) for r in rows]
+    trusted_tier = np.array([_is_trusted_tier(r, params) for r in rows], dtype=bool)
+    seed_mass = np.array(
+        [_seed_mass(r, supports[i], durations[i], params) for i, r in enumerate(rows)],
+        dtype=np.float64,
+    )
     stabilities = np.array(
         [float(r.get("Stability", 0.0)) for r in rows], dtype=np.float64
     )
@@ -691,6 +838,9 @@ def _iterative_assign(
         blockers = _blockers(i, c)
         if not blockers or len(blockers) > max_blockers:
             return False
+        if not trusted_tier[i] and any(trusted_tier[j] for j in blockers):
+            # Untrusted evidence never evicts trusted evidence.
+            return False
         # Exact snapshots: a rejected move restores the original list order.
         # (The old path re-committed rejected fragments, moving them to the
         # tail of their label lists; blocker iteration order can depend on
@@ -740,12 +890,10 @@ def _iterative_assign(
         return False
 
     # --- 1. mass-first seeding ---
-    order = sorted(
-        range(n),
-        key=lambda i: -_evidence_mass(
-            durations[i], max(supports[i].values()) if supports[i] else 0.0
-        ),
-    )
+    # Trusted tier first (no-op when the trust layer is off: every fragment
+    # is then untiered), each tier by descending seed mass. ``sorted`` is
+    # stable, so ties keep fragment order exactly as before.
+    order = sorted(range(n), key=lambda i: (not trusted_tier[i], -seed_mass[i]))
     for i in order:
         for c in candidates_of[i]:
             if _score(i, c) > 0.0:
@@ -827,9 +975,7 @@ def _iterative_assign(
     # --- 3. unknown rescue by descending mass (may displace) ---
     for i in sorted(
         (i for i in range(n) if current[i] is None),
-        key=lambda i: -_evidence_mass(
-            durations[i], max(supports[i].values()) if supports[i] else 0.0
-        ),
+        key=lambda i: (not trusted_tier[i], -seed_mass[i]),
     ):
         placed = False
         for c in candidates_of[i]:
@@ -889,6 +1035,8 @@ def _build_traj_summaries(
     df: pd.DataFrame,
     catalog: IdentityCatalog,
     evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
+    raw_evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
+    evidence_trust: Any = None,
 ) -> pd.DataFrame:
     """Build a per-trajectory summary DataFrame consumed by the iterative solver.
 
@@ -922,8 +1070,21 @@ def _build_traj_summaries(
     required input; a fragment with no such label defaults to "unknown"/0.0
     confidence and the cache evidence alone still drives assignment, which
     is the honesty fix).
+
+    With an active ``evidence_trust`` (``evidence_trust.EvidenceTrust``) and
+    ``raw_evidence_by_traj`` (the UNSMOOTHED per-frame evidence; smoothing
+    would leak untrusted frames into trusted ones), two more columns are
+    added: ``TrustedViews`` (distinct trusted views) and ``TrustedSupport``
+    (absolute per-label posterior, mean over views).
     """
     known_labels = list(catalog.labels[1:])
+    use_trust = bool(
+        evidence_trust is not None
+        and getattr(evidence_trust, "active", False)
+        and raw_evidence_by_traj
+    )
+    if use_trust:
+        from hydra_suite.core.individual.identity.evidence_trust import fragment_views
     has_orig_col = "OriginalTrajectoryID" in df.columns
     rows: list[dict] = []
 
@@ -948,14 +1109,26 @@ def _build_traj_summaries(
             sx = sy = ex = ey = math.nan
 
         fragment_evidence: list[tuple[int, np.ndarray]] = []
+        orig_id = (
+            grp_sorted["OriginalTrajectoryID"].iloc[0] if has_orig_col else traj_id
+        )
+        frame_set = {int(f) for f in grp_sorted["FrameID"]}
         if evidence_by_traj:
-            orig_id = (
-                grp_sorted["OriginalTrajectoryID"].iloc[0] if has_orig_col else traj_id
-            )
-            frame_set = {int(f) for f in grp_sorted["FrameID"]}
             fragment_evidence = [
                 (f, lp) for f, lp in evidence_by_traj.get(orig_id, []) if f in frame_set
             ]
+        trusted_extra: dict[str, Any] = {}
+        if use_trust:
+            raw_seq = [
+                (f, lp)
+                for f, lp in raw_evidence_by_traj.get(orig_id, [])
+                if f in frame_set
+            ]
+            views = fragment_views(grp_sorted, raw_seq, evidence_trust)
+            trusted_extra = {
+                "TrustedViews": views.n_views,
+                "TrustedSupport": views.support(known_labels),
+            }
 
         if fragment_evidence:
             mean_probs, cnn_log_scores, stability = _evidence_dicts_for_fragment(
@@ -1006,6 +1179,7 @@ def _build_traj_summaries(
                 "Stability": stability,
                 "OnlineLabel": online_label,
                 "OnlineConfidence": online_conf,
+                **trusted_extra,
             }
         )
 
@@ -1103,6 +1277,8 @@ def solve_global_assignment(
     catalog: IdentityCatalog,
     params: dict[str, Any],
     evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
+    raw_evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
+    evidence_trust: Any = None,
 ) -> pd.DataFrame:
     """Assign one identity label per trajectory via the iterative solver.
 
@@ -1130,7 +1306,13 @@ def solve_global_assignment(
     if not known_labels or df is None or df.empty:
         return df if df is not None else pd.DataFrame()
 
-    traj_summaries = _build_traj_summaries(df, catalog, evidence_by_traj)
+    traj_summaries = _build_traj_summaries(
+        df,
+        catalog,
+        evidence_by_traj,
+        raw_evidence_by_traj=raw_evidence_by_traj,
+        evidence_trust=evidence_trust,
+    )
     if traj_summaries.empty:
         return df
 
@@ -1151,7 +1333,7 @@ def solve_global_assignment(
             continue
         final_schedule.setdefault(lbl, []).append(_seg_from_row(summaries.iloc[i]))
 
-    length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
+    length_w = _length_weight(params)
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
     max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
@@ -1177,7 +1359,7 @@ def solve_global_assignment(
         if lbl is None or lbl not in known_labels:
             assigned_scores.append(0.0)
             continue
-        support = _combined_support(summaries.iloc[i], known_labels, params)
+        support = _fragment_support(summaries.iloc[i], known_labels, params)
         sched_minus_self = {
             lbl: [
                 seg
@@ -1442,8 +1624,9 @@ def assess_evidence_quality(
     unsmoothed per-detection posteriors so a broken source can't be masked
     by forward-backward smoothing before the check runs.
 
-    conf_frac: fraction of (frame, detection) rows whose max KNOWN posterior
-        (excluding the ``unknown`` slot) is >= ``EVIDENCE_CONF_LEVEL``.
+    conf_frac: fraction of (frame, detection) rows whose max KNOWN posterior,
+        renormalized over the known labels (the ``unknown`` slot excluded),
+        is >= ``EVIDENCE_CONF_LEVEL``.
     diversity: mean over frames of distinct argmax labels / min(#known
         labels, #detections in that frame). Low when the source keeps
         pointing at the same one or two labels regardless of which
@@ -1458,6 +1641,13 @@ def assess_evidence_quality(
         for frame_id, lp in sequence:
             p = np.exp(lp - np.logaddexp.reduce(lp))
             known = p[1:]
+            # Renormalized over the known labels: this asks "is the source
+            # informative ABOUT IDENTITY when it names one", so a detection
+            # whose mass honestly sits on ``unknown`` (a non-identifying
+            # class, see phase_remap) must not count as a broken classifier.
+            known_total = known.sum()
+            if known_total > 0:
+                known = known / known_total
             total += 1
             if known.max() >= EVIDENCE_CONF_LEVEL:
                 conf += 1
@@ -1479,6 +1669,7 @@ def run_fragment_solver(
     params: dict[str, Any] | None = None,
     cache: Any = None,
     catalog_spec: Any = None,
+    evidence_trust: Any = None,
 ) -> pd.DataFrame:
     """End-to-end fragment solver: cache evidence → forward-backward smoothing
     → (optional PELT split on the smoothed posterior) → iterative assign.
@@ -1518,12 +1709,27 @@ def run_fragment_solver(
         FRAGMENT_TAG_WEIGHT              float  default 0.15
         ONLINE_PRIOR_WEIGHT              float  default 0.25
         FRAGMENT_MIN_SUPPORT             float  default 0.5 — a label is a candidate
-            for a fragment only if its normalised support ≥ this; absolute posterior
-            floor.
+            for a fragment only if its support ≥ this. For an untiered fragment the
+            support is RELATIVE (renormalized over the known labels), so this is a
+            relative floor, NOT an absolute posterior floor -- see
+            FRAGMENT_MIN_ABSOLUTE_POSTERIOR.
+        FRAGMENT_MIN_ABSOLUTE_POSTERIOR  float  default 0.3 — a label gets zero
+            support for a fragment whose mean ABSOLUTE posterior on it (unknown /
+            non-identifying mass kept in the denominator) is below this. 0 disables.
+        FRAGMENT_ABSOLUTE_SEEDING        bool   default True — seed/rescue untiered
+            fragments by duration x absolute top posterior instead of duration x
+            relative top support.
+        IDENTITY_NONCATALOG_TO_UNKNOWN   bool   default True — mass on source
+            classes outside the catalog goes to ``unknown`` (see phase_remap).
+        IDENTITY_EVIDENCE_TRUST          bool   default False — classifier-
+            independent trusted-frame gate + distinct views + tiered seeding (see
+            ``evidence_trust``). Needs ``evidence_trust`` (built once per video by
+            ``postprocess_df.resolve_identity``); IDENTITY_TRUST_* tune it.
         FRAGMENT_LENGTH_WEIGHT           float  default 0.60
             Multiplicative blend [0,1]: discounts short fragments' evidence relative
             to the longest fragment in the pool.  Prevents a tiny high-confidence
             fragment from overriding a long spatially-consistent track on CNN alone.
+            Values outside [0, 1] are clamped, with a warning.
         SPATIAL_NO_NEIGHBOR_SCORE        float  default 0.3
         FRAGMENT_SPATIAL_VETO_THRESHOLD  float  default 0.05
             Minimum acceptable spatial score when neighbors exist; fragments below
@@ -1575,6 +1781,11 @@ def run_fragment_solver(
         catalog) but would floor every phase label -- and, after
         renormalization, fabricate certainty on ``unknown`` -- on a
         composite catalog.
+    evidence_trust : an ``evidence_trust.EvidenceTrust`` for this video, or
+        None. When active, the solver tiers fragments by trusted evidence and
+        (with ENABLE_PELT_SPLITTING) splits only at confident label switches
+        in the TRUSTED-view sequence instead of running PELT on every frame's
+        smoothed posterior. Inactive/None keeps the untiered path unchanged.
     """
     params = params or {}
 
@@ -1599,8 +1810,16 @@ def run_fragment_solver(
     raw_evidence: dict[Any, list[tuple[int, np.ndarray]]] = {}
     if cache is not None:
         try:
+            from hydra_suite.core.individual.identity.phase_remap import (
+                noncatalog_to_unknown_enabled,
+            )
+
             raw_evidence = load_trajectory_evidence(
-                trajectories_df, cache, catalog, phase_label_maps
+                trajectories_df,
+                cache,
+                catalog,
+                phase_label_maps,
+                noncatalog_to_unknown=noncatalog_to_unknown_enabled(params),
             )
         except Exception:
             log.exception(
@@ -1664,16 +1883,31 @@ def run_fragment_solver(
             smoothed_by_traj = None
             breaker_tripped = True
 
+    trust_active = bool(
+        evidence_trust is not None
+        and getattr(evidence_trust, "active", False)
+        and raw_evidence
+        and not breaker_tripped
+    )
+
     did_split = False
     if params.get("ENABLE_PELT_SPLITTING", False) and smoothed_by_traj:
-        changepoints = detect_identity_changepoints(smoothed_by_traj, catalog, params)
+        if trust_active:
+            changepoints = detect_trusted_label_switches(
+                trajectories_df, raw_evidence, evidence_trust
+            )
+        else:
+            changepoints = detect_identity_changepoints(
+                smoothed_by_traj, catalog, params
+            )
         split_df = split_trajectories_at_changepoints(
             trajectories_df, changepoints, params
         )
         n_splits = sum(len(v) for v in changepoints.values())
         did_split = n_splits > 0
         log.info(
-            "fragment_solver: PELT found %d changepoints; %d → %d trajectories after splitting.",
+            "fragment_solver: %s found %d changepoints; %d → %d trajectories after splitting.",
+            "trusted-view label-switch detection" if trust_active else "PELT",
             n_splits,
             trajectories_df["TrajectoryID"].nunique(),
             split_df["TrajectoryID"].nunique(),
@@ -1716,7 +1950,12 @@ def run_fragment_solver(
         solved = _write_no_evidence_outcome(split_df, catalog)
     else:
         solved = solve_global_assignment(
-            split_df, catalog, params, evidence_by_traj=smoothed_by_traj
+            split_df,
+            catalog,
+            params,
+            evidence_by_traj=smoothed_by_traj,
+            raw_evidence_by_traj=raw_evidence if trust_active else None,
+            evidence_trust=evidence_trust if trust_active else None,
         )
     merged = merge_same_label_neighbours(solved, did_split=did_split)
     log.info(

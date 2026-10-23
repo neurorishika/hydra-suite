@@ -42,7 +42,10 @@ from hydra_suite.runtime.resolver import (
     RuntimeResolver,
     detect_platform,
 )
-from hydra_suite.trackerkit.config.identity_schema import IdentityConfig
+from hydra_suite.trackerkit.config.identity_schema import (
+    EVIDENCE_ENGINE_KEYS,
+    IdentityConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1612,6 +1615,13 @@ def build_engine_params(
         ),
         "IDENTITY_POSTHOC_ENABLED": identity_cfg.posthoc.enabled,
         "IDENTITY_ENABLE_SMOOTHING": identity_cfg.posthoc.smoothing_enabled,
+        # Evidence honesty + trust layer (identity_schema.EVIDENCE_ENGINE_KEYS):
+        # IDENTITY_NONCATALOG_TO_UNKNOWN, FRAGMENT_MIN_ABSOLUTE_POSTERIOR,
+        # FRAGMENT_ABSOLUTE_SEEDING, IDENTITY_EVIDENCE_TRUST, IDENTITY_TRUST_*.
+        **{
+            engine_key: getattr(identity_cfg.posthoc, field_name)
+            for field_name, engine_key in EVIDENCE_ENGINE_KEYS.items()
+        },
         "ASSOCIATION_IDENTITY_HINT_SCALE": identity_cfg.realtime.association_weight,
         "IDENTITY_COMMIT_THRESHOLD": identity_cfg.realtime.commit_threshold,
         "IDENTITY_DISPLAY_THRESHOLD": identity_cfg.realtime.display_threshold,
