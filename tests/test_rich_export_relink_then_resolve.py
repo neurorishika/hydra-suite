@@ -42,7 +42,9 @@ def test_relink_then_resolve_order_and_single_solve(tmp_path, monkeypatch):
         out["TrajectoryID"] = 0
         return out
 
-    def fake_resolve(df, params, identity_evidence_cache_path=None):
+    def fake_resolve(
+        df, params, identity_evidence_cache_path=None, detection_cache_path=None
+    ):
         calls.append(("resolve", df["FrameID"].tolist()))
         out = df.copy()
         out[C.FINAL_LABEL] = "a"
@@ -126,7 +128,9 @@ def test_relink_then_resolve_collapses_disagreeing_identities(
         out["TrajectoryID"] = 0
         return out
 
-    def fake_resolve_disagreeing(df, params, identity_evidence_cache_path=None):
+    def fake_resolve_disagreeing(
+        df, params, identity_evidence_cache_path=None, detection_cache_path=None
+    ):
         # Different label per frame within the single post-relink/densify
         # trajectory -- exercises the collapse branch that a same-label
         # stub never reaches.
@@ -264,7 +268,9 @@ def test_relink_honors_interpolation_method_none(tmp_path, monkeypatch):
     def fake_relink(df, params):
         return df.copy()
 
-    def fake_resolve(df, params, identity_evidence_cache_path=None):
+    def fake_resolve(
+        df, params, identity_evidence_cache_path=None, detection_cache_path=None
+    ):
         out = df.copy()
         out[C.FINAL_LABEL] = "a"
         out[C.FINAL_ID] = 1
@@ -339,7 +345,9 @@ def test_relink_default_interpolation_method_is_linear_fill(tmp_path, monkeypatc
     def fake_relink(df, params):
         return df.copy()
 
-    def fake_resolve(df, params, identity_evidence_cache_path=None):
+    def fake_resolve(
+        df, params, identity_evidence_cache_path=None, detection_cache_path=None
+    ):
         out = df.copy()
         out[C.FINAL_LABEL] = "a"
         out[C.FINAL_ID] = 1

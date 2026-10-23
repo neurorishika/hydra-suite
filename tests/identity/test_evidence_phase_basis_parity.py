@@ -100,6 +100,7 @@ def _remap_verbatim(
     identity_catalog: IdentityCatalog,
     catalog_spec: IdentityCatalogSpec,
     model_label: str,
+    noncatalog_to_unknown: bool = True,
 ) -> np.ndarray:
     """The same call the `TrackingWorker`'s `_remap_source_log_probs_to_catalog`
     nested closure (`core/tracking/worker.py`, ~line 1927) makes as of Slice 2:
@@ -122,7 +123,13 @@ def _remap_verbatim(
         return identity_catalog.known_uniform_log_prior()
 
     phase_label_map = build_phase_label_map(catalog_spec, identity_catalog, model_label)
-    return remap_phase_log_probs(arr, labels, identity_catalog, phase_label_map)
+    return remap_phase_log_probs(
+        arr,
+        labels,
+        identity_catalog,
+        phase_label_map,
+        noncatalog_to_unknown=noncatalog_to_unknown,
+    )
 
 
 def _independent_composite_remap(
@@ -170,6 +177,7 @@ def _new_global_log_probs(
     source_name: str,
     class_labels_per_factor: list[list[str]],
     raw_probs: list[np.ndarray],
+    noncatalog_to_unknown: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, tuple[str, ...]]:
     """Build one detection's evidence via the NEW inference-time
     IdentityEvidenceStage path, remapped to the global catalog exactly as the
@@ -206,6 +214,7 @@ def _new_global_log_probs(
         identity_catalog,
         run_config.catalog_spec,
         source_name,
+        noncatalog_to_unknown=noncatalog_to_unknown,
     )
     return (
         remapped,
@@ -249,17 +258,34 @@ def test_cnn_apriltag_catalog_phase_basis_parity():
     golden = np.load(GOLDEN_DIR / "phase_basis_parity_cnn_apriltag.npz")
     assert tuple(golden["catalog_labels"]) == identity_catalog.labels
     old = golden["old_log_probs"]
-    new, _phase_lp, _phase_labels = _new_global_log_probs(
+    # The golden froze the drop-and-renormalize remap: bit-equal with the
+    # legacy flag.
+    legacy, _phase_lp, _phase_labels = _new_global_log_probs(
+        identity_catalog,
+        run_config,
+        "cnn_color",
+        [["white", "black", "brown"]],
+        raw_probs,
+        noncatalog_to_unknown=False,
+    )
+    assert np.array_equal(
+        old, legacy
+    ), f"CNN+AprilTag phase-basis divergence: old={old!r} new={legacy!r}"
+
+    # Honest remap (default): every CNN class is outside the catalog, so all
+    # its mass goes to ``unknown`` -- the same distribution as the golden
+    # (unknown = 1) with the known entries at the bare 1e-300 floor instead
+    # of 1e-300 divided by the floored phase-unknown mass.
+    new, _, _ = _new_global_log_probs(
         identity_catalog,
         run_config,
         "cnn_color",
         [["white", "black", "brown"]],
         raw_probs,
     )
-
-    assert np.array_equal(
-        old, new
-    ), f"CNN+AprilTag phase-basis divergence: old={old!r} new={new!r}"
+    assert new[identity_catalog.unknown_index] == 0.0
+    np.testing.assert_allclose(np.exp(new), np.exp(old), atol=1e-200)
+    assert np.all(new[1:] <= old[1:])
 
 
 def test_two_cnn_phase_catalog_phase_basis_parity():

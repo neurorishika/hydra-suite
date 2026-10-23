@@ -161,6 +161,116 @@ labels. Two behaviours are worth knowing:
   classifier is being fed the wrong crop shape -- see
   [Older Classifiers and Crop Preprocessing](individual-analysis.md#older-classifiers-and-crop-preprocessing).
 
+## Honest Identity Evidence
+
+Three behaviours keep the fragment solver from treating weak identity
+evidence as strong. The first is on by default; the other two are opt-in
+(see *How the defaults were chosen* below):
+
+- **Non-identifying mass stays "unknown".** When a classifier puts
+  probability on a class that is not in the identity catalog -- a declared
+  non-identifying class such as `notag`, or anything out of vocabulary --
+  that probability now goes to the catalog's `unknown` slot. Before, it was
+  dropped and the remainder renormalized, so a crop that was 90 % `notag`
+  and 10 % one tag read as a confident tag. Config key
+  `identity_noncatalog_to_unknown` (engine `IDENTITY_NONCATALOG_TO_UNKNOWN`,
+  default `true`). It applies to the realtime decoder and the offline solver
+  alike.
+- **Absolute support gate.** `fragment_min_support` (default 0.5) is a floor
+  on *relative* support -- support renormalized over the known labels, which
+  saturates towards 1 on any long trajectory whatever the absolute evidence.
+  `fragment_min_absolute_posterior` (engine `FRAGMENT_MIN_ABSOLUTE_POSTERIOR`,
+  default `0` = off, `0.3` recommended when enabled) additionally requires the fragment's mean
+  *absolute* posterior on a label (the `unknown` mass kept in the
+  denominator) to reach this value before the label is a candidate at all.
+  It only applies to fragments that have cache evidence; a fragment with
+  none keeps whatever the online prior supports.
+- **Absolute seeding.** Fragments claim labels in descending
+  `duration x evidence` order; with `fragment_absolute_seeding` (engine
+  `FRAGMENT_ABSOLUTE_SEEDING`, default `false`) the evidence term is the
+  absolute posterior, so a long weakly-identified trajectory no longer
+  claims a label ahead of a shorter, clearly-identified one.
+
+`fragment_length_weight` has always been clamped to `[0, 1]`; a value outside
+that range now logs a warning instead of being clamped silently.
+
+## Evidence-Trust Layer (optional)
+
+`identity_evidence_trust` (engine `IDENTITY_EVIDENCE_TRUST`, default `false`)
+decides, from detection geometry alone -- never from the classifier -- which
+evidence frames show one animal clearly, and lets those drive identity:
+
+1. **Trusted frames.** A detection-backed frame is trusted when all active
+   checks pass:
+   - *isolation*: the nearest other detection centre in the same frame is
+     more than `identity_trust_isolation_bl` (1.0) body lengths away;
+   - *single-animal shape*: OBB area within `+-identity_trust_area_tolerance`
+     (0.35) of the single-animal prior, and elongation at least
+     `identity_trust_min_aspect_fraction` (0.65) of the prior's;
+   - *keypoint completeness* (only when the run has pose): at least
+     `identity_trust_min_keypoint_fraction` (0.75) of keypoints with
+     confidence `>= identity_trust_keypoint_conf` (0.5).
+2. **Per-video calibration.** The body length and the shape prior are the
+   medians over this video's *isolated* detections (nearest neighbour more
+   than `identity_trust_prior_isolation_bl`, 2.0, body lengths away) -- a
+   whole-video median is dominated by touching animals in a crowded video.
+   The shape check switches itself off when fewer than
+   `identity_trust_min_prior_detections` (200) isolated detections exist, the
+   keypoint check when there is no pose, and the whole layer when the
+   detection cache (the geometry source) is unavailable. There is no
+   stationarity filter.
+3. **Distinct views.** Consecutive trusted frames collapse into one *view*
+   until the animal moves `identity_trust_view_move_bl` (0.5) body lengths
+   or turns `identity_trust_view_turn_deg` (30) degrees, so an object seen
+   10 000 times standing still counts once.
+4. **Tiered solving.** Fragments with at least `identity_trust_min_views`
+   (1) trusted views form the trusted tier: their support is the mean
+   absolute posterior over views, a label is a candidate when that absolute
+   support reaches `identity_trust_min_support` (0.3; `fragment_min_support`
+   stays the relative floor of the untiered path), and they all claim labels
+   first (ordered by `views x support`). Every other fragment uses the honest evidence
+   above, seeds after the trusted tier, and may never displace a trusted
+   fragment -- it can only take labels the trusted tier left free.
+5. **Splitting on trusted switches.** With `enable_pelt_splitting` on and the
+   trust layer active, PELT on every frame's smoothed posterior is replaced
+   by a split at confident label switches in the *trusted-view* sequence:
+   label A on one side, B on the other, each side at least
+   `identity_trust_split_min_views` (3) views with mean posterior
+   `>= identity_trust_split_min_confidence` (0.5), and the two-label
+   explanation better than the best single label by
+   `identity_trust_split_min_log_odds` (8.0) nats of evidence. The cut is
+   placed in the untrusted gap between the two views. With the trust layer
+   off, `enable_pelt_splitting` keeps the original PELT behaviour.
+
+Each run logs one summary line: trusted fraction, body length, prior,
+and which checks were active. The trust keys are config-only for now (no
+TrackerKit controls). The layer was validated together with
+`fragment_min_absolute_posterior: 0.3` and `fragment_absolute_seeding: true`
+(the untrusted tier's evidence); enable all three together.
+
+### How the defaults were chosen
+
+Each piece was replayed through the real fragment solver on six crowded
+full-arena videos (central dish labels compared against a dish-only
+reference) and switched on by default only if, on every video, agreement did
+not drop, the wrong-label rate did not rise by more than 0.005, and the
+labels it removed had a median per-frame posterior below 0.3 (i.e. it removed
+unsupported labels, not real ones).
+
+- *Non-identifying mass to unknown*: agreement never lower by more than
+  0.0001 and up to +0.14 higher, wrong rate never up by more than 0.003. It is a correctness
+  fix and ships on; on one video the few labels it removed (388 rows) had a
+  median posterior of 0.35.
+- *Absolute gate + seeding*: agreement up on five videos (up to +0.23) but
+  the wrong-label rate rose by 0.011 and 0.007 on two -- off by default.
+- *Trust layer*: agreement up on all six (up to +0.37) and the wrong-label
+  rate down or within 0.001 on all six, but it also removes labels whose per-frame posterior is
+  moderate (median 0.36-0.61 on four videos) and lowers coverage of crowded
+  regions by up to 6 points -- off by default. Adding trusted-view splitting
+  raises agreement further (0.87-0.97 on five videos, 0.75 on the most
+  crowded) and fixes most relabel-to-the-wrong-
+  animal cases, at the same coverage trade-off.
+
 ## Related Reading
 
 - [Tracking, Identity Continuity, and Merging](tracking-and-merging.md)

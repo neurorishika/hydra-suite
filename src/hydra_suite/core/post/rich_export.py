@@ -317,6 +317,7 @@ def build_rich_export_dataframe(
                 with_pose_df,
                 params,
                 identity_evidence_cache_path=identity_evidence_cache_path,
+                detection_cache_path=getattr(state, "detection_cache_path", None),
             )
         else:
             with_pose_df = derive_identity_keys(with_pose_df, params)
@@ -528,6 +529,7 @@ def relink_and_export_rich_csv(
         relinked_with_pose,
         params,
         identity_evidence_cache_path=identity_evidence_cache_path,
+        detection_cache_path=getattr(state, "detection_cache_path", None),
     )
 
     offenders = assert_one_identity_per_trajectory(relinked_with_pose)

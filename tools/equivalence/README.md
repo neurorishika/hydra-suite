@@ -134,6 +134,17 @@ on real video), and the identity section of the rich CSV should show the
 excluded composites gone and `IdentityFinalSource == nonidentifying` rows
 present with `IdentityFinalID == 0`.
 
+**Expected divergence from older baselines.** Since the identity-evidence fix
+(`IDENTITY_NONCATALOG_TO_UNKNOWN`, default on), probability a classifier puts
+on a non-identifying class goes to `unknown` instead of being renormalized
+into the identity classes. On `ant_cnn_identity_marked` that changes the
+realtime decoder and, through the identity cost / slot lock, forward
+association -- so its `_forward.csv`, `_tracking_final.csv` and rich CSV all
+differ from any baseline that predates the fix (measured: ~18-24 % of
+`IdentityRealtimeLabel` rows, final rows 10611 -> 10594). That is by design,
+not a regression. `ant_cnn_identity` (no marks, every class in the catalog)
+stays byte-identical.
+
 To regenerate/refresh the fixtures (on a machine with the full data):
 ```bash
 python tools/equivalence/fixtures/generate_clips.py

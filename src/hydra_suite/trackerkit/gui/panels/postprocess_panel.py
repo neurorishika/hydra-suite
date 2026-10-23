@@ -897,9 +897,11 @@ class PostProcessPanel(QWidget):
         self.spin_fragment_min_support.setDecimals(2)
         self.spin_fragment_min_support.setValue(0.5)
         self.spin_fragment_min_support.setToolTip(
-            "Absolute posterior floor: a label is a candidate for a fragment\n"
+            "Relative support floor: a label is a candidate for a fragment\n"
             "only if its normalised support (the convex blend of CNN,\n"
-            "AprilTag, and online-prior evidence) is at least this. Higher →\n"
+            "AprilTag, and online-prior evidence, renormalised over the\n"
+            "known labels -- NOT an absolute posterior; see\n"
+            "fragment_min_absolute_posterior) is at least this. Higher →\n"
             "stricter, more fragments fall through to Unknown; lower → more\n"
             "permissive.\n"
             "Recommended: 0.3–0.7."

@@ -33,6 +33,8 @@ def _remap_source_log_probs_to_catalog(
     source_labels: tuple[str, ...] | None,
     catalog: IdentityCatalog,
     phase_label_map: dict[str, list[int]] | None = None,
+    *,
+    noncatalog_to_unknown: bool = True,
 ) -> np.ndarray:
     """Remap one evidence item's log-probs from its source's own phase
     catalog basis into ``catalog``'s basis.
@@ -45,8 +47,9 @@ def _remap_source_log_probs_to_catalog(
     it as already on the global basis (renormalized in place); otherwise
     distribute each phase label's probability mass across every global
     catalog entry it names (via ``phase_label_map``; a label with no map
-    entry still resolves by direct lookup, and one the global catalog does
-    not contain at all is dropped), then renormalize and return to
+    entry still resolves by direct lookup, and the mass of one the global
+    catalog does not contain at all goes to ``unknown`` -- or, with
+    ``noncatalog_to_unknown=False``, is dropped), then renormalize and return to
     log-space. A size-mismatched, unlabeled source with no way to align
     falls back to a flat known-uniform prior (uninformative, not fabricated
     certainty).
@@ -69,7 +72,13 @@ def _remap_source_log_probs_to_catalog(
     if len(labels) != len(arr):
         return catalog.known_uniform_log_prior()
 
-    return remap_phase_log_probs(arr, labels, catalog, phase_label_map or {})
+    return remap_phase_log_probs(
+        arr,
+        labels,
+        catalog,
+        phase_label_map or {},
+        noncatalog_to_unknown=noncatalog_to_unknown,
+    )
 
 
 def load_trajectory_evidence(
@@ -77,6 +86,8 @@ def load_trajectory_evidence(
     cache: IdentityEvidenceCache,
     catalog: IdentityCatalog,
     phase_label_maps: dict[str, dict[str, list[int]]] | None = None,
+    *,
+    noncatalog_to_unknown: bool = True,
 ) -> dict[int, list[tuple[int, np.ndarray]]]:
     """Per-``TrajectoryID`` ordered ``[(FrameID, catalog_log_probs)]`` pulled
     straight from the evidence cache.
@@ -110,6 +121,11 @@ def load_trajectory_evidence(
             ``unknown``. ``None``/empty is exact-label matching, which is
             correct (and bit-identical to the historical behavior) for a
             single identity model.
+        noncatalog_to_unknown: route the mass of source classes that reach
+            no catalog entry (non-identifying / out-of-vocabulary) to the
+            ``unknown`` slot instead of dropping it and renormalizing --
+            ``IDENTITY_NONCATALOG_TO_UNKNOWN``, see
+            ``phase_remap.remap_phase_log_probs``.
 
     Returns:
         ``{TrajectoryID: [(FrameID, log_probs), ...]}``, frame-ordered.
@@ -140,6 +156,7 @@ def load_trajectory_evidence(
                     source_labels,
                     catalog,
                     (phase_label_maps or {}).get(str(ev.source_name)),
+                    noncatalog_to_unknown=noncatalog_to_unknown,
                 )
                 per_detection.setdefault(ev.detection_id, []).append(remapped)
 

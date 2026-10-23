@@ -49,6 +49,9 @@ from hydra_suite.core.post.video_output_scale import (
     validate_video_output_scale,
 )
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
+from hydra_suite.trackerkit.config.identity_schema import (
+    CONFIG_ONLY_KEYS as _IDENTITY_CONFIG_ONLY_KEYS,
+)
 from hydra_suite.trackerkit.engine_params import (
     RuntimeContext,
     build_engine_params,
@@ -161,6 +164,15 @@ def detection_cache_dir_covers_range(
     ).ready
 
 
+# Persisted config keys with no GUI widget. ``build_config_dict`` only knows
+# the keys its widgets write, so without this a GUI run would silently use the
+# dataclass defaults for these and GUI Save would erase hand-edited values.
+# Their values are carried from the last loaded file instead (a full config
+# load replaces the carried set; a preset load only overlays its own keys).
+# Register any future widgetless key here (or in its schema's own tuple).
+CONFIG_ONLY_KEYS: tuple[str, ...] = tuple(_IDENTITY_CONFIG_ONLY_KEYS)
+
+
 class ConfigOrchestrator:
     """Manages configuration load/save, presets, ROI, and video file setup."""
 
@@ -168,6 +180,8 @@ class ConfigOrchestrator:
         self._mw = main_window
         self._config = config
         self._panels = panels
+        # Values of CONFIG_ONLY_KEYS from the loaded file(s).
+        self._config_only_values: dict = {}
 
     # =========================================================================
     # CONFIG LOAD / SAVE
@@ -230,6 +244,15 @@ class ConfigOrchestrator:
         try:
             with open(config_path, "r") as f:
                 cfg = json.load(f)
+
+            carried = {k: cfg[k] for k in CONFIG_ONLY_KEYS if k in cfg}
+            if preset_mode:
+                self._config_only_values = {
+                    **getattr(self, "_config_only_values", {}),
+                    **carried,
+                }
+            else:
+                self._config_only_values = carried
 
             def get_cfg(*a, **kw):
                 """Look up a config key in the current file's dict, with fallback default."""
@@ -2249,6 +2272,10 @@ class ConfigOrchestrator:
                 "suppress_foreign_obb_oriented_videos": self._panels.dataset.chk_suppress_foreign_obb_oriented_videos.isChecked(),
             }
         )
+
+        # Widgetless keys: carried from the loaded file, never invented.
+        for key, value in getattr(self, "_config_only_values", {}).items():
+            cfg.setdefault(key, value)
 
         return cfg
 
