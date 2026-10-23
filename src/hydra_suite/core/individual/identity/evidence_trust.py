@@ -22,8 +22,8 @@ ISOLATED detections (a whole-video median is dominated by touching animals
 in crowded videos). Each check switches itself off when the data cannot
 support it:
 
-- **isolation**: the nearest other detection centre in the same frame is
-  farther than ``IDENTITY_TRUST_ISOLATION_BL`` body lengths. Needs detection
+- **isolation**: the nearest other detection centre in the same frame (and
+  the same arena, when the run has several) is farther than ``IDENTITY_TRUST_ISOLATION_BL`` body lengths. Needs detection
   geometry (the detection cache); without it the whole layer is inactive.
 - **single-animal shape**: OBB area within ``+-IDENTITY_TRUST_AREA_TOLERANCE``
   of the prior area and elongation at least
@@ -232,10 +232,14 @@ def load_detection_geometry(detection_cache_path) -> DetectionGeometry | None:
     )
 
 
-def nearest_neighbour_distance(frames: np.ndarray, x: np.ndarray, y: np.ndarray):
+def nearest_neighbour_distance(
+    frames: np.ndarray, x: np.ndarray, y: np.ndarray, groups: np.ndarray | None = None
+):
     """Distance from each detection to the nearest OTHER detection in its frame.
 
-    ``inf`` for a detection alone in its frame.
+    ``groups`` (e.g. arena ids) partitions each frame further: only
+    detections in the same frame AND group are neighbours. ``inf`` for a
+    detection alone in its partition.
     """
     from scipy.spatial import cKDTree
 
@@ -243,6 +247,11 @@ def nearest_neighbour_distance(frames: np.ndarray, x: np.ndarray, y: np.ndarray)
     out = np.full(n, np.inf, dtype=np.float64)
     if n < 2:
         return out
+    frames = np.asarray(frames, dtype=np.int64)
+    if groups is not None:
+        # One integer key per (frame, group) partition.
+        _, g = np.unique(np.asarray(groups), return_inverse=True)
+        frames = frames * (int(g.max()) + 1) + g.astype(np.int64)
     order = np.argsort(frames, kind="stable")
     f_sorted = frames[order]
     bounds = np.flatnonzero(np.diff(f_sorted)) + 1
@@ -278,14 +287,17 @@ class TrustCalibration:
 
 
 def calibrate(
-    geom: DetectionGeometry, settings: TrustSettings, keypoint_columns=()
+    geom: DetectionGeometry,
+    settings: TrustSettings,
+    keypoint_columns=(),
+    groups: np.ndarray | None = None,
 ) -> tuple[TrustCalibration, np.ndarray]:
     """Per-video body length + single-animal shape prior from isolated detections.
 
     Returns the calibration and the per-detection nearest-neighbour distance
     (pixels), reused by :func:`build_evidence_trust`.
     """
-    nn = nearest_neighbour_distance(geom.frames, geom.cx, geom.cy)
+    nn = nearest_neighbour_distance(geom.frames, geom.cx, geom.cy, groups)
     valid = np.isfinite(geom.major) & (geom.major > 0) & (geom.minor > 0)
     bl_all = float(np.median(geom.major[valid])) if valid.any() else float("nan")
     isolated = valid & (nn > settings.prior_isolation_bl * bl_all)
@@ -312,6 +324,29 @@ def calibrate(
         keypoint_columns=tuple(keypoint_columns),
     )
     return cal, nn
+
+
+def _arena_groups(df: pd.DataFrame, geometry: DetectionGeometry) -> np.ndarray | None:
+    """Per-detection arena id from the trajectory rows, or None (one arena).
+
+    Detections no trajectory carries get group -1: they are compared with
+    each other but never with another arena's animals.
+    """
+    if "arena_id" not in df.columns:
+        return None
+    rows = df[pd.notna(df["DetectionID"]) & pd.notna(df["arena_id"])]
+    if rows.empty or rows["arena_id"].nunique() < 2:
+        return None
+    by_det = (
+        pd.Series(
+            rows["arena_id"].to_numpy(), index=rows["DetectionID"].astype(np.int64)
+        )
+        .groupby(level=0)
+        .first()
+    )
+    arena = by_det.reindex(geometry.detection_ids)
+    codes, _ = pd.factorize(arena.astype(object).where(arena.notna(), None))
+    return np.where(arena.notna().to_numpy(), codes, -1)
 
 
 def pose_conf_columns(df: pd.DataFrame) -> list[str]:
@@ -407,7 +442,7 @@ def build_evidence_trust(
         return trust
 
     kp_cols = pose_conf_columns(df)
-    cal, nn = calibrate(geometry, settings, kp_cols)
+    cal, nn = calibrate(geometry, settings, kp_cols, _arena_groups(df, geometry))
     if not cal.isolation_active:
         return EvidenceTrust(settings, cal, reason_inactive="no valid body length")
 
@@ -579,6 +614,12 @@ def fragment_views(
     return FragmentViews(view_frames, view_probs)
 
 
+# Each side's span extends at most this many x split_min_views views beyond
+# the local window: a switch is a local event, and the cap keeps the search
+# linear on long trajectories.
+_MAX_EXTEND_FACTOR = 25
+
+
 def find_label_switches(
     views: FragmentViews,
     settings: TrustSettings,
@@ -591,8 +632,9 @@ def find_label_switches(
     A cut between views ``k-1`` and ``k`` is a candidate when the
     ``split_min_views`` views just before it favour one label ``A`` and the
     ``split_min_views`` views just after it a different label ``B``. Each
-    side's span is then extended outward over every view that still prefers
-    its own label to the other one, and the cut is accepted only if
+    side's span is then extended outward (by at most
+    ``_MAX_EXTEND_FACTOR x split_min_views`` views) over every view that still
+    prefers its own label to the other one, and the cut is accepted only if
 
     - both spans are confident: mean absolute posterior of ``A`` on the left
       span and of ``B`` on the right span ``>= split_min_confidence``, and
@@ -614,25 +656,46 @@ def find_label_switches(
         return []
     P = views.view_probs
     logp = np.log(np.clip(P, 1e-3, 1.0))
+    zero = np.zeros((1, P.shape[1]))
+    cum_p = np.vstack([zero, np.cumsum(P, axis=0)])
+    cum_l = np.vstack([zero, np.cumsum(logp, axis=0)])
+    ks = np.arange(m, V - m + 1)
+    left_win = (cum_p[ks] - cum_p[ks - m]) / m
+    right_win = (cum_p[ks + m] - cum_p[ks]) / m
+    a_all = np.argmax(left_win, axis=1)
+    b_all = np.argmax(right_win, axis=1)
+    rows = np.arange(len(ks))
+    conf = settings.split_min_confidence
+    # Cheap local gate first: a real switch needs the m views on each side
+    # to already be confident for different labels. Only survivors pay for
+    # the span extension, which is itself capped, so the search stays
+    # ~O(V * labels) on long noisy trajectories.
+    keep = (
+        (a_all != b_all)
+        & (left_win[rows, a_all] >= conf)
+        & (right_win[rows, b_all] >= conf)
+    )
+    max_extend = _MAX_EXTEND_FACTOR * m
     best_gain, best_k = -np.inf, -1
-    for k in range(m, V - m + 1):
-        a = int(np.argmax(P[k - m : k].mean(axis=0)))
-        b = int(np.argmax(P[k : k + m].mean(axis=0)))
-        if a == b:
-            continue
+    for idx in np.flatnonzero(keep):
+        k = int(ks[idx])
+        a, b = int(a_all[idx]), int(b_all[idx])
         lo = k - m
-        while lo > 0 and P[lo - 1, a] >= P[lo - 1, b]:
+        floor_lo = max(0, lo - max_extend)
+        while lo > floor_lo and P[lo - 1, a] >= P[lo - 1, b]:
             lo -= 1
         hi = k + m
-        while hi < V and P[hi, b] >= P[hi, a]:
+        ceil_hi = min(V, hi + max_extend)
+        while hi < ceil_hi and P[hi, b] >= P[hi, a]:
             hi += 1
-        if (
-            P[lo:k, a].mean() < settings.split_min_confidence
-            or P[k:hi, b].mean() < settings.split_min_confidence
-        ):
+        if (cum_p[k, a] - cum_p[lo, a]) / (k - lo) < conf or (
+            cum_p[hi, b] - cum_p[k, b]
+        ) / (hi - k) < conf:
             continue
-        single = float(logp[lo:hi].sum(axis=0).max())
-        gain = float(logp[lo:k, a].sum() + logp[k:hi, b].sum() - single)
+        span = cum_l[hi] - cum_l[lo]
+        gain = float(
+            (cum_l[k, a] - cum_l[lo, a]) + (cum_l[hi, b] - cum_l[k, b]) - span.max()
+        )
         if gain > best_gain:
             best_gain, best_k = gain, k
     if best_k < 0 or best_gain < settings.split_min_log_odds:

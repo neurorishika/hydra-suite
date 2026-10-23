@@ -407,8 +407,13 @@ def split_trajectories_at_changepoints(
     df: pd.DataFrame,
     changepoints: dict[Any, list[int]],
     params: dict[str, Any],
+    trajectory_id_floor: int | None = None,
 ) -> pd.DataFrame:
     """Split trajectories at PELT-detected changepoints, assigning new TrajectoryIDs.
+
+    New IDs start above ``max(df.TrajectoryID)`` and at or above
+    ``trajectory_id_floor`` -- the caller's way of keeping IDs unique when
+    several frames (e.g. arenas) are split independently and concatenated.
 
     Each value in changepoints is a list of FrameID values that are the
     *inclusive end* of a segment (same convention as detect_identity_changepoints).
@@ -430,7 +435,7 @@ def split_trajectories_at_changepoints(
     if "OriginalTrajectoryID" not in out.columns:
         out["OriginalTrajectoryID"] = out["TrajectoryID"]
 
-    next_id = int(out["TrajectoryID"].max()) + 1
+    next_id = _next_trajectory_id(out, trajectory_id_floor)
 
     unchanged = out[~out["TrajectoryID"].isin(to_split)].copy()
     parts: list[pd.DataFrame] = [unchanged]
@@ -706,6 +711,15 @@ def _iterative_assign(
     top_k = max(1, int(params.get("FRAGMENT_TOP_K", 3)))
     max_passes = max(1, int(params.get("FRAGMENT_MAX_PASSES", 10)))
     min_support = float(params.get("FRAGMENT_MIN_SUPPORT", 0.5))
+    # Trusted-tier support is ABSOLUTE (unknown mass kept), so it gets its own
+    # absolute floor; FRAGMENT_MIN_SUPPORT stays the relative floor of the
+    # untiered path. Without this, honest-but-moderate trusted evidence
+    # (0.45 on one label, 0.5 unknown) would never be a candidate while its
+    # untiered twin reads as 0.9 relative support.
+    trust_min_support = max(
+        float(params.get("IDENTITY_TRUST_MIN_SUPPORT", 0.3)),
+        _min_absolute_posterior(params),
+    )
     max_blockers = max(1, int(params.get("FRAGMENT_MAX_BLOCKERS", 4)))
     unknown_doubt_bonus = float(params.get("FRAGMENT_UNKNOWN_DOUBT_BONUS", 0.5))
 
@@ -745,7 +759,8 @@ def _iterative_assign(
             for lbl in sorted(known_labels, key=lambda lbl: -supports[i].get(lbl, 0.0))[
                 :top_k
             ]
-            if supports[i].get(lbl, 0.0) >= min_support
+            if supports[i].get(lbl, 0.0)
+            >= (trust_min_support if trusted_tier[i] else min_support)
         ]
         for i in range(n)
     ]
@@ -1283,6 +1298,7 @@ def solve_global_assignment(
     evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
     raw_evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]] | None = None,
     evidence_trust: Any = None,
+    trajectory_id_floor: int | None = None,
 ) -> pd.DataFrame:
     """Assign one identity label per trajectory via the iterative solver.
 
@@ -1416,7 +1432,7 @@ def solve_global_assignment(
         out.loc[mask, C.FINAL_FRAGMENT_SCORE] = assigned_scores[i]
         out.loc[mask, C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
 
-    return _split_off_shared_label_rows(out, catalog)
+    return _split_off_shared_label_rows(out, catalog, trajectory_id_floor)
 
 
 def _detection_backed(df: pd.DataFrame) -> pd.Series:
@@ -1440,8 +1456,14 @@ def _detected_frames_by_traj(
     return [by_traj.get(tid, frozenset()) for tid in summaries["TrajectoryID"]]
 
 
+def _next_trajectory_id(df: pd.DataFrame, floor: int | None) -> int:
+    """First free TrajectoryID: above the frame's max and >= ``floor``."""
+    local = int(pd.to_numeric(df["TrajectoryID"], errors="coerce").max()) + 1
+    return max(local, int(floor)) if floor is not None else local
+
+
 def _split_off_shared_label_rows(
-    out: pd.DataFrame, catalog: IdentityCatalog
+    out: pd.DataFrame, catalog: IdentityCatalog, trajectory_id_floor: int | None = None
 ) -> pd.DataFrame:
     """Keep each label on at most one trajectory per frame.
 
@@ -1471,7 +1493,7 @@ def _split_off_shared_label_rows(
     losers = ranked[ranked.duplicated(["FrameID", C.FINAL_LABEL], keep="first")]
     if "OriginalTrajectoryID" not in out.columns:
         out["OriginalTrajectoryID"] = out["TrajectoryID"]
-    next_id = int(pd.to_numeric(out["TrajectoryID"], errors="coerce").max()) + 1
+    next_id = _next_trajectory_id(out, trajectory_id_floor)
     for _tid, rows in losers.sort_values(["TrajectoryID", "FrameID"]).groupby(
         "TrajectoryID", sort=True
     ):
@@ -1614,6 +1636,14 @@ class EvidenceQuality:
     diversity: float
     n_frames: int
     ok: bool
+    # Rows left out because they are confidently "no identity" (unknown).
+    n_non_identifying: int = 0
+
+    @property
+    def all_non_identifying(self) -> bool:
+        """Every evidence row was confidently non-identifying: nothing to act
+        on, which is NOT the same as a broken classifier."""
+        return self.n_frames == 0 and self.n_non_identifying > 0
 
 
 def assess_evidence_quality(
@@ -1644,6 +1674,7 @@ def assess_evidence_quality(
     per_frame: dict[int, list[int]] = {}
     conf = 0
     total = 0
+    skipped = 0
     for sequence in raw_evidence.values():
         for frame_id, lp in sequence:
             p = np.exp(lp - np.logaddexp.reduce(lp))
@@ -1652,6 +1683,7 @@ def assess_evidence_quality(
                 # routed to unknown by phase_remap): says nothing about
                 # whether the source can tell identities apart, so it counts
                 # neither for nor against it.
+                skipped += 1
                 continue
             known = p[1:]
             total += 1
@@ -1659,14 +1691,14 @@ def assess_evidence_quality(
                 conf += 1
             per_frame.setdefault(int(frame_id), []).append(int(known.argmax()))
     if total == 0:
-        return EvidenceQuality(0.0, 0.0, 0, False)
+        return EvidenceQuality(0.0, 0.0, 0, False, skipped)
     n_known = max(1, len(catalog.labels) - 1)
     diversity = float(
         np.mean([len(set(v)) / min(n_known, len(v)) for v in per_frame.values()])
     )
     conf_frac = conf / total
     ok = conf_frac >= EVIDENCE_MIN_CONF_FRAC and diversity >= EVIDENCE_MIN_DIVERSITY
-    return EvidenceQuality(conf_frac, diversity, len(per_frame), ok)
+    return EvidenceQuality(conf_frac, diversity, len(per_frame), ok, skipped)
 
 
 def run_fragment_solver(
@@ -1676,6 +1708,7 @@ def run_fragment_solver(
     cache: Any = None,
     catalog_spec: Any = None,
     evidence_trust: Any = None,
+    trajectory_id_floor: int | None = None,
 ) -> pd.DataFrame:
     """End-to-end fragment solver: cache evidence → forward-backward smoothing
     → (optional PELT split on the smoothed posterior) → iterative assign.
@@ -1792,6 +1825,9 @@ def run_fragment_solver(
         (with ENABLE_PELT_SPLITTING) splits only at confident label switches
         in the TRUSTED-view sequence instead of running PELT on every frame's
         smoothed posterior. Inactive/None keeps the untiered path unchanged.
+    trajectory_id_floor : lowest TrajectoryID any split may allocate. A caller
+        solving several frames independently (per arena) passes the running
+        global maximum + 1 so new IDs never collide across frames.
     """
     params = params or {}
 
@@ -1876,7 +1912,18 @@ def run_fragment_solver(
     breaker_tripped = False
     if raw_evidence:
         quality = assess_evidence_quality(raw_evidence, catalog)
-        if not quality.ok:
+        if not quality.ok and quality.all_non_identifying:
+            log.warning(
+                "fragment_solver: all %d identity-evidence rows are "
+                "confidently non-identifying (unknown / declared "
+                "non-identifying classes) -- no identity to assign, so no "
+                "split or assignment is attempted. This is expected for an "
+                "untagged video; it is not a classifier fault.",
+                quality.n_non_identifying,
+            )
+            smoothed_by_traj = None
+            breaker_tripped = True
+        elif not quality.ok:
             log.error(
                 "fragment_solver: identity evidence is uninformative "
                 "(confident=%.1f%% of detections, diversity=%.2f over %d "
@@ -1907,7 +1954,7 @@ def run_fragment_solver(
                 smoothed_by_traj, catalog, params
             )
         split_df = split_trajectories_at_changepoints(
-            trajectories_df, changepoints, params
+            trajectories_df, changepoints, params, trajectory_id_floor
         )
         n_splits = sum(len(v) for v in changepoints.values())
         did_split = n_splits > 0
@@ -1962,6 +2009,7 @@ def run_fragment_solver(
             evidence_by_traj=smoothed_by_traj,
             raw_evidence_by_traj=raw_evidence if trust_active else None,
             evidence_trust=evidence_trust if trust_active else None,
+            trajectory_id_floor=trajectory_id_floor,
         )
     merged = merge_same_label_neighbours(solved, did_split=did_split)
     log.info(

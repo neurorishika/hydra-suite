@@ -82,6 +82,7 @@ class PostHocIdentityConfig:
     trust_view_move_bl: float = 0.5
     trust_view_turn_deg: float = 30.0
     trust_min_views: int = 1
+    trust_min_support: float = 0.3
     trust_split_min_log_odds: float = 8.0
     trust_split_min_views: int = 3
     trust_split_min_confidence: float = 0.5
@@ -107,6 +108,7 @@ _EVIDENCE_FIELD_KEYS: dict[str, str] = {
     "trust_view_move_bl": "identity_trust_view_move_bl",
     "trust_view_turn_deg": "identity_trust_view_turn_deg",
     "trust_min_views": "identity_trust_min_views",
+    "trust_min_support": "identity_trust_min_support",
     "trust_split_min_log_odds": "identity_trust_split_min_log_odds",
     "trust_split_min_views": "identity_trust_split_min_views",
     "trust_split_min_confidence": "identity_trust_split_min_confidence",

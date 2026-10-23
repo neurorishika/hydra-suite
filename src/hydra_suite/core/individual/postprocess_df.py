@@ -665,17 +665,38 @@ def resolve_identity(
                     "arena_id" in with_pose_df.columns
                     and with_pose_df["arena_id"].nunique() > 1
                 ):
-                    solved_parts = [
-                        run_fragment_solver(
+                    # Splits allocate new TrajectoryIDs; a running global
+                    # floor keeps them unique across arenas (each group's own
+                    # max would let two arenas mint the same new ID).
+                    solved_parts = []
+                    id_floor = (
+                        int(
+                            pd.to_numeric(
+                                with_pose_df["TrajectoryID"], errors="coerce"
+                            ).max()
+                        )
+                        + 1
+                    )
+                    for _, group in with_pose_df.groupby("arena_id", sort=True):
+                        part = run_fragment_solver(
                             group,
                             catalog,
                             params,
                             cache=cache,
                             catalog_spec=catalog_spec,
                             evidence_trust=evidence_trust,
+                            trajectory_id_floor=id_floor,
                         )
-                        for _, group in with_pose_df.groupby("arena_id", sort=True)
-                    ]
+                        solved_parts.append(part)
+                        id_floor = max(
+                            id_floor,
+                            int(
+                                pd.to_numeric(
+                                    part["TrajectoryID"], errors="coerce"
+                                ).max()
+                            )
+                            + 1,
+                        )
                     with_pose_df = pd.concat(solved_parts, ignore_index=True)
                 else:
                     with_pose_df = run_fragment_solver(

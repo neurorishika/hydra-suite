@@ -225,8 +225,10 @@ evidence frames show one animal clearly, and lets those drive identity:
    10 000 times standing still counts once.
 4. **Tiered solving.** Fragments with at least `identity_trust_min_views`
    (1) trusted views form the trusted tier: their support is the mean
-   absolute posterior over views and they all claim labels first (ordered
-   by `views x support`). Every other fragment uses the honest evidence
+   absolute posterior over views, a label is a candidate when that absolute
+   support reaches `identity_trust_min_support` (0.3; `fragment_min_support`
+   stays the relative floor of the untiered path), and they all claim labels
+   first (ordered by `views x support`). Every other fragment uses the honest evidence
    above, seeds after the trusted tier, and may never displace a trusted
    fragment -- it can only take labels the trusted tier left free.
 5. **Splitting on trusted switches.** With `enable_pelt_splitting` on and the

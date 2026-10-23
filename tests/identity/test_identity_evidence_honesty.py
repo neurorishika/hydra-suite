@@ -563,3 +563,87 @@ def test_engine_param_defaults_and_config_round_trip():
         IdentityConfig.from_engine_config(cfg, {}, cfg_get=cfg_get).to_dict()
     )
     assert again.posthoc == p
+
+
+# ---------------------------------------------------------------------------
+# review follow-ups
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_tier_uses_an_absolute_candidate_floor():
+    # Honest-but-moderate trusted evidence: red 0.45, rest on unknown.
+    trusted = _row(
+        1,
+        0,
+        100,
+        {"red": 0.45, "blue": 0.05},
+        TrustedViews=5,
+        TrustedSupport={"red": 0.45, "blue": 0.05},
+    )
+    out = offline._iterative_assign(_frags([trusted]), ["red", "blue"], {})
+    assert out[0] == "red"  # 0.45 >= identity_trust_min_support (0.3)
+    strict = offline._iterative_assign(
+        _frags([trusted]), ["red", "blue"], {"IDENTITY_TRUST_MIN_SUPPORT": 0.5}
+    )
+    assert strict[0] is None
+    # FRAGMENT_MIN_SUPPORT stays the relative floor for untiered fragments.
+    untiered = _row(2, 0, 100, {"red": 0.45, "blue": 0.05})
+    rel = offline._iterative_assign(
+        _frags([untiered]), ["red", "blue"], {"FRAGMENT_MIN_SUPPORT": 0.95}
+    )
+    assert rel[0] is None
+
+
+def test_label_switch_search_is_fast_on_long_noisy_trajectories():
+    import time
+
+    rng = np.random.default_rng(0)
+    V, L = 50_000, 8
+    probs = rng.dirichlet(np.full(L, 0.3), size=V)
+    frames = [(10 * k, 10 * k + 2) for k in range(V)]
+    s = TrustSettings(split_min_views=3, split_min_log_odds=8.0)
+    # Worst case for the span search: confident runs of exactly
+    # split_min_views views alternating between two labels, so every run
+    # boundary passes the local gate.
+    runs = np.full((V, L), 0.01)
+    runs[np.arange(V), (np.arange(V) // 3) % 2] = 0.93
+    t0 = time.perf_counter()
+    find_label_switches(FragmentViews(frames, probs), s)
+    find_label_switches(FragmentViews(frames, runs), s)
+    assert time.perf_counter() - t0 < 20.0
+
+
+def test_isolation_is_per_arena():
+    dets = _isolated_population(300)
+    # Two animals 0.5 BL apart but in different arenas.
+    dets += [(7000, 2000, 0.0, 0.0, 20.0, 5.0, 0.0), (7001, 2000, 10.0, 0.0, 20, 5, 0)]
+    geom = _geometry(dets)
+    df = _trust_df([7000, 7001], [2000, 2000], arena_id=[0, 1])
+    trust = build_evidence_trust(df, {"IDENTITY_EVIDENCE_TRUST": True}, geometry=geom)
+    assert {7000, 7001} <= set(trust.trusted)
+    same = _trust_df([7000, 7001], [2000, 2000])
+    trust2 = build_evidence_trust(
+        same, {"IDENTITY_EVIDENCE_TRUST": True}, geometry=geom
+    )
+    assert not ({7000, 7001} & set(trust2.trusted))
+
+
+def test_all_non_identifying_breaker_message(caplog):
+    catalog = IdentityCatalog.from_labels([f"l{i}" for i in range(6)])
+    raw = _breaker_raw(catalog, lambda t, f: 0.9)
+    q = offline.assess_evidence_quality(raw, catalog)
+    assert q.all_non_identifying and not q.ok
+    broken = _breaker_raw(catalog, lambda t, f: 1e-6)
+    for t in broken:  # every animal reads as the same label: collapsed source
+        broken[t] = broken[0]
+    assert not offline.assess_evidence_quality(broken, catalog).all_non_identifying
+
+
+def test_split_ids_respect_a_global_floor():
+    df = pd.DataFrame(
+        {"TrajectoryID": [1] * 20, "FrameID": list(range(20)), "X": 0.0, "Y": 0.0}
+    )
+    out = offline.split_trajectories_at_changepoints(
+        df, {1: [9]}, {"MIN_FRAGMENT_FRAMES": 5}, trajectory_id_floor=100
+    )
+    assert set(out["TrajectoryID"]) == {100, 101}
