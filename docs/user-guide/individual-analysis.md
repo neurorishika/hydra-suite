@@ -106,6 +106,12 @@ labelled `notag_notag` all carry `identity_id == 0` and are five different
 animals, distinguished by `id` (the trajectory), not one animal seen five
 times.
 
+Per-detection probability the classifier puts on a non-identifying (or any
+out-of-catalog) class is kept as `unknown` evidence rather than dropped, so
+it lowers that detection's confidence in every real identity instead of being
+renormalized away -- see
+[Honest Identity Evidence](post-processing.md#honest-identity-evidence).
+
 The honest limitation: these animals get no
 identity resolution or identity-based fragment stitching across occlusions;
 relinking for them falls back to spatial and motion gates alone.

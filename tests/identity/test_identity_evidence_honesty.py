@@ -159,25 +159,44 @@ def test_load_trajectory_evidence_threads_the_flag(tmp_path):
     assert np.exp(legacy)[catalog.index_of("red")] == pytest.approx(0.8, rel=1e-6)
 
 
-def test_breaker_is_not_tripped_by_honest_unknown_mass():
-    catalog = IdentityCatalog.from_labels([f"l{i}" for i in range(6)])
+def _breaker_raw(catalog, unknown_mass, n_traj=6, n_frames=50):
     raw = {}
-    for t in range(6):
+    for t in range(n_traj):
         seq = []
-        for f in range(50):
-            p = np.full(catalog.size, 0.01)
-            p[0] = 0.7  # mostly "no identity here"
-            p[1 + t] = 0.25  # but it names the right animal when it names one
-            p /= p.sum()
-            seq.append((f, np.log(p)))
+        for f in range(n_frames):
+            p = np.full(catalog.size, 0.001)
+            u = unknown_mass(t, f)
+            p[0] = u
+            p[1 + t] = 1.0 - u - 0.001 * (catalog.size - 2)
+            seq.append((f, np.log(p / p.sum())))
         raw[t] = seq
+    return raw
+
+
+def test_breaker_ignores_confidently_non_identifying_rows():
+    catalog = IdentityCatalog.from_labels([f"l{i}" for i in range(6)])
+    # Every other frame is "notag" (honest unknown mass 0.9); the rest name
+    # the right animal confidently. The notag frames must not count as an
+    # uninformative source.
+    raw = _breaker_raw(catalog, lambda t, f: 0.9 if f % 2 else 0.05)
     q = offline.assess_evidence_quality(raw, catalog)
     assert q.ok and q.conf_frac == 1.0
+
+
+def test_breaker_trips_when_every_row_is_non_identifying():
+    catalog = IdentityCatalog.from_labels([f"l{i}" for i in range(6)])
+    q = offline.assess_evidence_quality(
+        _breaker_raw(catalog, lambda t, f: 0.9), catalog
+    )
+    assert not q.ok
 
 
 # ---------------------------------------------------------------------------
 # 2. absolute gate + absolute seeding
 # ---------------------------------------------------------------------------
+
+
+ON = {"FRAGMENT_MIN_ABSOLUTE_POSTERIOR": 0.3, "FRAGMENT_ABSOLUTE_SEEDING": True}
 
 
 def _row(tid, start, end, mean_probs, x=0.0, **extra):
@@ -214,7 +233,7 @@ def test_absolute_gate_drops_relatively_saturated_weak_support():
     row = _row(1, 0, 100, {"a": 0.05, "b": 0.0001})
     rel = offline._combined_support(row, ["a", "b"], {})
     assert rel["a"] > 0.99
-    gated = offline._fragment_support(row, ["a", "b"], {})
+    gated = offline._fragment_support(row, ["a", "b"], ON)
     assert gated["a"] == 0.0
     off = offline._fragment_support(
         row, ["a", "b"], {"FRAGMENT_MIN_ABSOLUTE_POSTERIOR": 0.0}
@@ -226,7 +245,7 @@ def test_absolute_gate_leaves_no_evidence_fragments_alone():
     row = _row(1, 0, 10, {})
     row["MeanCNNProbs"], row["CNNLogEvidence"] = {}, {}
     row["OnlineLabel"], row["OnlineConfidence"] = "a", 0.9
-    s = offline._fragment_support(row, ["a", "b"], {})
+    s = offline._fragment_support(row, ["a", "b"], ON)
     assert s["a"] > 0.5
 
 
@@ -241,17 +260,18 @@ def test_weak_long_fragment_no_longer_blocks_a_strong_short_one():
         {"FRAGMENT_MIN_ABSOLUTE_POSTERIOR": 0.0, "FRAGMENT_ABSOLUTE_SEEDING": False},
     )
     assert base[0] == "a" and base[1] is None  # the documented failure
-    fixed = offline._iterative_assign(frags, ["a", "b"], {})
+    fixed = offline._iterative_assign(frags, ["a", "b"], ON)
+    assert offline._iterative_assign(frags, ["a", "b"], {}) == base  # default off
     assert fixed[0] is None and fixed[1] == "a"
 
 
 def test_absolute_seeding_orders_by_absolute_evidence():
     long_weak = _row(1, 0, 1000, {"a": 0.35, "b": 0.0005})
     short_strong = _row(2, 0, 400, {"a": 0.95, "b": 0.01})
-    s1 = offline._fragment_support(long_weak, ["a", "b"], {})
-    s2 = offline._fragment_support(short_strong, ["a", "b"], {})
-    m1 = offline._seed_mass(long_weak, s1, 1001, {})
-    m2 = offline._seed_mass(short_strong, s2, 401, {})
+    s1 = offline._fragment_support(long_weak, ["a", "b"], ON)
+    s2 = offline._fragment_support(short_strong, ["a", "b"], ON)
+    m1 = offline._seed_mass(long_weak, s1, 1001, ON)
+    m2 = offline._seed_mass(short_strong, s2, 401, ON)
     assert m2 > m1
     r1 = offline._seed_mass(long_weak, s1, 1001, {"FRAGMENT_ABSOLUTE_SEEDING": False})
     r2 = offline._seed_mass(short_strong, s2, 401, {"FRAGMENT_ABSOLUTE_SEEDING": False})
@@ -428,7 +448,7 @@ def test_tier_ordering_and_untrusted_cannot_displace_trusted():
     long_fallback["TrustedViews"] = 0
     long_fallback["TrustedSupport"] = {}
     frags = _frags([long_fallback, trusted])
-    params = {"MAX_VELOCITY_BREAK": 1e9}
+    params = {"MAX_VELOCITY_BREAK": 1e9, **ON}
     out = offline._iterative_assign(frags, ["a", "b"], params)
     assert out[1] == "a" and out[0] is None
     # Without tiers the long fragment seeds first and keeps the label.
@@ -513,3 +533,33 @@ def test_run_fragment_solver_trusted_split_replaces_pelt(tmp_path):
     last = out[out.FrameID > n // 2 + 5]["IdentityFinalLabel"].unique()
     assert list(first) == ["a"] and list(last) == ["b"]
     assert out["TrajectoryID"].nunique() == 2
+
+
+def test_engine_param_defaults_and_config_round_trip():
+    from hydra_suite.trackerkit.config.identity_schema import (
+        EVIDENCE_ENGINE_KEYS,
+        IdentityConfig,
+    )
+
+    def cfg_get(cfg, key, default=None):
+        return cfg.get(key, default)
+
+    d = IdentityConfig.from_engine_config({}, {}, cfg_get=cfg_get).posthoc
+    assert d.noncatalog_to_unknown is True
+    assert d.fragment_min_absolute_posterior == 0.0
+    assert d.fragment_absolute_seeding is False
+    assert d.evidence_trust_enabled is False
+    cfg = {
+        "identity_evidence_trust": True,
+        "identity_trust_isolation_bl": 1.5,
+        "fragment_min_absolute_posterior": 0.3,
+    }
+    p = IdentityConfig.from_engine_config(cfg, {}, cfg_get=cfg_get).posthoc
+    params = {k: getattr(p, f) for f, k in EVIDENCE_ENGINE_KEYS.items()}
+    s = TrustSettings.from_params(params)
+    assert s.enabled and s.isolation_bl == 1.5
+    assert params["FRAGMENT_MIN_ABSOLUTE_POSTERIOR"] == 0.3
+    again = IdentityConfig.from_dict(
+        IdentityConfig.from_engine_config(cfg, {}, cfg_get=cfg_get).to_dict()
+    )
+    assert again.posthoc == p

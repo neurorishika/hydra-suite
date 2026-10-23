@@ -193,11 +193,15 @@ def _length_weight(params: dict[str, Any]) -> float:
 
 
 def _min_absolute_posterior(params: dict[str, Any]) -> float:
-    """``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` (default 0.3; 0 disables)."""
+    """``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` (default 0 = off; 0.3 when enabled).
+
+    Off by default: on the 2026-10 six-clip replay it raised the wrong-label
+    rate on two clips beyond tolerance (see docs/user-guide/post-processing.md).
+    """
     try:
-        return max(0.0, float(params.get("FRAGMENT_MIN_ABSOLUTE_POSTERIOR", 0.3)))
+        return max(0.0, float(params.get("FRAGMENT_MIN_ABSOLUTE_POSTERIOR", 0.0)))
     except (TypeError, ValueError):
-        return 0.3
+        return 0.0
 
 
 def _is_trusted_tier(frag_row, params: dict[str, Any]) -> bool:
@@ -254,7 +258,7 @@ def _seed_mass(frag_row, support: dict[str, float], duration: float, params) -> 
     Trusted tier: ``distinct trusted views x top support``. Otherwise
     ``duration x top evidence``, where the evidence is the fragment's
     ABSOLUTE mean posterior on its top-support label when
-    ``FRAGMENT_ABSOLUTE_SEEDING`` is on (default) -- so a long fragment
+    ``FRAGMENT_ABSOLUTE_SEEDING`` is on (default off) -- so a long fragment
     whose relative support saturated on weak absolute evidence does not
     seed ahead of a shorter, genuinely identified one -- and the relative
     top support otherwise (the historical key).
@@ -263,7 +267,7 @@ def _seed_mass(frag_row, support: dict[str, float], duration: float, params) -> 
     top = float(support[top_label]) if top_label is not None else 0.0
     if _is_trusted_tier(frag_row, params):
         return float(frag_row.get("TrustedViews") or 0) * top
-    if top_label is not None and bool(params.get("FRAGMENT_ABSOLUTE_SEEDING", True)):
+    if top_label is not None and bool(params.get("FRAGMENT_ABSOLUTE_SEEDING", False)):
         if top <= 0.0:
             return 0.0
         top = float((frag_row.get("MeanCNNProbs") or {}).get(top_label, 0.0))
@@ -1624,9 +1628,12 @@ def assess_evidence_quality(
     unsmoothed per-detection posteriors so a broken source can't be masked
     by forward-backward smoothing before the check runs.
 
-    conf_frac: fraction of (frame, detection) rows whose max KNOWN posterior,
-        renormalized over the known labels (the ``unknown`` slot excluded),
-        is >= ``EVIDENCE_CONF_LEVEL``.
+    conf_frac: fraction of (frame, detection) rows whose max KNOWN posterior
+        (absolute, the ``unknown`` slot excluded) is >= ``EVIDENCE_CONF_LEVEL``.
+        Rows whose ``unknown`` posterior is itself >= ``EVIDENCE_CONF_LEVEL``
+        (confidently non-identifying) are left out of both counts: they are
+        neither evidence of a working nor of a broken identity source. When
+        every row is such a row, the breaker trips (nothing to act on).
     diversity: mean over frames of distinct argmax labels / min(#known
         labels, #detections in that frame). Low when the source keeps
         pointing at the same one or two labels regardless of which
@@ -1640,14 +1647,13 @@ def assess_evidence_quality(
     for sequence in raw_evidence.values():
         for frame_id, lp in sequence:
             p = np.exp(lp - np.logaddexp.reduce(lp))
+            if p[0] >= EVIDENCE_CONF_LEVEL:
+                # Confidently "no identity here" (a non-identifying class,
+                # routed to unknown by phase_remap): says nothing about
+                # whether the source can tell identities apart, so it counts
+                # neither for nor against it.
+                continue
             known = p[1:]
-            # Renormalized over the known labels: this asks "is the source
-            # informative ABOUT IDENTITY when it names one", so a detection
-            # whose mass honestly sits on ``unknown`` (a non-identifying
-            # class, see phase_remap) must not count as a broken classifier.
-            known_total = known.sum()
-            if known_total > 0:
-                known = known / known_total
             total += 1
             if known.max() >= EVIDENCE_CONF_LEVEL:
                 conf += 1
@@ -1713,10 +1719,10 @@ def run_fragment_solver(
             support is RELATIVE (renormalized over the known labels), so this is a
             relative floor, NOT an absolute posterior floor -- see
             FRAGMENT_MIN_ABSOLUTE_POSTERIOR.
-        FRAGMENT_MIN_ABSOLUTE_POSTERIOR  float  default 0.3 — a label gets zero
+        FRAGMENT_MIN_ABSOLUTE_POSTERIOR  float  default 0 (off; 0.3 recommended) — a label gets zero
             support for a fragment whose mean ABSOLUTE posterior on it (unknown /
             non-identifying mass kept in the denominator) is below this. 0 disables.
-        FRAGMENT_ABSOLUTE_SEEDING        bool   default True — seed/rescue untiered
+        FRAGMENT_ABSOLUTE_SEEDING        bool   default False — seed/rescue untiered
             fragments by duration x absolute top posterior instead of duration x
             relative top support.
         IDENTITY_NONCATALOG_TO_UNKNOWN   bool   default True — mass on source
