@@ -44,6 +44,20 @@ _DEFAULT_REFERENCE_ASPECT_RATIO = 2.0
 _DEFAULT_CANONICAL_MARGIN = 1.3
 
 
+def _is_directed_flag(value: Any) -> bool:
+    """True only for an explicit ``HeadingIsDirected`` true.
+
+    A CSV round-trip can hand the flag back as the string ``"True"``, and a
+    row with no head-tail evidence carries NaN, which must not count as
+    directed.
+    """
+    if isinstance(value, str):
+        return value.strip().lower() == "true"
+    if value is None or pd.isna(value):
+        return False
+    return bool(value)
+
+
 @dataclass
 class FrameTask:
     """Encapsulates the affine transform and geometry for one track crop within a single frame."""
@@ -561,20 +575,24 @@ class OrientedTrackVideoExporter:
         directed_heading: Optional[float] = None,
         directed: bool = False,
     ) -> float:
-        theta = float("nan")
+        # A heading with a known head end is used as-is. Collapsing it onto the
+        # branch nearest the previous frame is only right for an undirected
+        # body axis: on a directed track, one real >90 degree turn between
+        # frames would flip every later crop of the track head-to-tail.
         if directed:
             try:
                 candidate = float(directed_heading)
                 if np.isfinite(candidate):
-                    theta = candidate
+                    return cls._normalize_theta(candidate)
             except Exception:
                 pass
-        if not np.isfinite(theta):
-            row_theta = getattr(row, "Theta", np.nan)
-            if pd.notna(row_theta):
-                theta = float(row_theta)
-            else:
-                theta = float(fallback_theta)
+        row_theta = getattr(row, "Theta", np.nan)
+        if pd.notna(row_theta):
+            if _is_directed_flag(getattr(row, "HeadingIsDirected", None)):
+                return cls._normalize_theta(float(row_theta))
+            theta = float(row_theta)
+        else:
+            theta = float(fallback_theta)
         return cls._collapse_branch_to_reference(theta, reference_theta)
 
     def _load_final_dataframe(self) -> pd.DataFrame:
@@ -592,9 +610,42 @@ class OrientedTrackVideoExporter:
         for col in ("TrajectoryID", "FrameID", "DetectionID", "Theta"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df.dropna(subset=["TrajectoryID", "FrameID"]).sort_values(
-            ["FrameID", "TrajectoryID"], kind="stable"
+        df = df.dropna(subset=["TrajectoryID", "FrameID"])
+        if "HeadingIsDirected" not in df.columns:
+            df = self._join_direction_flag_from_rich_csv(df)
+        return df.sort_values(["FrameID", "TrajectoryID"], kind="stable")
+
+    def _join_direction_flag_from_rich_csv(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add ``HeadingIsDirected`` from the rich export beside the final CSV.
+
+        A session's base final CSV carries Theta but not whether its head end
+        is known; that flag only reaches the rich ``_with_individual`` export.
+        Rows the rich CSV lacks stay NaN and so keep the undirected handling.
+        """
+        from hydra_suite.core.post.rich_export import rich_export_path
+
+        rich_path = Path(rich_export_path(str(self.final_csv_path)))
+        if not rich_path.exists():
+            return df
+        try:
+            rich = pd.read_csv(
+                rich_path, usecols=["TrajectoryID", "FrameID", "HeadingIsDirected"]
+            )
+        except ValueError:
+            return df  # an older rich export without the column
+        for col in ("TrajectoryID", "FrameID"):
+            rich[col] = pd.to_numeric(rich[col], errors="coerce")
+        rich = rich.dropna(subset=["TrajectoryID", "FrameID"]).drop_duplicates(
+            ["TrajectoryID", "FrameID"]
         )
+        joined = df.merge(rich, on=["TrajectoryID", "FrameID"], how="left")
+        logger.info(
+            "Head-direction flags joined from %s for %d/%d final rows.",
+            rich_path.name,
+            int(joined["HeadingIsDirected"].notna().sum()),
+            len(joined),
+        )
+        return joined
 
     def _load_interpolated_roi_lookup(self) -> dict[tuple[int, int], dict[str, Any]]:
         path = self.interpolated_roi_npz_path
