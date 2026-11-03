@@ -709,6 +709,13 @@ def _iterative_assign(
     spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
     monotone_eps = max(1e-3, float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10)))
     top_k = max(1, int(params.get("FRAGMENT_TOP_K", 3)))
+    if params.get("IDENTITY_EVIDENCE_TRUST", False) and params.get(
+        "IDENTITY_TRUST_TOP_LABEL_ONLY", True
+    ):
+        # No runner-up fallback: a fragment whose best label is held stays
+        # unknown instead of taking a lookalike label (blue_yellow for
+        # green_yellow) that the real holder already owns.
+        top_k = 1
     max_passes = max(1, int(params.get("FRAGMENT_MAX_PASSES", 10)))
     min_support = float(params.get("FRAGMENT_MIN_SUPPORT", 0.5))
     # Trusted-tier support is ABSOLUTE (unknown mass kept), so it gets its own

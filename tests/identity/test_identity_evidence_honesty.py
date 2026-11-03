@@ -647,3 +647,58 @@ def test_split_ids_respect_a_global_floor():
         df, {1: [9]}, {"MIN_FRAGMENT_FRAMES": 5}, trajectory_id_floor=100
     )
     assert set(out["TrajectoryID"]) == {100, 101}
+
+
+def test_trust_top_label_only_leaves_a_blocked_fragment_unknown():
+    # A holds "a" with strong trusted evidence. B overlaps it, its own best
+    # label is also "a", and "b" is a plausible runner-up (a lookalike tag).
+    holder = _row(
+        1,
+        0,
+        300,
+        {"a": 0.9, "b": 0.05},
+        x=0.0,
+        TrustedViews=10,
+        TrustedSupport={"a": 0.9, "b": 0.05},
+    )
+    blocked = _row(
+        2,
+        50,
+        200,
+        {"a": 0.5, "b": 0.4},
+        x=500.0,
+        TrustedViews=3,
+        TrustedSupport={"a": 0.5, "b": 0.4},
+    )
+    frags = _frags([holder, blocked])
+    params = {"MAX_VELOCITY_BREAK": 1e9, **ON, "IDENTITY_EVIDENCE_TRUST": True}
+    out = offline._iterative_assign(frags, ["a", "b"], params)
+    assert out[0] == "a" and out[1] is None
+    # Fallback to the runner-up when the setting is off...
+    fallback = offline._iterative_assign(
+        frags, ["a", "b"], dict(params, IDENTITY_TRUST_TOP_LABEL_ONLY=False)
+    )
+    assert fallback[0] == "a" and fallback[1] == "b"
+    # ...and the setting has no effect with the trust layer off.
+    no_trust = offline._iterative_assign(
+        frags, ["a", "b"], dict(params, IDENTITY_EVIDENCE_TRUST=False)
+    )
+    assert no_trust[1] == "b"
+
+
+def test_trust_top_label_only_config_round_trip():
+    from hydra_suite.trackerkit.config.identity_schema import (
+        EVIDENCE_ENGINE_KEYS,
+        IdentityConfig,
+    )
+
+    def cfg_get(cfg, key, default=None):
+        return cfg.get(key, default)
+
+    d = IdentityConfig.from_engine_config({}, {}, cfg_get=cfg_get).posthoc
+    assert d.trust_top_label_only is True
+    p = IdentityConfig.from_engine_config(
+        {"identity_trust_top_label_only": False}, {}, cfg_get=cfg_get
+    ).posthoc
+    params = {k: getattr(p, f) for f, k in EVIDENCE_ENGINE_KEYS.items()}
+    assert params["IDENTITY_TRUST_TOP_LABEL_ONLY"] is False
