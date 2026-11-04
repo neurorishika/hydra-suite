@@ -86,6 +86,10 @@ class PostHocIdentityConfig:
     trust_split_min_log_odds: float = 8.0
     trust_split_min_views: int = 3
     trust_split_min_confidence: float = 0.5
+    # With the trust layer on, a fragment only ever takes its own best label
+    # (FRAGMENT_TOP_K forced to 1); if that label is held it stays unknown
+    # rather than falling back to a lookalike runner-up.
+    trust_top_label_only: bool = True
     # Reserved (Phase 6):
     changepoint_enabled: bool = False
     fragment_min_frames: int = 0
@@ -112,6 +116,7 @@ _EVIDENCE_FIELD_KEYS: dict[str, str] = {
     "trust_split_min_log_odds": "identity_trust_split_min_log_odds",
     "trust_split_min_views": "identity_trust_split_min_views",
     "trust_split_min_confidence": "identity_trust_split_min_confidence",
+    "trust_top_label_only": "identity_trust_top_label_only",
 }
 
 # Persisted config keys that have no TrackerKit widget. The GUI carries their

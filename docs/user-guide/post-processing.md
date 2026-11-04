@@ -231,6 +231,11 @@ evidence frames show one animal clearly, and lets those drive identity:
    first (ordered by `views x support`). Every other fragment uses the honest evidence
    above, seeds after the trusted tier, and may never displace a trusted
    fragment -- it can only take labels the trusted tier left free.
+   With `identity_trust_top_label_only` (default `true`; only read when the
+   trust layer is on) a fragment is only ever given its own best label: if
+   another fragment holds that label it stays unknown rather than taking its
+   runner-up. The runner-up is usually a lookalike tag (`blue_yellow` for
+   `green_yellow`) whose real owner is elsewhere in the arena.
 5. **Splitting on trusted switches.** With `enable_pelt_splitting` on and the
    trust layer active, PELT on every frame's smoothed posterior is replaced
    by a split at confident label switches in the *trusted-view* sequence:
@@ -270,6 +275,11 @@ unsupported labels, not real ones).
   raises agreement further (0.87-0.97 on five videos, 0.75 on the most
   crowded) and fixes most relabel-to-the-wrong-
   animal cases, at the same coverage trade-off.
+- *Top label only* (trust layer on): rerun through the full pipeline on seven
+  full-arena videos. Wrong-label rate 0.046 -> 0.015 and 0.028 -> 0.015 on the
+  two videos with the most lookalike-label errors, unchanged elsewhere;
+  agreement within 0.004 and crowded-region coverage within 0.6 points on all
+  seven. Default on whenever the trust layer is on.
 
 ## Related Reading
 
