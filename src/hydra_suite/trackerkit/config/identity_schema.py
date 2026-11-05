@@ -65,13 +65,13 @@ class PostHocIdentityConfig:
     # Evidence honesty (2026-10 identity-evidence fixes). See
     # docs/user-guide/post-processing.md "Honest identity evidence".
     noncatalog_to_unknown: bool = True
-    # Off by default (failed the six-clip wrong-label tolerance); 0.3 + True
-    # is the validated "on" setting.
-    fragment_min_absolute_posterior: float = 0.0
-    fragment_absolute_seeding: bool = False
+    # On by default together with the evidence-trust layer (validated as one
+    # package; see docs/user-guide/post-processing.md).
+    fragment_min_absolute_posterior: float = 0.3
+    fragment_absolute_seeding: bool = True
     # Evidence-trust layer (core/individual/identity/evidence_trust.py).
     # Distances in body lengths, calibrated per video. No GUI controls yet.
-    evidence_trust_enabled: bool = False
+    evidence_trust_enabled: bool = True
     trust_isolation_bl: float = 1.0
     trust_prior_isolation_bl: float = 2.0
     trust_area_tolerance: float = 0.35

@@ -164,8 +164,8 @@ labels. Two behaviours are worth knowing:
 ## Honest Identity Evidence
 
 Three behaviours keep the fragment solver from treating weak identity
-evidence as strong. The first is on by default; the other two are opt-in
-(see *How the defaults were chosen* below):
+evidence as strong. All three are on by default; the last two ship as part
+of the evidence-trust package below (see *How the defaults were chosen*):
 
 - **Non-identifying mass stays "unknown".** When a classifier puts
   probability on a class that is not in the identity catalog -- a declared
@@ -180,23 +180,23 @@ evidence as strong. The first is on by default; the other two are opt-in
   on *relative* support -- support renormalized over the known labels, which
   saturates towards 1 on any long trajectory whatever the absolute evidence.
   `fragment_min_absolute_posterior` (engine `FRAGMENT_MIN_ABSOLUTE_POSTERIOR`,
-  default `0` = off, `0.3` recommended when enabled) additionally requires the fragment's mean
+  default `0.3`, `0` = off) additionally requires the fragment's mean
   *absolute* posterior on a label (the `unknown` mass kept in the
   denominator) to reach this value before the label is a candidate at all.
   It only applies to fragments that have cache evidence; a fragment with
   none keeps whatever the online prior supports.
 - **Absolute seeding.** Fragments claim labels in descending
   `duration x evidence` order; with `fragment_absolute_seeding` (engine
-  `FRAGMENT_ABSOLUTE_SEEDING`, default `false`) the evidence term is the
+  `FRAGMENT_ABSOLUTE_SEEDING`, default `true`) the evidence term is the
   absolute posterior, so a long weakly-identified trajectory no longer
   claims a label ahead of a shorter, clearly-identified one.
 
 `fragment_length_weight` has always been clamped to `[0, 1]`; a value outside
 that range now logs a warning instead of being clamped silently.
 
-## Evidence-Trust Layer (optional)
+## Evidence-Trust Layer
 
-`identity_evidence_trust` (engine `IDENTITY_EVIDENCE_TRUST`, default `false`)
+`identity_evidence_trust` (engine `IDENTITY_EVIDENCE_TRUST`, default `true`)
 decides, from detection geometry alone -- never from the classifier -- which
 evidence frames show one animal clearly, and lets those drive identity:
 
@@ -251,7 +251,11 @@ Each run logs one summary line: trusted fraction, body length, prior,
 and which checks were active. The trust keys are config-only for now (no
 TrackerKit controls). The layer was validated together with
 `fragment_min_absolute_posterior: 0.3` and `fragment_absolute_seeding: true`
-(the untrusted tier's evidence); enable all three together.
+(the untrusted tier's evidence); all three are on by default, so change them
+together. When the layer cannot run (no detection geometry) it logs a warning
+and the solver uses the untiered path; top-label-only then does not apply.
+Trusted-switch splitting still needs `enable_pelt_splitting`, which stays off
+by default: with the layer inactive it falls back to PELT.
 
 ### How the defaults were chosen
 
@@ -267,11 +271,11 @@ unsupported labels, not real ones).
   fix and ships on; on one video the few labels it removed (388 rows) had a
   median posterior of 0.35.
 - *Absolute gate + seeding*: agreement up on five videos (up to +0.23) but
-  the wrong-label rate rose by 0.011 and 0.007 on two -- off by default.
+  the wrong-label rate rose by 0.011 and 0.007 on two -- left off on its own (it is on now only as part of the trust package).
 - *Trust layer*: agreement up on all six (up to +0.37) and the wrong-label
   rate down or within 0.001 on all six, but it also removes labels whose per-frame posterior is
   moderate (median 0.36-0.61 on four videos) and lowers coverage of crowded
-  regions by up to 6 points -- off by default. Adding trusted-view splitting
+  regions by up to 6 points -- off by default at the time. Adding trusted-view splitting
   raises agreement further (0.87-0.97 on five videos, 0.75 on the most
   crowded) and fixes most relabel-to-the-wrong-
   animal cases, at the same coverage trade-off.
@@ -280,6 +284,16 @@ unsupported labels, not real ones).
   two videos with the most lookalike-label errors, unchanged elsewhere;
   agreement within 0.004 and crowded-region coverage within 0.6 points on all
   seven. Default on whenever the trust layer is on.
+- *Package default on* (2026-11): the trust layer, the absolute gate and
+  absolute seeding are on by default, on the strength of one dataset: 66
+  full-arena ant videos (central-dish agreement median 0.836 -> 0.936, wrong-label
+  rate 0.022 -> 0.013, chamber coverage unchanged) and 40 blind-proofread
+  segments. Where the trust run and the dish-only reference disagreed, the
+  proofreader sided with the trust run 9 times out of 10 and with the
+  reference never; in the chambers, on segments that were one animal
+  throughout, the trust run was right 5/5 and the old default 0/5. Its cost:
+  most dish rows it leaves unknown were readable (8 of 10). It has not yet
+  been validated on a second dataset.
 
 ## Related Reading
 

@@ -193,13 +193,13 @@ def _length_weight(params: dict[str, Any]) -> float:
 
 
 def _min_absolute_posterior(params: dict[str, Any]) -> float:
-    """``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` (default 0 = off; 0.3 when enabled).
+    """``FRAGMENT_MIN_ABSOLUTE_POSTERIOR`` (default 0.3; 0 = off).
 
-    Off by default: on the 2026-10 six-clip replay it raised the wrong-label
-    rate on two clips beyond tolerance (see docs/user-guide/post-processing.md).
+    On by default as part of the evidence-trust package (see
+    docs/user-guide/post-processing.md).
     """
     try:
-        return max(0.0, float(params.get("FRAGMENT_MIN_ABSOLUTE_POSTERIOR", 0.0)))
+        return max(0.0, float(params.get("FRAGMENT_MIN_ABSOLUTE_POSTERIOR", 0.3)))
     except (TypeError, ValueError):
         return 0.0
 
@@ -258,7 +258,7 @@ def _seed_mass(frag_row, support: dict[str, float], duration: float, params) -> 
     Trusted tier: ``distinct trusted views x top support``. Otherwise
     ``duration x top evidence``, where the evidence is the fragment's
     ABSOLUTE mean posterior on its top-support label when
-    ``FRAGMENT_ABSOLUTE_SEEDING`` is on (default off) -- so a long fragment
+    ``FRAGMENT_ABSOLUTE_SEEDING`` is on (default on) -- so a long fragment
     whose relative support saturated on weak absolute evidence does not
     seed ahead of a shorter, genuinely identified one -- and the relative
     top support otherwise (the historical key).
@@ -267,7 +267,7 @@ def _seed_mass(frag_row, support: dict[str, float], duration: float, params) -> 
     top = float(support[top_label]) if top_label is not None else 0.0
     if _is_trusted_tier(frag_row, params):
         return float(frag_row.get("TrustedViews") or 0) * top
-    if top_label is not None and bool(params.get("FRAGMENT_ABSOLUTE_SEEDING", False)):
+    if top_label is not None and bool(params.get("FRAGMENT_ABSOLUTE_SEEDING", True)):
         if top <= 0.0:
             return 0.0
         top = float((frag_row.get("MeanCNNProbs") or {}).get(top_label, 0.0))
@@ -709,8 +709,12 @@ def _iterative_assign(
     spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
     monotone_eps = max(1e-3, float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10)))
     top_k = max(1, int(params.get("FRAGMENT_TOP_K", 3)))
-    if params.get("IDENTITY_EVIDENCE_TRUST", False) and params.get(
-        "IDENTITY_TRUST_TOP_LABEL_ONLY", True
+    # TrustedViews is only added when the trust layer actually ran (enabled
+    # AND geometry available); an inactive layer keeps the untiered path.
+    if (
+        params.get("IDENTITY_EVIDENCE_TRUST", True)
+        and params.get("IDENTITY_TRUST_TOP_LABEL_ONLY", True)
+        and "TrustedViews" in frags.columns
     ):
         # No runner-up fallback: a fragment whose best label is held stays
         # unknown instead of taking a lookalike label (blue_yellow for
@@ -1759,15 +1763,15 @@ def run_fragment_solver(
             support is RELATIVE (renormalized over the known labels), so this is a
             relative floor, NOT an absolute posterior floor -- see
             FRAGMENT_MIN_ABSOLUTE_POSTERIOR.
-        FRAGMENT_MIN_ABSOLUTE_POSTERIOR  float  default 0 (off; 0.3 recommended) — a label gets zero
+        FRAGMENT_MIN_ABSOLUTE_POSTERIOR  float  default 0.3 (0 = off) — a label gets zero
             support for a fragment whose mean ABSOLUTE posterior on it (unknown /
             non-identifying mass kept in the denominator) is below this. 0 disables.
-        FRAGMENT_ABSOLUTE_SEEDING        bool   default False — seed/rescue untiered
+        FRAGMENT_ABSOLUTE_SEEDING        bool   default True — seed/rescue untiered
             fragments by duration x absolute top posterior instead of duration x
             relative top support.
         IDENTITY_NONCATALOG_TO_UNKNOWN   bool   default True — mass on source
             classes outside the catalog goes to ``unknown`` (see phase_remap).
-        IDENTITY_EVIDENCE_TRUST          bool   default False — classifier-
+        IDENTITY_EVIDENCE_TRUST          bool   default True — classifier-
             independent trusted-frame gate + distinct views + tiered seeding (see
             ``evidence_trust``). Needs ``evidence_trust`` (built once per video by
             ``postprocess_df.resolve_identity``); IDENTITY_TRUST_* tune it.

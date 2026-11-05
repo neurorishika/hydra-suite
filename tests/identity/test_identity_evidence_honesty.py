@@ -261,7 +261,7 @@ def test_weak_long_fragment_no_longer_blocks_a_strong_short_one():
     )
     assert base[0] == "a" and base[1] is None  # the documented failure
     fixed = offline._iterative_assign(frags, ["a", "b"], ON)
-    assert offline._iterative_assign(frags, ["a", "b"], {}) == base  # default off
+    assert offline._iterative_assign(frags, ["a", "b"], {}) == fixed  # default on
     assert fixed[0] is None and fixed[1] == "a"
 
 
@@ -546,9 +546,9 @@ def test_engine_param_defaults_and_config_round_trip():
 
     d = IdentityConfig.from_engine_config({}, {}, cfg_get=cfg_get).posthoc
     assert d.noncatalog_to_unknown is True
-    assert d.fragment_min_absolute_posterior == 0.0
-    assert d.fragment_absolute_seeding is False
-    assert d.evidence_trust_enabled is False
+    assert d.fragment_min_absolute_posterior == 0.3
+    assert d.fragment_absolute_seeding is True
+    assert d.evidence_trust_enabled is True
     cfg = {
         "identity_evidence_trust": True,
         "identity_trust_isolation_bl": 1.5,
