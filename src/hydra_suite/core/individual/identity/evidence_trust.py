@@ -64,7 +64,7 @@ class TrustSettings:
     Distances are in body lengths, angles in degrees, fractions in [0, 1].
     """
 
-    enabled: bool = False
+    enabled: bool = True
     isolation_bl: float = 1.0
     prior_isolation_bl: float = 2.0
     area_tolerance: float = 0.35

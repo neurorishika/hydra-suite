@@ -110,4 +110,4 @@ def test_full_load_without_the_keys_reverts_to_defaults(main_window, tmp_path):
     orch._load_config_from_file(str(plain), preset_mode=False)
     saved = orch.build_config_dict()
     assert not (set(NON_DEFAULT) & set(saved))
-    assert orch.get_parameters_dict()["IDENTITY_EVIDENCE_TRUST"] is False
+    assert orch.get_parameters_dict()["IDENTITY_EVIDENCE_TRUST"] is True

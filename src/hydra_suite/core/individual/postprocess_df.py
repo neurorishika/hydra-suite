@@ -642,7 +642,7 @@ def resolve_identity(
                 catalog = IdentityCatalog.from_spec(catalog_spec)
                 cache = _open_identity_evidence_cache(identity_evidence_cache_path)
                 evidence_trust = None
-                if params.get("IDENTITY_EVIDENCE_TRUST", False):
+                if params.get("IDENTITY_EVIDENCE_TRUST", True):
                     from hydra_suite.core.individual.identity.evidence_trust import (
                         build_evidence_trust,
                     )
