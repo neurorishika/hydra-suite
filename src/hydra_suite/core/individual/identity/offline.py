@@ -403,6 +403,31 @@ def detect_trusted_label_switches(
     return result
 
 
+def detect_contact_label_switches(
+    df: pd.DataFrame,
+    raw_evidence_by_traj: dict[Any, list[tuple[int, np.ndarray]]],
+    evidence_trust: Any,
+) -> dict[Any, list[int]]:
+    """``{TrajectoryID: [inclusive segment ends]}`` at contacts across which
+    the identity evidence switches label (``IDENTITY_TRUST_CONTACT_*``, see
+    ``evidence_trust.find_contact_switches``)."""
+    from hydra_suite.core.individual.identity.evidence_trust import (
+        find_contact_switches,
+    )
+
+    result: dict[Any, list[int]] = {}
+    if not raw_evidence_by_traj or df is None or df.empty:
+        return result
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        seq = raw_evidence_by_traj.get(traj_id)
+        if not seq:
+            continue
+        cuts = find_contact_switches(grp, seq, evidence_trust)
+        if cuts:
+            result[traj_id] = cuts
+    return result
+
+
 def split_trajectories_at_changepoints(
     df: pd.DataFrame,
     changepoints: dict[Any, list[int]],
@@ -1955,15 +1980,42 @@ def run_fragment_solver(
     )
 
     did_split = False
-    if params.get("ENABLE_PELT_SPLITTING", False) and smoothed_by_traj:
-        if trust_active:
-            changepoints = detect_trusted_label_switches(
+    pelt_requested = bool(params.get("ENABLE_PELT_SPLITTING", False))
+    # Contact-gated switch splitting runs with the trust layer whether or not
+    # the (PELT / trusted-view) changepoint splitter is enabled: it only cuts
+    # where the evidence on both sides of a contact names different animals.
+    contact_split = bool(
+        trust_active
+        and smoothed_by_traj
+        and getattr(evidence_trust.settings, "contact_split", False)
+    )
+    if (pelt_requested and smoothed_by_traj) or contact_split:
+        changepoints: dict[Any, list[int]] = {}
+        methods = []
+        if pelt_requested and smoothed_by_traj:
+            if trust_active:
+                changepoints = detect_trusted_label_switches(
+                    trajectories_df, raw_evidence, evidence_trust
+                )
+                methods.append("trusted-view label-switch detection")
+            else:
+                changepoints = detect_identity_changepoints(
+                    smoothed_by_traj, catalog, params
+                )
+                methods.append("PELT")
+        if contact_split:
+            contact_cuts = detect_contact_label_switches(
                 trajectories_df, raw_evidence, evidence_trust
             )
-        else:
-            changepoints = detect_identity_changepoints(
-                smoothed_by_traj, catalog, params
+            log.info(
+                "fragment_solver: contact-gated switch detection found %d "
+                "changepoints in %d trajectories.",
+                sum(len(v) for v in contact_cuts.values()),
+                len(contact_cuts),
             )
+            for tid, cuts in contact_cuts.items():
+                changepoints[tid] = sorted(set(changepoints.get(tid, [])) | set(cuts))
+            methods.append("contact-gated switch detection")
         split_df = split_trajectories_at_changepoints(
             trajectories_df, changepoints, params, trajectory_id_floor
         )
@@ -1971,7 +2023,7 @@ def run_fragment_solver(
         did_split = n_splits > 0
         log.info(
             "fragment_solver: %s found %d changepoints; %d → %d trajectories after splitting.",
-            "trusted-view label-switch detection" if trust_active else "PELT",
+            " + ".join(methods),
             n_splits,
             trajectories_df["TrajectoryID"].nunique(),
             split_df["TrajectoryID"].nunique(),

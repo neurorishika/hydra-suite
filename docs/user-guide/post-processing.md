@@ -246,10 +246,37 @@ evidence frames show one animal clearly, and lets those drive identity:
    `identity_trust_split_min_log_odds` (8.0) nats of evidence. The cut is
    placed in the untrusted gap between the two views. With the trust layer
    off, `enable_pelt_splitting` keeps the original PELT behaviour.
+6. **Splitting at contacts.** Identity swaps happen while animals touch.
+   With `identity_trust_contact_split` (default `true`; runs whenever the
+   trust layer is active, independent of `enable_pelt_splitting`) a
+   trajectory is cut at a contact only when the evidence on the two sides of
+   it names different animals. A row is *in contact* when the nearest other
+   detection is closer than `identity_trust_contact_bl` (0.5) body lengths,
+   or when it has no detection (occluded). Contact runs are found with gaps
+   of up to `identity_trust_contact_fill` (2) rows bridged and runs shorter
+   than `identity_trust_contact_min_frames` (3) rows ignored. For each run,
+   up to `identity_trust_contact_window` (30) clean, non-contact evidence
+   frames on each side (never past the neighbouring contacts) are compared
+   with the same three tests as step 5 (`identity_trust_split_min_views`
+   frames per side, `identity_trust_split_min_confidence`,
+   `identity_trust_split_min_log_odds`). The contact run itself becomes its
+   own short piece. A contact with too little clean evidence on a side is
+   left alone, so the trajectory keeps its motion-based continuity there,
+   and cuts whose two sides end with the same label are rejoined after
+   assignment.
 
 Each run logs one summary line: trusted fraction, body length, prior,
-and which checks were active. The trust keys are config-only for now (no
-TrackerKit controls). The layer was validated together with
+and which checks were active, plus the number of contact-switch cuts.
+
+**TrackerKit controls** (Post-processing → Advanced options → Identity
+Post-Processing → Fragment Solver): *Minimum label confidence* (`fragment_min_absolute_posterior`),
+*Trust identity evidence only from clear single-animal views*
+(`identity_evidence_trust`), *Clear-view distance*
+(`identity_trust_isolation_bl`), *Split at contacts where the identity
+evidence switches* (`identity_trust_contact_split`), *Contact distance*
+(`identity_trust_contact_bl`) and *Split evidence margin*
+(`identity_trust_split_min_log_odds`, shared by steps 5 and 6). Every other
+trust key is config-only. The layer was validated together with
 `fragment_min_absolute_posterior: 0.3` and `fragment_absolute_seeding: true`
 (the untrusted tier's evidence); all three are on by default, so change them
 together. When the layer cannot run (no detection geometry) it logs a warning
@@ -294,6 +321,19 @@ unsupported labels, not real ones).
   throughout, the trust run was right 5/5 and the old default 0/5. Its cost:
   most dish rows it leaves unknown were readable (8 of 10). It has not yet
   been validated on a second dataset.
+- *Contact split* (2026-11): on the same dataset, every proofread identity
+  swap happened while the animal was within 0.5 body lengths of another.
+  Cutting at every contact caught 8 of 9 swaps but tripled the number of
+  trajectories; cutting only where the evidence switches across the contact
+  cost 1.04-1.10x trajectories. Rerun through the full pipeline on 34
+  clips and scored row by row against the proofreading, it moved swap rows
+  from 50% correct / 50% wrong to 68% / 32% (two of the five wrongly
+  labelled segments fixed, none newly broken), raised clean rows from 73% to
+  78% correct with wrong unchanged at 2.2%, and raised whole-video coverage
+  by 1.0 point (dish 92.1% -> 93.1%, dish agreement 91.1% -> 92.3%), at
+  1.03x trajectories. Treating long pile-ups specially (never
+  carrying identity through them) fixed no further swaps and cost 5-8 points
+  of coverage, so it is not offered.
 
 ## Related Reading
 

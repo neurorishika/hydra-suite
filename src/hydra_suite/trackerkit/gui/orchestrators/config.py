@@ -1079,6 +1079,25 @@ class ConfigOrchestrator:
         self._panels.postprocess.chk_enable_identity_smoothing.setChecked(
             bool(get_cfg("enable_identity_smoothing", default=True))
         )
+        pp = self._panels.postprocess
+        pp.chk_identity_evidence_trust.setChecked(
+            bool(get_cfg("identity_evidence_trust", default=True))
+        )
+        pp.spin_identity_trust_isolation_bl.setValue(
+            float(get_cfg("identity_trust_isolation_bl", default=1.0))
+        )
+        pp.spin_fragment_min_absolute_posterior.setValue(
+            float(get_cfg("fragment_min_absolute_posterior", default=0.3))
+        )
+        pp.chk_identity_trust_contact_split.setChecked(
+            bool(get_cfg("identity_trust_contact_split", default=True))
+        )
+        pp.spin_identity_trust_contact_bl.setValue(
+            float(get_cfg("identity_trust_contact_bl", default=0.5))
+        )
+        pp.spin_identity_trust_split_min_log_odds.setValue(
+            float(get_cfg("identity_trust_split_min_log_odds", default=8.0))
+        )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
         )
@@ -2028,6 +2047,12 @@ class ConfigOrchestrator:
                 "enable_fragment_scoring": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
                 "enable_pelt_splitting": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
                 "enable_identity_smoothing": self._panels.postprocess.chk_enable_identity_smoothing.isChecked(),
+                "identity_evidence_trust": self._panels.postprocess.chk_identity_evidence_trust.isChecked(),
+                "identity_trust_isolation_bl": self._panels.postprocess.spin_identity_trust_isolation_bl.value(),
+                "fragment_min_absolute_posterior": self._panels.postprocess.spin_fragment_min_absolute_posterior.value(),
+                "identity_trust_contact_split": self._panels.postprocess.chk_identity_trust_contact_split.isChecked(),
+                "identity_trust_contact_bl": self._panels.postprocess.spin_identity_trust_contact_bl.value(),
+                "identity_trust_split_min_log_odds": self._panels.postprocess.spin_identity_trust_split_min_log_odds.value(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
                 # Agreement distance and min overlap frames for conservative merging

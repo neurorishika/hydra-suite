@@ -936,6 +936,8 @@ class PostProcessPanel(QWidget):
             self.chk_enable_fragment_scoring.isChecked()
         )
 
+        self._build_evidence_trust_controls(fs_layout)
+
         self.fragment_solver_content.setVisible(True)
         vl_identity_postprocess.addWidget(self.fragment_solver_content)
 
@@ -1292,6 +1294,145 @@ class PostProcessPanel(QWidget):
             self.chk_prompt_open_refinekit.setChecked(False)
         self.g_refinekit.setVisible(not active)
         self.g_refinekit.setEnabled(not active)
+
+    def _build_evidence_trust_controls(self, fs_layout: QFormLayout) -> None:
+        """Evidence-trust + contact-split controls (the sensitive subset of the
+        IDENTITY_TRUST_* knobs; the rest stay config-only)."""
+
+        def _spin(lo, hi, step, decimals, value, tip):
+            w = QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setSingleStep(step)
+            w.setDecimals(decimals)
+            w.setValue(value)
+            w.setToolTip(tip)
+            return w
+
+        self.chk_identity_evidence_trust = QCheckBox(
+            "Trust identity evidence only from clear single-animal views"
+        )
+        self.chk_identity_evidence_trust.setChecked(True)
+        self.chk_identity_evidence_trust.setToolTip(
+            "When checked (default), a fragment's label is decided from frames\n"
+            "where the animal is isolated and looks like one animal (shape and,\n"
+            "with pose, keypoint checks). Frames in contact or merged blobs no\n"
+            "longer outvote clear views. Needs the detection cache; without it\n"
+            "the solver falls back to using every frame."
+        )
+        fs_layout.addRow(self.chk_identity_evidence_trust)
+
+        self.evidence_trust_controls_widget = QWidget()
+        trust_layout = QFormLayout(self.evidence_trust_controls_widget)
+        trust_layout.setContentsMargins(16, 0, 0, 0)
+        trust_layout.setSpacing(4)
+
+        self.spin_identity_trust_isolation_bl = _spin(
+            0.25,
+            5.0,
+            0.25,
+            2,
+            1.0,
+            "A frame counts as a clear view only when the nearest other animal\n"
+            "is farther than this many body lengths (body length is measured\n"
+            "per video). Higher → fewer but cleaner views; lower → more views\n"
+            "in crowded videos.\nRecommended: 0.75–1.5.",
+        )
+        self.lbl_identity_trust_isolation_bl = QLabel("Clear-view distance (BL)")
+        self.spin_fragment_min_absolute_posterior = _spin(
+            0.0,
+            1.0,
+            0.05,
+            2,
+            0.3,
+            "Absolute confidence floor: a fragment keeps a label only when its\n"
+            "evidence gives that label at least this probability. Below it the\n"
+            "fragment stays Unknown instead of taking a weak guess.\n"
+            "Higher → fewer but more reliable labels.\nRecommended: 0.2–0.5.",
+        )
+        self.lbl_fragment_min_absolute_posterior = QLabel("Minimum label confidence")
+        # Applies with or without the trust layer, so it sits outside it.
+        fs_layout.insertRow(
+            fs_layout.rowCount() - 1,
+            self._build_field_grid(
+                [
+                    (
+                        self.lbl_fragment_min_absolute_posterior,
+                        self.spin_fragment_min_absolute_posterior,
+                    )
+                ],
+                columns=2,
+            ),
+        )
+
+        self.chk_identity_trust_contact_split = QCheckBox(
+            "Split at contacts where the identity evidence switches"
+        )
+        self.chk_identity_trust_contact_split.setChecked(True)
+        self.chk_identity_trust_contact_split.setToolTip(
+            "Identity swaps happen while animals touch. When checked (default),\n"
+            "a trajectory is cut at a contact only if the clean evidence just\n"
+            "before and just after it names two different animals. Contacts\n"
+            "with too little clean evidence are left alone, so this rarely\n"
+            "fragments a track. Cuts that end up with the same label on both\n"
+            "sides are rejoined automatically."
+        )
+        self.spin_identity_trust_contact_bl = _spin(
+            0.1,
+            2.0,
+            0.05,
+            2,
+            0.5,
+            "Two animals are in contact when their centres are closer than\n"
+            "this many body lengths. Higher → more contacts are checked (and\n"
+            "fewer clean frames remain between them).\nRecommended: 0.4–0.75.",
+        )
+        self.lbl_identity_trust_contact_bl = QLabel("Contact distance (BL)")
+        self.spin_identity_trust_split_min_log_odds = _spin(
+            1.0,
+            50.0,
+            1.0,
+            1,
+            8.0,
+            "How much stronger (in nats of log-evidence) 'two animals' must\n"
+            "explain the evidence than 'one animal' before a trajectory is\n"
+            "split. Higher → fewer, surer splits.\nRecommended: 6–12.",
+        )
+        self.lbl_identity_trust_split_min_log_odds = QLabel("Split evidence margin")
+
+        trust_layout.addRow(
+            self._build_field_grid(
+                [
+                    (
+                        self.lbl_identity_trust_isolation_bl,
+                        self.spin_identity_trust_isolation_bl,
+                    ),
+                ],
+                columns=2,
+            )
+        )
+        trust_layout.addRow(self.chk_identity_trust_contact_split)
+        self.contact_split_controls_widget = self._build_field_grid(
+            [
+                (
+                    self.lbl_identity_trust_contact_bl,
+                    self.spin_identity_trust_contact_bl,
+                ),
+                (
+                    self.lbl_identity_trust_split_min_log_odds,
+                    self.spin_identity_trust_split_min_log_odds,
+                ),
+            ],
+            columns=2,
+        )
+        trust_layout.addRow(self.contact_split_controls_widget)
+        fs_layout.addRow(self.evidence_trust_controls_widget)
+
+        self.chk_identity_evidence_trust.toggled.connect(
+            self.evidence_trust_controls_widget.setEnabled
+        )
+        self.chk_identity_trust_contact_split.toggled.connect(
+            self.contact_split_controls_widget.setEnabled
+        )
 
     def _create_subsection_form(
         self,

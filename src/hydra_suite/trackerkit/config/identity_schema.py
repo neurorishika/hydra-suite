@@ -70,7 +70,9 @@ class PostHocIdentityConfig:
     fragment_min_absolute_posterior: float = 0.3
     fragment_absolute_seeding: bool = True
     # Evidence-trust layer (core/individual/identity/evidence_trust.py).
-    # Distances in body lengths, calibrated per video. No GUI controls yet.
+    # Distances in body lengths, calibrated per video. The fields in
+    # GUI_EVIDENCE_FIELDS have Post-processing panel controls; the rest are
+    # config-only.
     evidence_trust_enabled: bool = True
     trust_isolation_bl: float = 1.0
     trust_prior_isolation_bl: float = 2.0
@@ -86,6 +88,15 @@ class PostHocIdentityConfig:
     trust_split_min_log_odds: float = 8.0
     trust_split_min_views: int = 3
     trust_split_min_confidence: float = 0.5
+    # Contact-gated switch split (evidence_trust.find_contact_switches): cut a
+    # trajectory at a contact only when the clean evidence on the two sides
+    # names different animals. Runs with the trust layer, independent of
+    # enable_pelt_splitting.
+    trust_contact_split: bool = True
+    trust_contact_bl: float = 0.5
+    trust_contact_window: int = 30
+    trust_contact_min_frames: int = 3
+    trust_contact_fill: int = 2
     # With the trust layer on, a fragment only ever takes its own best label
     # (FRAGMENT_TOP_K forced to 1); if that label is held it stays unknown
     # rather than falling back to a lookalike runner-up.
@@ -116,14 +127,31 @@ _EVIDENCE_FIELD_KEYS: dict[str, str] = {
     "trust_split_min_log_odds": "identity_trust_split_min_log_odds",
     "trust_split_min_views": "identity_trust_split_min_views",
     "trust_split_min_confidence": "identity_trust_split_min_confidence",
+    "trust_contact_split": "identity_trust_contact_split",
+    "trust_contact_bl": "identity_trust_contact_bl",
+    "trust_contact_window": "identity_trust_contact_window",
+    "trust_contact_min_frames": "identity_trust_contact_min_frames",
+    "trust_contact_fill": "identity_trust_contact_fill",
     "trust_top_label_only": "identity_trust_top_label_only",
 }
 
+# Evidence fields with a Post-processing panel control (the important,
+# data-sensitive ones); every other evidence field stays config-only.
+GUI_EVIDENCE_FIELDS: tuple[str, ...] = (
+    "evidence_trust_enabled",
+    "trust_isolation_bl",
+    "fragment_min_absolute_posterior",
+    "trust_contact_split",
+    "trust_contact_bl",
+    "trust_split_min_log_odds",
+)
 # Persisted config keys that have no TrackerKit widget. The GUI carries their
 # values from the loaded file through build_config_dict (so GUI Save does not
 # erase them and GUI runs see the same values as `trackerkit track` on the
 # same file). See trackerkit.gui.orchestrators.config.CONFIG_ONLY_KEYS.
-CONFIG_ONLY_KEYS: tuple[str, ...] = tuple(_EVIDENCE_FIELD_KEYS.values())
+CONFIG_ONLY_KEYS: tuple[str, ...] = tuple(
+    key for f, key in _EVIDENCE_FIELD_KEYS.items() if f not in GUI_EVIDENCE_FIELDS
+)
 
 # PostHocIdentityConfig field -> engine-params key
 EVIDENCE_ENGINE_KEYS: dict[str, str] = {
