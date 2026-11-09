@@ -325,10 +325,13 @@ unsupported labels, not real ones).
   swap happened while the animal was within 0.5 body lengths of another.
   Cutting at every contact caught 8 of 9 swaps but tripled the number of
   trajectories; cutting only where the evidence switches across the contact
-  cost 1.04-1.10x trajectories. Scored row by row against the proofreading,
-  it moved swap segments from 39% correct / 5% wrong to 63% / 4% (the rest
-  unknown), left clean segments at 91% correct with 0.3% wrong, and left
-  whole-video coverage unchanged. Treating long pile-ups specially (never
+  cost 1.04-1.10x trajectories. Rerun through the full pipeline on 34
+  clips and scored row by row against the proofreading, it moved swap rows
+  from 50% correct / 50% wrong to 68% / 32% (two of the five wrongly
+  labelled segments fixed, none newly broken), raised clean rows from 73% to
+  78% correct with wrong unchanged at 2.2%, and raised whole-video coverage
+  by 1.0 point (dish 92.1% -> 93.1%, dish agreement 91.1% -> 92.3%), at
+  1.03x trajectories. Treating long pile-ups specially (never
   carrying identity through them) fixed no further swaps and cost 5-8 points
   of coverage, so it is not offered.
 
