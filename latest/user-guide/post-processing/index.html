@@ -919,6 +919,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#honest-identity-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Honest Identity Evidence
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evidence-trust-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evidence-Trust Layer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Evidence-Trust Layer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-defaults-were-chosen" class="md-nav__link">
+    <span class="md-ellipsis">
+      How the defaults were chosen
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-reading" class="md-nav__link">
     <span class="md-ellipsis">
       Related Reading
@@ -2220,6 +2253,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#honest-identity-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Honest Identity Evidence
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#evidence-trust-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evidence-Trust Layer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Evidence-Trust Layer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-defaults-were-chosen" class="md-nav__link">
+    <span class="md-ellipsis">
+      How the defaults were chosen
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-reading" class="md-nav__link">
     <span class="md-ellipsis">
       Related Reading
@@ -2389,6 +2455,135 @@ labels. Two behaviours are worth knowing:</p>
   (uninformative) source thought. Seeing this ERROR almost always means the
   classifier is being fed the wrong crop shape -- see
   <a href="../individual-analysis/#older-classifiers-and-crop-preprocessing">Older Classifiers and Crop Preprocessing</a>.</p>
+<h2 id="honest-identity-evidence">Honest Identity Evidence<a class="headerlink" href="#honest-identity-evidence" title="Permanent link">&para;</a></h2>
+<p>Three behaviours keep the fragment solver from treating weak identity
+evidence as strong. All three are on by default; the last two ship as part
+of the evidence-trust package below (see <em>How the defaults were chosen</em>):</p>
+<ul>
+<li><strong>Non-identifying mass stays "unknown".</strong> When a classifier puts
+  probability on a class that is not in the identity catalog -- a declared
+  non-identifying class such as <code>notag</code>, or anything out of vocabulary --
+  that probability now goes to the catalog's <code>unknown</code> slot. Before, it was
+  dropped and the remainder renormalized, so a crop that was 90 % <code>notag</code>
+  and 10 % one tag read as a confident tag. Config key
+  <code>identity_noncatalog_to_unknown</code> (engine <code>IDENTITY_NONCATALOG_TO_UNKNOWN</code>,
+  default <code>true</code>). It applies to the realtime decoder and the offline solver
+  alike.</li>
+<li><strong>Absolute support gate.</strong> <code>fragment_min_support</code> (default 0.5) is a floor
+  on <em>relative</em> support -- support renormalized over the known labels, which
+  saturates towards 1 on any long trajectory whatever the absolute evidence.
+  <code>fragment_min_absolute_posterior</code> (engine <code>FRAGMENT_MIN_ABSOLUTE_POSTERIOR</code>,
+  default <code>0.3</code>, <code>0</code> = off) additionally requires the fragment's mean
+  <em>absolute</em> posterior on a label (the <code>unknown</code> mass kept in the
+  denominator) to reach this value before the label is a candidate at all.
+  It only applies to fragments that have cache evidence; a fragment with
+  none keeps whatever the online prior supports.</li>
+<li><strong>Absolute seeding.</strong> Fragments claim labels in descending
+  <code>duration x evidence</code> order; with <code>fragment_absolute_seeding</code> (engine
+  <code>FRAGMENT_ABSOLUTE_SEEDING</code>, default <code>true</code>) the evidence term is the
+  absolute posterior, so a long weakly-identified trajectory no longer
+  claims a label ahead of a shorter, clearly-identified one.</li>
+</ul>
+<p><code>fragment_length_weight</code> has always been clamped to <code>[0, 1]</code>; a value outside
+that range now logs a warning instead of being clamped silently.</p>
+<h2 id="evidence-trust-layer">Evidence-Trust Layer<a class="headerlink" href="#evidence-trust-layer" title="Permanent link">&para;</a></h2>
+<p><code>identity_evidence_trust</code> (engine <code>IDENTITY_EVIDENCE_TRUST</code>, default <code>true</code>)
+decides, from detection geometry alone -- never from the classifier -- which
+evidence frames show one animal clearly, and lets those drive identity:</p>
+<ol>
+<li><strong>Trusted frames.</strong> A detection-backed frame is trusted when all active
+   checks pass:</li>
+<li><em>isolation</em>: the nearest other detection centre in the same frame is
+     more than <code>identity_trust_isolation_bl</code> (1.0) body lengths away;</li>
+<li><em>single-animal shape</em>: OBB area within <code>+-identity_trust_area_tolerance</code>
+     (0.35) of the single-animal prior, and elongation at least
+     <code>identity_trust_min_aspect_fraction</code> (0.65) of the prior's;</li>
+<li><em>keypoint completeness</em> (only when the run has pose): at least
+     <code>identity_trust_min_keypoint_fraction</code> (0.75) of keypoints with
+     confidence <code>&gt;= identity_trust_keypoint_conf</code> (0.5).</li>
+<li><strong>Per-video calibration.</strong> The body length and the shape prior are the
+   medians over this video's <em>isolated</em> detections (nearest neighbour more
+   than <code>identity_trust_prior_isolation_bl</code>, 2.0, body lengths away) -- a
+   whole-video median is dominated by touching animals in a crowded video.
+   The shape check switches itself off when fewer than
+   <code>identity_trust_min_prior_detections</code> (200) isolated detections exist, the
+   keypoint check when there is no pose, and the whole layer when the
+   detection cache (the geometry source) is unavailable. There is no
+   stationarity filter.</li>
+<li><strong>Distinct views.</strong> Consecutive trusted frames collapse into one <em>view</em>
+   until the animal moves <code>identity_trust_view_move_bl</code> (0.5) body lengths
+   or turns <code>identity_trust_view_turn_deg</code> (30) degrees, so an object seen
+   10 000 times standing still counts once.</li>
+<li><strong>Tiered solving.</strong> Fragments with at least <code>identity_trust_min_views</code>
+   (1) trusted views form the trusted tier: their support is the mean
+   absolute posterior over views, a label is a candidate when that absolute
+   support reaches <code>identity_trust_min_support</code> (0.3; <code>fragment_min_support</code>
+   stays the relative floor of the untiered path), and they all claim labels
+   first (ordered by <code>views x support</code>). Every other fragment uses the honest evidence
+   above, seeds after the trusted tier, and may never displace a trusted
+   fragment -- it can only take labels the trusted tier left free.
+   With <code>identity_trust_top_label_only</code> (default <code>true</code>; only read when the
+   trust layer is on) a fragment is only ever given its own best label: if
+   another fragment holds that label it stays unknown rather than taking its
+   runner-up. The runner-up is usually a lookalike tag (<code>blue_yellow</code> for
+   <code>green_yellow</code>) whose real owner is elsewhere in the arena.</li>
+<li><strong>Splitting on trusted switches.</strong> With <code>enable_pelt_splitting</code> on and the
+   trust layer active, PELT on every frame's smoothed posterior is replaced
+   by a split at confident label switches in the <em>trusted-view</em> sequence:
+   label A on one side, B on the other, each side at least
+   <code>identity_trust_split_min_views</code> (3) views with mean posterior
+   <code>&gt;= identity_trust_split_min_confidence</code> (0.5), and the two-label
+   explanation better than the best single label by
+   <code>identity_trust_split_min_log_odds</code> (8.0) nats of evidence. The cut is
+   placed in the untrusted gap between the two views. With the trust layer
+   off, <code>enable_pelt_splitting</code> keeps the original PELT behaviour.</li>
+</ol>
+<p>Each run logs one summary line: trusted fraction, body length, prior,
+and which checks were active. The trust keys are config-only for now (no
+TrackerKit controls). The layer was validated together with
+<code>fragment_min_absolute_posterior: 0.3</code> and <code>fragment_absolute_seeding: true</code>
+(the untrusted tier's evidence); all three are on by default, so change them
+together. When the layer cannot run (no detection geometry) it logs a warning
+and the solver uses the untiered path; top-label-only then does not apply.
+Trusted-switch splitting still needs <code>enable_pelt_splitting</code>, which stays off
+by default: with the layer inactive it falls back to PELT.</p>
+<h3 id="how-the-defaults-were-chosen">How the defaults were chosen<a class="headerlink" href="#how-the-defaults-were-chosen" title="Permanent link">&para;</a></h3>
+<p>Each piece was replayed through the real fragment solver on six crowded
+full-arena videos (central dish labels compared against a dish-only
+reference) and switched on by default only if, on every video, agreement did
+not drop, the wrong-label rate did not rise by more than 0.005, and the
+labels it removed had a median per-frame posterior below 0.3 (i.e. it removed
+unsupported labels, not real ones).</p>
+<ul>
+<li><em>Non-identifying mass to unknown</em>: agreement never lower by more than
+  0.0001 and up to +0.14 higher, wrong rate never up by more than 0.003. It is a correctness
+  fix and ships on; on one video the few labels it removed (388 rows) had a
+  median posterior of 0.35.</li>
+<li><em>Absolute gate + seeding</em>: agreement up on five videos (up to +0.23) but
+  the wrong-label rate rose by 0.011 and 0.007 on two -- left off on its own (it is on now only as part of the trust package).</li>
+<li><em>Trust layer</em>: agreement up on all six (up to +0.37) and the wrong-label
+  rate down or within 0.001 on all six, but it also removes labels whose per-frame posterior is
+  moderate (median 0.36-0.61 on four videos) and lowers coverage of crowded
+  regions by up to 6 points -- off by default at the time. Adding trusted-view splitting
+  raises agreement further (0.87-0.97 on five videos, 0.75 on the most
+  crowded) and fixes most relabel-to-the-wrong-
+  animal cases, at the same coverage trade-off.</li>
+<li><em>Top label only</em> (trust layer on): rerun through the full pipeline on seven
+  full-arena videos. Wrong-label rate 0.046 -&gt; 0.015 and 0.028 -&gt; 0.015 on the
+  two videos with the most lookalike-label errors, unchanged elsewhere;
+  agreement within 0.004 and crowded-region coverage within 0.6 points on all
+  seven. Default on whenever the trust layer is on.</li>
+<li><em>Package default on</em> (2026-11): the trust layer, the absolute gate and
+  absolute seeding are on by default, on the strength of one dataset: 66
+  full-arena ant videos (central-dish agreement median 0.836 -&gt; 0.936, wrong-label
+  rate 0.022 -&gt; 0.013, chamber coverage unchanged) and 40 blind-proofread
+  segments. Where the trust run and the dish-only reference disagreed, the
+  proofreader sided with the trust run 9 times out of 10 and with the
+  reference never; in the chambers, on segments that were one animal
+  throughout, the trust run was right 5/5 and the old default 0/5. Its cost:
+  most dish rows it leaves unknown were readable (8 of 10). It has not yet
+  been validated on a second dataset.</li>
+</ul>
 <h2 id="related-reading">Related Reading<a class="headerlink" href="#related-reading" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../tracking-and-merging/">Tracking, Identity Continuity, and Merging</a></li>

@@ -2167,7 +2167,7 @@ new pipeline runs individual analysis (head-tail / CNN / pose / AprilTag) <stron
 extracts GPU-native crops <strong>only for pose</strong>, never calls the GPU-native classifier paths,
 and bypasses NVDEC decode and TensorRT/ONNX auto-export entirely (findings H3, H4, Pose
 GAP 3/5/7, Domain-4 "perf regression").</p>
-<p>The worktree's mandate was <em>clean up inference </em><em>while keeping</em><em> the accelerations</em>. This
+<p>The worktree's mandate was <em>clean up inference <strong>while keeping</strong> the accelerations</em>. This
 design restores them — cross-frame batching, GPU-native residency, foreign-region
 suppression, NVDEC, and TRT/ONNX auto-export — <strong>without</strong> reintroducing the fragmentation
 the redesign removed. The organizing principle is a single reproducibility invariant that

@@ -2699,6 +2699,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.stop_calibration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;stop_calibration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.open_calibration_dialog" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;open_calibration_dialog
@@ -2825,9 +2834,36 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.apply_cpu_budget_now" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;apply_cpu_budget_now
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.refresh_cpu_plan_label" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;refresh_cpu_plan_label
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.start_batch_fanout" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;start_batch_fanout
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.on_cache_builder_thread_finished" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;on_cache_builder_thread_finished
     </span>
   </a>
   
@@ -4397,6 +4433,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.stop_calibration" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;stop_calibration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.open_calibration_dialog" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;open_calibration_dialog
@@ -4523,9 +4568,36 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.apply_cpu_budget_now" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;apply_cpu_budget_now
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.refresh_cpu_plan_label" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;refresh_cpu_plan_label
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.start_batch_fanout" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;start_batch_fanout
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.on_cache_builder_thread_finished" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;on_cache_builder_thread_finished
     </span>
   </a>
   
@@ -6968,6 +7040,26 @@ just because it happened to be the list's last entry overall.</p>
 <div class="doc doc-object doc-function">
 
 
+<h4 id="hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.stop_calibration" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">stop_calibration</span><span class="p">(</span><span class="n">timeout_ms</span><span class="o">=</span><span class="mi">20000</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.stop_calibration" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Cancel a calibration search that may have outlived its dialog.</p>
+<p>Returns True once no search thread is running. The worker is a child
+of the dialog, itself a child of the main window, so closing the
+window while it runs destroys a live QThread.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h4 id="hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.open_calibration_dialog" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">open_calibration_dialog</span><span class="p">()</span></code>
 
@@ -7217,6 +7309,51 @@ track cannot start during calibration is the explicit
 <div class="doc doc-object doc-function">
 
 
+<h4 id="hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.apply_cpu_budget_now" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">apply_cpu_budget_now</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.apply_cpu_budget_now" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Eagerly apply the CPU budget to this process (I1).</p>
+<p>Called at startup and on every CPU-budget change, so every heavy GUI
+path (calibration, parameter-helper previews and optimizers, cache
+builders) runs under the same cap as tracking -- not only the workers
+whose start sites call :meth:<code>_apply_cpu_budget</code>. With budget 0 and no
+<code>HYDRA_CPU_*</code> env this is <code>set_process_cpu_cap(None)</code> on a process
+that was never capped: a strict no-op. Deferred while a run is active.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.refresh_cpu_plan_label" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">refresh_cpu_plan_label</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.refresh_cpu_plan_label" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Show how the CPU budget splits across the parallel batch jobs.</p>
+<p>Uses the run's own planner (:meth:<code>_plan_parallel_batch</code>: inherited
+<code>HYDRA_CPU_THREADS</code> ceiling, GPU-count clamp, CPU job clamp) on the
+GPU list the setup panel detected at construction, so the label and
+the run cannot drift. It does not re-run <code>nvidia-smi</code> (this fires on
+every spin tick); the start re-detects devices.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h4 id="hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.start_batch_fanout" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">start_batch_fanout</span><span class="p">()</span></code>
 
@@ -7226,6 +7363,28 @@ track cannot start during calibration is the explicit
     <div class="doc doc-contents ">
 
         <p>Run the whole batch as headless child processes, one per slot.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.on_cache_builder_thread_finished" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">on_cache_builder_thread_finished</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.orchestrators.tracking.TrackingOrchestrator.on_cache_builder_thread_finished" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>QThread.finished of the optimizer replay-evidence cache builder.</p>
+<p>A CPU-budget change made while it built was deferred; apply it now.
+Hooked to QThread.finished (not <code>finished_signal</code>, which fires
+inside <code>run()</code> while <code>isRunning()</code> is still True and would be
+deferred again); the reference is dropped first so the deferral
+check sees the builder as gone.</p>
 
     </div>
 

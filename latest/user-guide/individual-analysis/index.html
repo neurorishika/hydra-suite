@@ -2226,6 +2226,11 @@ label for a real identity.</p>
 labelled <code>notag_notag</code> all carry <code>identity_id == 0</code> and are five different
 animals, distinguished by <code>id</code> (the trajectory), not one animal seen five
 times.</p>
+<p>Per-detection probability the classifier puts on a non-identifying (or any
+out-of-catalog) class is kept as <code>unknown</code> evidence rather than dropped, so
+it lowers that detection's confidence in every real identity instead of being
+renormalized away -- see
+<a href="../post-processing/#honest-identity-evidence">Honest Identity Evidence</a>.</p>
 <p>The honest limitation: these animals get no
 identity resolution or identity-based fragment stitching across occlusions;
 relinking for them falls back to spatial and motion gates alone.</p>

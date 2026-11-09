@@ -2207,8 +2207,10 @@ environment activation. <code>pack</code>, <code>verify</code> and <code>shared-
 <p>The full subcommand list: <code>pack</code>, <code>verify</code>, <code>shared-root</code>, <code>push</code>,
 <code>preflight</code>, <code>run</code>, <code>calibrate</code>, <code>status</code>, <code>pull</code>. Run <code>trackerkit job
 &lt;subcommand&gt; --help</code> for the exact flags — <code>pack</code> deliberately has no
-<code>--gpus</code>/<code>--jobs</code>/<code>--threads-per-job</code> (those describe the <strong>compute box</strong>,
-not the experiment, and belong to <code>run</code>), and <code>run</code>/<code>calibrate</code> deliberately
+<code>--gpus</code>/<code>--jobs</code>/<code>--jobs-per-gpu</code>/<code>--longest-first</code>/<code>--threads-per-job</code>/<code>--cpu-budget</code> (those describe the
+<strong>compute box</strong>, not the experiment, and belong to <code>run</code>, which forwards them
+to <code>trackerkit track</code> on the box; <code>--cpu-budget</code> also reaches the calibration
+step of <code>run --calibrate</code>, and <code>calibrate</code> accepts it directly), and <code>run</code>/<code>calibrate</code> deliberately
 reject <code>--sahi-profile</code>/<code>--inference-autotune-manual</code> (those are fixed at
 pack time and always forwarded automatically, because the calibration
 lookup key depends on them matching exactly).</p>

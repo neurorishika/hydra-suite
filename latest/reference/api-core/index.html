@@ -1898,6 +1898,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.holds_gpu_models" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;holds_gpu_models
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.inference.InferenceRunner.detection_cache_covers_range" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;detection_cache_covers_range
@@ -1910,6 +1919,15 @@
   <a href="#hydra_suite.core.inference.InferenceRunner.detection_cache_missing_frames" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;detection_cache_missing_frames
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.configure_realtime_pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;configure_realtime_pass
     </span>
   </a>
   
@@ -1964,6 +1982,15 @@
   <a href="#hydra_suite.core.inference.InferenceRunner.load_frame" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_frame
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.release_models" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;release_models
     </span>
   </a>
   
@@ -3356,6 +3383,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.holds_gpu_models" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;holds_gpu_models
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.inference.InferenceRunner.detection_cache_covers_range" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;detection_cache_covers_range
@@ -3368,6 +3404,15 @@
   <a href="#hydra_suite.core.inference.InferenceRunner.detection_cache_missing_frames" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;detection_cache_missing_frames
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.configure_realtime_pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;configure_realtime_pass
     </span>
   </a>
   
@@ -3422,6 +3467,15 @@
   <a href="#hydra_suite.core.inference.InferenceRunner.load_frame" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_frame
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.inference.InferenceRunner.release_models" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;release_models
     </span>
   </a>
   
@@ -4818,10 +4872,14 @@ for HeadTail/CNN/Pose/AprilTag (no cross-frame crop batching) so each crop's
 aspect ratio is preserved when stages internally resize to model input size.</p>
 <p>Pass <code>cache_only=True</code> when the runner will only be used for cache replay
 (backward/replay passes that call <code>load_frame</code>, <code>caches_all_valid</code>, or
-<code>detection_cache_covers_range</code>).  In that mode the expensive HeadTail, CNN,
-Pose (including SLEAP), and AprilTag backends are never initialised — only the
-lightweight OBB model wrapper is loaded so cache-key validation still works.
-This eliminates the ~8 s per-session SLEAP/ORT-TRT-EP init on backward passes.</p>
+<code>detection_cache_covers_range</code>).  In that mode no model is loaded: cache
+keys come from the config, and replay never runs a stage. This eliminates the
+~8 s per-session SLEAP/ORT-TRT-EP init on backward passes, and keeps a replay
+pass from holding a detector engine on the GPU.</p>
+<p><code>load_models=False</code> (writable runners only) defers model loading to the
+first call that needs a model (<code>run_batch_pass</code>, <code>run_realtime</code>,
+<code>detect_batch_raw</code>, <code>obb_class_names</code>). A forward pass whose caches turn
+out to be complete then never loads a model at all.</p>
 
 
 
@@ -4889,6 +4947,25 @@ read a just-written frame's evidence back before <code>close()</code>/flush.</p>
 <div class="doc doc-object doc-function">
 
 
+<h4 id="hydra_suite.core.inference.InferenceRunner.holds_gpu_models" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">holds_gpu_models</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.core.inference.InferenceRunner.holds_gpu_models" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>True while a detector or per-animal network model is loaded.</p>
+<p>Those are what occupy accelerator memory; the bg-sub background model
+and AprilTag detector are not counted.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h4 id="hydra_suite.core.inference.InferenceRunner.detection_cache_covers_range" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">detection_cache_covers_range</span><span class="p">(</span><span class="n">start_frame</span><span class="p">,</span> <span class="n">end_frame</span><span class="p">)</span></code>
 
@@ -4920,6 +4997,27 @@ must additionally confirm frame-range coverage (legacy parity, H9).</p>
     <div class="doc doc-contents ">
 
         <p>Report up to <code>max_report</code> frames some cache member is missing.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.core.inference.InferenceRunner.configure_realtime_pass" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">configure_realtime_pass</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">window</span><span class="p">,</span> <span class="n">reuse_detections</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.inference.InferenceRunner.configure_realtime_pass" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Declare the frame window and cache-reuse choice of a realtime pass.</p>
+<p>With reuse, frames the cache already holds keep their cached
+detections (fed to the tracker and the per-animal stages); without
+it, the pass recomputes and overwrites them. Must be called before
+the first :meth:<code>run_realtime</code>.</p>
 
     </div>
 
@@ -5040,6 +5138,30 @@ native-frame ROI transform rather than reimplementing one or the other.</p>
     <div class="doc doc-contents ">
 
         <p>Load one cached frame with its production filtering and evidence.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.core.inference.InferenceRunner.release_models" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">release_models</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.core.inference.InferenceRunner.release_models" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Close and drop the stage models, keeping the caches readable.</p>
+<p>For a runner that has finished its batch pass and will only replay
+(<code>load_frame</code> and the identity-evidence sidecar run no stage model):
+frees the GPU memory the models hold -- including the SLEAP service
+process behind a pose model -- for the rest of a long CPU-only run.
+After this, <code>run_realtime</code> / <code>run_batch_pass</code> cannot be used, and
+:meth:<code>close</code> will not close the models a second time. The bg-sub model
+is kept (it is the background state, not a GPU network).</p>
 
     </div>
 
@@ -5879,7 +6001,7 @@ asserted continuity across.</p>
 
 
 <h3 id="hydra_suite.core.post.processing.interpolate_trajectories" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">interpolate_trajectories</span><span class="p">(</span><span class="n">trajectories_df</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s1">'linear'</span><span class="p">,</span> <span class="n">max_gap</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">heading_flip_max_burst</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">directed_heading_posthoc</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">fill_all_interior</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">interpolate_trajectories</span><span class="p">(</span><span class="n">trajectories_df</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s1">'linear'</span><span class="p">,</span> <span class="n">max_gap</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">heading_flip_max_burst</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">directed_heading_posthoc</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">fill_all_interior</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">heading_fix</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.post.processing.interpolate_trajectories" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -5903,6 +6025,10 @@ asserted continuity across.</p>
         still filled (no cap on interior gap length) and, at the end,
         leading/trailing position-less rows are dropped via
         <code>trim_positionless_ends</code> since they cannot be interpolated.
+    heading_fix: Body size (in the trajectories' pixel units), frame rate
+        and tuning for the directed heading fix; see
+        :class:<code>HeadingFixSettings</code>. Without it the fix runs on per-frame
+        fallbacks with no motion term.
         Default False preserves today's exact behavior byte-for-byte —
         existing callers of this function are out of scope for this
         change and must not be affected.</p>
