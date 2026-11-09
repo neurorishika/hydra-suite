@@ -2537,10 +2537,36 @@ evidence frames show one animal clearly, and lets those drive identity:</p>
    <code>identity_trust_split_min_log_odds</code> (8.0) nats of evidence. The cut is
    placed in the untrusted gap between the two views. With the trust layer
    off, <code>enable_pelt_splitting</code> keeps the original PELT behaviour.</li>
+<li><strong>Splitting at contacts.</strong> Identity swaps happen while animals touch.
+   With <code>identity_trust_contact_split</code> (default <code>true</code>; runs whenever the
+   trust layer is active, independent of <code>enable_pelt_splitting</code>) a
+   trajectory is cut at a contact only when the evidence on the two sides of
+   it names different animals. A row is <em>in contact</em> when the nearest other
+   detection is closer than <code>identity_trust_contact_bl</code> (0.5) body lengths,
+   or when it has no detection (occluded). Contact runs are found with gaps
+   of up to <code>identity_trust_contact_fill</code> (2) rows bridged and runs shorter
+   than <code>identity_trust_contact_min_frames</code> (3) rows ignored. For each run,
+   up to <code>identity_trust_contact_window</code> (30) clean, non-contact evidence
+   frames on each side (never past the neighbouring contacts) are compared
+   with the same three tests as step 5 (<code>identity_trust_split_min_views</code>
+   frames per side, <code>identity_trust_split_min_confidence</code>,
+   <code>identity_trust_split_min_log_odds</code>). The contact run itself becomes its
+   own short piece. A contact with too little clean evidence on a side is
+   left alone, so the trajectory keeps its motion-based continuity there,
+   and cuts whose two sides end with the same label are rejoined after
+   assignment.</li>
 </ol>
 <p>Each run logs one summary line: trusted fraction, body length, prior,
-and which checks were active. The trust keys are config-only for now (no
-TrackerKit controls). The layer was validated together with
+and which checks were active, plus the number of contact-switch cuts.</p>
+<p><strong>TrackerKit controls</strong> (Post-processing → Advanced options → Identity
+Post-Processing → Fragment Solver): <em>Minimum label confidence</em> (<code>fragment_min_absolute_posterior</code>),
+<em>Trust identity evidence only from clear single-animal views</em>
+(<code>identity_evidence_trust</code>), <em>Clear-view distance</em>
+(<code>identity_trust_isolation_bl</code>), <em>Split at contacts where the identity
+evidence switches</em> (<code>identity_trust_contact_split</code>), <em>Contact distance</em>
+(<code>identity_trust_contact_bl</code>) and <em>Split evidence margin</em>
+(<code>identity_trust_split_min_log_odds</code>, shared by steps 5 and 6). Every other
+trust key is config-only. The layer was validated together with
 <code>fragment_min_absolute_posterior: 0.3</code> and <code>fragment_absolute_seeding: true</code>
 (the untrusted tier's evidence); all three are on by default, so change them
 together. When the layer cannot run (no detection geometry) it logs a warning
@@ -2583,6 +2609,19 @@ unsupported labels, not real ones).</p>
   throughout, the trust run was right 5/5 and the old default 0/5. Its cost:
   most dish rows it leaves unknown were readable (8 of 10). It has not yet
   been validated on a second dataset.</li>
+<li><em>Contact split</em> (2026-11): on the same dataset, every proofread identity
+  swap happened while the animal was within 0.5 body lengths of another.
+  Cutting at every contact caught 8 of 9 swaps but tripled the number of
+  trajectories; cutting only where the evidence switches across the contact
+  cost 1.04-1.10x trajectories. Rerun through the full pipeline on 34
+  clips and scored row by row against the proofreading, it moved swap rows
+  from 50% correct / 50% wrong to 68% / 32% (two of the five wrongly
+  labelled segments fixed, none newly broken), raised clean rows from 73% to
+  78% correct with wrong unchanged at 2.2%, and raised whole-video coverage
+  by 1.0 point (dish 92.1% -&gt; 93.1%, dish agreement 91.1% -&gt; 92.3%), at
+  1.03x trajectories. Treating long pile-ups specially (never
+  carrying identity through them) fixed no further swaps and cost 5-8 points
+  of coverage, so it is not offered.</li>
 </ul>
 <h2 id="related-reading">Related Reading<a class="headerlink" href="#related-reading" title="Permanent link">&para;</a></h2>
 <ul>
