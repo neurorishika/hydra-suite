@@ -156,3 +156,38 @@ def test_zero_handoff_restores_strict_conflicts():
     strict = dict(PARAMS, IDENTITY_HANDOFF_MAX_SECONDS=0)
     out = _iterative_assign(frags, LABELS, strict, detected_frames=detected)
     assert sorted(v for v in out.values() if v) == ["a"]
+
+
+def test_filled_in_run_that_loses_its_label_is_dropped_not_kept_as_a_track():
+    # Track 0 is detected at frames 0-4 and 15-19 and gap-filled in between;
+    # track 1 is the same animal detected through frames 5-14. The filled-in
+    # stretch loses the label to the real detections and describes no
+    # animal, so it must not survive as a detection-less "unknown" track.
+    rows = []
+    for f in range(20):
+        det = float(f) if (f < 5 or f >= 15) else float("nan")
+        rows.append(dict(TrajectoryID=0, FrameID=f, DetectionID=det))
+    for f in range(5, 15):
+        rows.append(dict(TrajectoryID=1, FrameID=f, DetectionID=100.0 + f))
+    df = pd.DataFrame(rows)
+    df[C.FINAL_LABEL] = "a"
+    df[C.FINAL_ID] = 1
+    df[C.FINAL_CONFIDENCE] = 0.9
+    df[C.FINAL_FRAGMENT_SCORE] = [0.8] * 20 + [0.5] * 10
+    df[C.FINAL_SOURCE] = C.IdentityFinalSource.OFFLINE
+    out = _split_off_shared_label_rows(df, _Catalog())
+    assert set(out.TrajectoryID) == {0, 1}
+    assert sorted(out[out.TrajectoryID == 0].FrameID) == [
+        0,
+        1,
+        2,
+        3,
+        4,
+        15,
+        16,
+        17,
+        18,
+        19,
+    ]
+    assert len(out[out.TrajectoryID == 1]) == 10
+    assert out[C.FINAL_LABEL].eq("a").all()

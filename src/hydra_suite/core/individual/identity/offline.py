@@ -1530,16 +1530,32 @@ def _split_off_shared_label_rows(
     if "OriginalTrajectoryID" not in out.columns:
         out["OriginalTrajectoryID"] = out["TrajectoryID"]
     next_id = _next_trajectory_id(out, trajectory_id_floor)
+    # A losing run with no detection in it is only filled-in positions whose
+    # label now sits on a real detection elsewhere: it describes no animal, so
+    # it is dropped instead of becoming a trajectory of its own.
+    fabricated: list = []
     for _tid, rows in losers.sort_values(["TrajectoryID", "FrameID"]).groupby(
         "TrajectoryID", sort=True
     ):
         frames = rows["FrameID"].to_numpy()
+        real = rows["_real"].to_numpy(dtype=bool)
         run_starts = np.r_[0, np.flatnonzero(np.diff(frames) > 1) + 1]
         for k, start in enumerate(run_starts):
             stop = run_starts[k + 1] if k + 1 < len(run_starts) else len(frames)
             idx = rows.index[start:stop]
+            if not real[start:stop].any():
+                fabricated.extend(idx)
+                continue
             out.loc[idx, "TrajectoryID"] = next_id
             next_id += 1
+    if fabricated:
+        out = out.drop(index=fabricated)
+        losers = losers.drop(index=fabricated)
+        log.info(
+            "Dropped %d filled-in rows whose label belongs to a detection "
+            "on another trajectory.",
+            len(fabricated),
+        )
     idx = losers.index
     out.loc[idx, C.FINAL_LABEL] = "unknown"
     out.loc[idx, C.FINAL_ID] = catalog.unknown_index
