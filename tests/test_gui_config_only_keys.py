@@ -15,6 +15,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from hydra_suite.trackerkit.config.identity_schema import (  # noqa: E402
     _EVIDENCE_FIELD_KEYS,
     EVIDENCE_ENGINE_KEYS,
+    GUI_EVIDENCE_FIELDS,
+    PostHocIdentityConfig,
 )
 from hydra_suite.trackerkit.engine_params import (  # noqa: E402
     RuntimeContext,
@@ -43,7 +45,11 @@ NON_DEFAULT = {
     "identity_trust_isolation_bl": 1.5,
     "identity_trust_min_views": 2,
     "identity_trust_split_min_log_odds": 6.0,
+    "identity_trust_contact_split": False,
+    "identity_trust_contact_bl": 0.75,
+    "identity_trust_contact_window": 12,
 }
+GUI_KEYS = {_EVIDENCE_FIELD_KEYS[f] for f in GUI_EVIDENCE_FIELDS}
 
 
 @pytest.fixture(scope="module")
@@ -70,8 +76,11 @@ def _config_file(tmp_path, extra):
     return path, cfg
 
 
-def test_every_evidence_key_is_registered_config_only():
-    assert set(_EVIDENCE_FIELD_KEYS.values()) <= set(CONFIG_ONLY_KEYS)
+def test_every_evidence_key_is_either_a_widget_or_config_only():
+    every = set(_EVIDENCE_FIELD_KEYS.values())
+    assert GUI_KEYS <= every
+    assert every - GUI_KEYS <= set(CONFIG_ONLY_KEYS)
+    assert not (GUI_KEYS & set(CONFIG_ONLY_KEYS))
 
 
 def test_load_save_round_trip_keeps_widgetless_keys(main_window, tmp_path):
@@ -109,5 +118,9 @@ def test_full_load_without_the_keys_reverts_to_defaults(main_window, tmp_path):
     plain.write_text(FIXTURE.read_text())
     orch._load_config_from_file(str(plain), preset_mode=False)
     saved = orch.build_config_dict()
-    assert not (set(NON_DEFAULT) & set(saved))
+    # Config-only keys are not invented; widget keys fall back to defaults.
+    assert not ((set(NON_DEFAULT) - GUI_KEYS) & set(saved))
+    defaults = PostHocIdentityConfig()
+    for f in GUI_EVIDENCE_FIELDS:
+        assert saved[_EVIDENCE_FIELD_KEYS[f]] == getattr(defaults, f), f
     assert orch.get_parameters_dict()["IDENTITY_EVIDENCE_TRUST"] is True

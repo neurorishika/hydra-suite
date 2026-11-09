@@ -78,6 +78,12 @@ class TrustSettings:
     split_min_log_odds: float = 8.0
     split_min_views: int = 3
     split_min_confidence: float = 0.5
+    # Contact-gated label-switch split (see find_contact_switches).
+    contact_split: bool = True
+    contact_bl: float = 0.5
+    contact_window: int = 30
+    contact_min_frames: int = 3
+    contact_fill: int = 2
 
     @classmethod
     def from_params(cls, params: Mapping[str, Any] | None) -> "TrustSettings":
@@ -126,6 +132,15 @@ class TrustSettings:
             split_min_confidence=_f(
                 "IDENTITY_TRUST_SPLIT_MIN_CONFIDENCE", d.split_min_confidence
             ),
+            contact_split=bool(p.get("IDENTITY_TRUST_CONTACT_SPLIT", d.contact_split)),
+            contact_bl=_f("IDENTITY_TRUST_CONTACT_BL", d.contact_bl),
+            contact_window=max(
+                1, _i("IDENTITY_TRUST_CONTACT_WINDOW", d.contact_window)
+            ),
+            contact_min_frames=max(
+                1, _i("IDENTITY_TRUST_CONTACT_MIN_FRAMES", d.contact_min_frames)
+            ),
+            contact_fill=max(0, _i("IDENTITY_TRUST_CONTACT_FILL", d.contact_fill)),
         )
 
 
@@ -370,6 +385,9 @@ class EvidenceTrust:
     trusted: dict[int, tuple[float, float, float]] = field(default_factory=dict)
     n_candidate_rows: int = 0
     reason_inactive: str = ""
+    # Every detection's nearest-neighbour distance in body lengths, indexed
+    # by DetectionID (used by the contact-gated split).
+    det_nn_bl: pd.Series | None = None
 
     @property
     def active(self) -> bool:
@@ -479,7 +497,11 @@ def build_evidence_trust(
             float(geometry.cy[g]),
             float(geometry.angle[g]),
         )
-    trust = EvidenceTrust(settings, cal, trusted=trusted, n_candidate_rows=len(rows))
+    nn_bl = pd.Series(nn / bl, index=geometry.detection_ids)
+    nn_bl = nn_bl[~nn_bl.index.duplicated(keep="first")]
+    trust = EvidenceTrust(
+        settings, cal, trusted=trusted, n_candidate_rows=len(rows), det_nn_bl=nn_bl
+    )
     s = trust.summary()
     log.info(
         "evidence trust: %d/%d detection-backed rows trusted (%.1f%%); body "
@@ -711,3 +733,122 @@ def find_label_switches(
         + [cut]
         + find_label_switches(right, settings, _depth=_depth + 1)
     )
+
+
+def contact_episodes(
+    contact: np.ndarray, min_frames: int, fill: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """``[start, end)`` row ranges of contact runs.
+
+    Gaps of at most ``fill`` non-contact rows inside a run are bridged (a
+    one-frame separation in the middle of a touch is not a clean view), and
+    runs shorter than ``min_frames`` rows are dropped.
+    """
+    c = np.asarray(contact, dtype=bool)
+    cc = c.copy()
+    for k in range(1, fill + 1):
+        if len(c) > 2 * k:
+            cc[k:-k] |= c[: -2 * k] & c[2 * k :]
+    edges = np.flatnonzero(np.diff(np.r_[0, cc.astype(np.int8), 0]))
+    starts, ends = edges[::2], edges[1::2]
+    keep = (ends - starts) >= min_frames
+    return starts[keep], ends[keep]
+
+
+def _contact_switch(
+    P: np.ndarray, left: np.ndarray, right: np.ndarray, settings: TrustSettings
+) -> bool:
+    """Whether clean evidence just before / after a contact names two labels."""
+    m = settings.split_min_views
+    if len(left) < m or len(right) < m:
+        return False
+    pl, pr = P[left], P[right]
+    ml, mr = pl.mean(axis=0), pr.mean(axis=0)
+    a, b = int(ml.argmax()), int(mr.argmax())
+    conf = settings.split_min_confidence
+    if a == b or ml[a] < conf or mr[b] < conf:
+        return False
+    ll = np.log(np.clip(pl, 1e-3, 1.0))
+    lr = np.log(np.clip(pr, 1e-3, 1.0))
+    joint = ll.sum(axis=0) + lr.sum(axis=0)
+    gain = float(ll[:, a].sum() + lr[:, b].sum() - joint.max())
+    return gain >= settings.split_min_log_odds
+
+
+def find_contact_switches(
+    rows: pd.DataFrame,
+    raw_sequence: Sequence[tuple[int, np.ndarray]],
+    trust: EvidenceTrust,
+) -> list[int]:
+    """Cut frames where identity evidence switches across a CONTACT.
+
+    Identity swaps between animals happen while they touch: the tracker
+    cannot tell two touching animals apart, but the identity evidence on
+    either side of the touch can. A row is *in contact* when its detection's
+    nearest neighbour is closer than ``contact_bl`` body lengths, or when it
+    has no detection (occluded / predicted). For each contact run (see
+    :func:`contact_episodes`), up to ``contact_window`` clean (non-contact)
+    evidence frames on each side -- never reaching past the neighbouring
+    contact runs -- are compared, and the trajectory is cut at both ends of
+    the run when
+
+    - each side has at least ``split_min_views`` clean frames,
+    - the sides' mean absolute posteriors favour different labels, each at
+      ``>= split_min_confidence``, and
+    - the two-label explanation beats the best single label by at least
+      ``split_min_log_odds`` nats (per-frame probabilities floored at 1e-3).
+
+    Contacts with too little clean evidence on a side are left alone: the
+    trajectory keeps its motion-based continuity there. Only the contact run
+    itself becomes a separate (evidence-free) piece when a cut is made.
+    Returned values are inclusive segment ends
+    (``split_trajectories_at_changepoints`` convention).
+    """
+    s = trust.settings
+    if not trust.active or trust.det_nn_bl is None or not raw_sequence:
+        return []
+    sub = rows.sort_values("FrameID", kind="stable")
+    frames = sub["FrameID"].to_numpy().astype(np.int64)
+    n = len(frames)
+    if n < 2:
+        return []
+    det = pd.to_numeric(sub["DetectionID"], errors="coerce").to_numpy()
+    nn_bl = np.full(n, np.nan)
+    has_det = ~np.isnan(det)
+    if has_det.any():
+        nn_bl[has_det] = trust.det_nn_bl.reindex(det[has_det].astype(np.int64))
+    contact = ~(nn_bl >= s.contact_bl)  # NaN (no detection) counts as contact
+    starts, ends = contact_episodes(contact, s.contact_min_frames, s.contact_fill)
+    if not len(starts):
+        return []
+
+    ev = {int(f): lp for f, lp in raw_sequence}
+    has_ev = np.zeros(n, dtype=bool)
+    probs = []
+    for i, f in enumerate(frames):
+        lp = ev.get(int(f))
+        if lp is None or contact[i]:
+            continue
+        lp = np.asarray(lp, dtype=np.float64)
+        probs.append((i, np.exp(lp - np.logaddexp.reduce(lp))[1:]))
+        has_ev[i] = True
+    if not probs:
+        return []
+    P = np.zeros((n, len(probs[0][1])))
+    for i, p in probs:
+        P[i] = p
+    clean = np.flatnonzero(has_ev)
+
+    w = s.contact_window
+    cuts: list[int] = []
+    for k, (a, b) in enumerate(zip(starts, ends)):
+        lo = ends[k - 1] if k else 0
+        hi = starts[k + 1] if k + 1 < len(starts) else n
+        left = clean[np.searchsorted(clean, lo) : np.searchsorted(clean, a)][-w:]
+        right = clean[np.searchsorted(clean, b) : np.searchsorted(clean, hi)][:w]
+        if _contact_switch(P, left, right, s):
+            if a > 0:
+                cuts.append(int(frames[a - 1]))
+            if b < n:
+                cuts.append(int(frames[b - 1]))
+    return sorted(set(cuts))
