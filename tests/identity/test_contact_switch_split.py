@@ -98,11 +98,11 @@ def test_disabled_or_inactive_trust_never_cuts():
     assert find_contact_switches(df, seq, off) == []
 
 
-def _solve(tmp_path, label_of, **settings):
+def _solve(tmp_path, label_of, contacts=((45, 55),), no_detection=(), **settings):
     catalog = IdentityCatalog.from_labels(["a", "b"])
     path = tmp_path / "ev.npz"
     cache = IdentityEvidenceCache(path, catalog_labels=catalog.labels, mode="w")
-    df, seq, nn = _setup([(45, 55)], label_of)
+    df, seq, nn = _setup(list(contacts), label_of, no_detection=no_detection)
     for f, lp in seq:
         cache.save_frame(f, [IdentityEvidence.from_cnn(f, f, "cnn", lp)])
     cache.flush()
@@ -128,6 +128,20 @@ def test_solver_splits_a_swap_at_the_contact_without_pelt(tmp_path):
     assert set(out[out.FrameID < 45]["TrajectoryID"]).isdisjoint(
         out[out.FrameID >= 55]["TrajectoryID"]
     )
+
+
+def test_split_piece_without_a_detection_is_dropped_not_kept_as_a_track(tmp_path):
+    # The animal is lost (no detection) over frames 45-54 and the evidence
+    # names a different animal afterwards. The cut leaves the occlusion as a
+    # piece of its own; with no detection in it, it is only predicted
+    # positions and describes no animal, so it must not become a track.
+    out = _solve(
+        tmp_path, lambda f: 0 if f < 50 else 1, contacts=(), no_detection=range(45, 55)
+    )
+    assert not out.FrameID.between(45, 54).any()
+    assert out["TrajectoryID"].nunique() == 2
+    assert list(out[out.FrameID < 45]["IdentityFinalLabel"].unique()) == ["a"]
+    assert list(out[out.FrameID >= 55]["IdentityFinalLabel"].unique()) == ["b"]
 
 
 def test_solver_contact_split_can_be_switched_off(tmp_path):
