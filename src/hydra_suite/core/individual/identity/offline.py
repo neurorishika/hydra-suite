@@ -428,6 +428,37 @@ def detect_contact_label_switches(
     return result
 
 
+def _drop_detectionless_split_pieces(
+    df: pd.DataFrame, changepoints: dict[Any, list[int]]
+) -> pd.DataFrame:
+    """Drop pieces of split trajectories that contain no detection.
+
+    A cut at an occlusion (e.g. a contact-gated switch, where rows without a
+    detection count as contact) leaves the occluded stretch as a piece of its
+    own. With no detection in it, that piece is only predicted positions
+    between two different animals' tracks: it describes no animal, so it is
+    removed instead of being emitted as an unlabelled track.
+    """
+    if "DetectionID" not in df.columns or "OriginalTrajectoryID" not in df.columns:
+        return df
+    split_ids = {tid for tid, cuts in changepoints.items() if cuts}
+    if not split_ids:
+        return df
+    pieces = df[df["OriginalTrajectoryID"].isin(split_ids)]
+    has_det = pd.to_numeric(pieces["DetectionID"], errors="coerce").notna()
+    real = has_det.groupby(pieces["TrajectoryID"]).any()
+    empty = real.index[~real.to_numpy()]
+    if not len(empty):
+        return df
+    drop = df["TrajectoryID"].isin(empty)
+    log.info(
+        "fragment_solver: dropped %d split piece(s) (%d rows) with no detection.",
+        len(empty),
+        int(drop.sum()),
+    )
+    return df[~drop].reset_index(drop=True)
+
+
 def split_trajectories_at_changepoints(
     df: pd.DataFrame,
     changepoints: dict[Any, list[int]],
@@ -2035,6 +2066,7 @@ def run_fragment_solver(
         split_df = split_trajectories_at_changepoints(
             trajectories_df, changepoints, params, trajectory_id_floor
         )
+        split_df = _drop_detectionless_split_pieces(split_df, changepoints)
         n_splits = sum(len(v) for v in changepoints.values())
         did_split = n_splits > 0
         log.info(
